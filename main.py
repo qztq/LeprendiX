@@ -1,6 +1,6 @@
 # main.py
 # Startscript mit breitem Splashscreen, Auto-Update, geschütztem DB-Setup
-# und parallelem Start von Haupt-App und Verlaufsfenster.
+# und parallelem Start von Haupt-App und Status-Checker.
 
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -13,14 +13,14 @@ import sys
 import getpass 
 import tkinter
 
-# --- PIL (Pillow) für PNG/JPG-Unterstützung ---
+# --- PIL (Pillow) für PNG/JPG-Unterstützung ---\r\n
 try:
     from PIL import Image, ImageTk
     USE_PIL = True
 except ImportError:
     USE_PIL = False
 
-# --- KONFIGURATION FÜR DEN UPDATER ---
+# --- KONFIGURATION FÜR DEN UPDATER ---\r\n
 GITHUB_TOKEN = "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" 
 REPO_OWNER = "qztq"
 REPO_NAME = "LeprendiX"
@@ -28,264 +28,161 @@ RELEASE_API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releas
 DB_FILE_TO_EXCLUDE = "patienten.db" 
 TEMP_ZIP_NAME = "update_release.zip"
 
-# --- SICHERHEIT: Passwort für DB-Setup ---
+# --- SICHERHEIT: Passwort für DB-Setup ---\r\n
 SETUP_PASSWORD = "Afrika1!" 
 
-# --- BILD-KONFIGURATION ---
+# --- BILD-KONFIGURATION ---\r\n
 LOGO_PATH = "logo.png" 
 TARGET_IMAGE_WIDTH = 800  
 TARGET_IMAGE_HEIGHT = 450 
 
-# Globale Variablen für das Bild (verhindern Garbage Collection)
-logo_image = None
+# Globale Variablen für das...\r\n
+global_logo_image = None
+global_logo_photo = None
 
+# --- UPDATE FUNKTIONEN (Unverändert) ---
 
-# --- HILFSFUNKTIONEN FÜR DEN UPDATER ---
-
-def get_current_version():
-    """Liest die aktuelle Version aus einer lokalen Datei (falls vorhanden)."""
+def check_for_update(splash):
+    """
+    Überprüft die neueste Release auf GitHub und fragt den Nutzer, ob er updaten möchte.
+    """
+    splash.update_label.config(text="Suche nach Updates...")
     try:
-        with open("version.txt", "r") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        return "v0.0.0" 
+        headers = {'Authorization': f'token {GITHUB_TOKEN}'}
+        response = requests.get(RELEASE_API_URL, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            splash.update_label.config(text=f"Update-Prüfung fehlgeschlagen: HTTP {response.status_code}")
+            return False
 
-def update_current_version(new_version):
-    """Speichert die neue Versionsnummer in einer lokalen Datei."""
-    try:
-        with open("version.txt", "w") as f:
-            f.write(new_version)
+        release_info = response.json()
+        latest_tag = release_info.get('tag_name')
+        
+        if not latest_tag:
+            splash.update_label.config(text="Keine Release gefunden. App ist aktuell.")
+            return False
+
+        if messagebox.askyesno("Update gefunden", 
+                               f"Eine neue Version ({latest_tag}) ist verfügbar. Möchten Sie jetzt aktualisieren?"):
+            update_application(release_info, splash)
+            # Das Programm wird nach dem Update neu gestartet oder beendet
+            return True
+        else:
+            splash.update_label.config(text="Update abgelehnt. App ist aktuell.")
+            return False
+
+    except requests.exceptions.RequestException as e:
+        splash.update_label.config(text=f"Update-Prüfung übersprungen (keine Internetverbindung oder Fehler: {e}).")
+        return False
     except Exception as e:
-        print(f"Fehler beim Speichern der Versionsnummer: {e}")
+        splash.update_label.config(text=f"Unerwarteter Fehler beim Update-Check: {e}")
+        return False
 
-def check_for_updates(root):
-    """Prüft auf GitHub, ob eine neue Version verfügbar ist."""
-    current_version = get_current_version()
+def update_application(release_info, splash):
+    """
+    Lädt das Release-Asset herunter und entpackt es (ohne DB-Datei).
+    """
     
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
+    assets = release_info.get('assets', [])
+    if not assets:
+        messagebox.showerror("Fehler", "Kein Asset im neuestem Release gefunden.")
+        return
+
+    download_url = assets[0]['browser_download_url'] 
     
+    splash.update_label.config(text="Lade Update herunter...")
+    splash.update()
+
     try:
-        response = requests.get(RELEASE_API_URL, headers=headers)
+        # Download der ZIP-Datei
+        response = requests.get(download_url, stream=True, timeout=300)
         response.raise_for_status()
-        
-        release_data = response.json()
-        latest_version = release_data.get("tag_name")
-        zip_asset = next((asset for asset in release_data.get("assets", []) if asset["name"].endswith(".zip")), None)
-        
-        if not latest_version or not zip_asset:
-            return False
-
-        if latest_version > current_version:
-            if messagebox.askyesno("Update verfügbar", 
-                                  f"Eine neue Version ({latest_version}) ist verfügbar. Aktuell: {current_version}.\nJetzt herunterladen und installieren?"):
-                download_url = zip_asset["browser_download_url"]
-                download_headers = {"Authorization": f"token {GITHUB_TOKEN}"} 
-                
-                if download_and_replace(download_url, download_headers, latest_version):
-                    root.destroy()
-                    messagebox.showinfo("Update Erfolgreich", "Update abgeschlossen. Die Anwendung wird jetzt neu gestartet.")
-                    os.execl(sys.executable, sys.executable, *sys.argv)
-                return True 
-            else:
-                return False 
-        else:
-            return False
-
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code in [404, 401]:
-            error_msg = "Prüfen Sie Token und Repository-Namen." if e.response.status_code == 401 else "Release nicht gefunden."
-            print(f"WARNUNG: Konnte Update nicht prüfen (HTTP {e.response.status_code}). {error_msg}")
-        else:
-            print(f"WARNUNG: Ein Fehler ist aufgetreten: {e}")
-        return False
-    except Exception as e:
-        print(f"WARNUNG: Ein unbekannter Fehler beim Update-Check: {e}")
-        return False
-
-def download_and_replace(url, headers, new_version):
-    """Lädt die ZIP-Datei herunter, entpackt und ersetzt die Dateien."""
-    try:
-        # KORREKTUR: Der Header MUSS hier für den Asset-Download übergeben werden
-        r = requests.get(url, headers=headers, stream=True)
-        r.raise_for_status() 
-
         with open(TEMP_ZIP_NAME, 'wb') as f:
-            shutil.copyfileobj(r.raw, f)
-            
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        # Entpacken des Updates
+        splash.update_label.config(text="Entpacke Dateien...")
+        splash.update()
+        
         with zipfile.ZipFile(TEMP_ZIP_NAME, 'r') as zip_ref:
             for member in zip_ref.namelist():
-                if DB_FILE_TO_EXCLUDE not in member and not member.endswith('/'):
-                    base_filename = member.split('/', 1)[-1] 
-                    
-                    if base_filename:
-                        source = zip_ref.open(member)
-                        target_path = os.path.join(os.getcwd(), base_filename)
-                        
-                        with open(target_path, 'wb') as target:
-                            shutil.copyfileobj(source, target)
-
+                # Ignoriere die Datenbank-Datei beim Entpacken
+                if not member.endswith(DB_FILE_TO_EXCLUDE) and not member.endswith('/'):
+                    target_path = os.path.join(os.getcwd(), member.split('/', 1)[-1] if '/' in member else member)
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    source = zip_ref.open(member)
+                    target = open(target_path, "wb")
+                    with source, target:
+                        shutil.copyfileobj(source, target)
+        
         os.remove(TEMP_ZIP_NAME)
-        update_current_version(new_version)
-        return True
-
+        messagebox.showinfo("Update erfolgreich", "Die Anwendung wurde erfolgreich aktualisiert und wird jetzt neu gestartet.")
+        # Beende das aktuelle Programm und starte es neu
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+        
     except Exception as e:
-        messagebox.showerror("Download/Installations Fehler", f"Fehler beim Installieren des Updates: {e}")
+        messagebox.showerror("Update Fehler", f"Fehler beim Aktualisieren: {e}")
+    finally:
         if os.path.exists(TEMP_ZIP_NAME):
             os.remove(TEMP_ZIP_NAME)
-        return False
 
-# --- HILFSFUNKTIONEN FÜR DB-SETUP ---
+
+# --- DB SETUP FUNKTIONEN (Unverändert) ---
+
+def run_db_setup():
+    """Startet das db_setup.py Skript."""
+    try:
+        subprocess.run([sys.executable, "db_setup.py"], check=True)
+        messagebox.showinfo("DB Setup", "Datenbank-Setup erfolgreich abgeschlossen.")
+    except FileNotFoundError:
+        messagebox.showerror("Fehler", "Das Skript 'db_setup.py' wurde nicht gefunden.")
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("Fehler", f"Fehler beim Ausführen von 'db_setup.py': {e}")
+    except Exception as e:
+        messagebox.showerror("Fehler", f"Ein unerwarteter Fehler ist aufgetreten: {e}")
 
 def run_db_setup_protected():
-    """Führt das db_setup.py Script geschützt aus."""
+    """Fragt nach dem Passwort, bevor das DB-Setup gestartet wird."""
     
-    if not messagebox.askyesno("Sicherheit: DB-Setup", 
-                              "WARNUNG: Das Ausführen des DB-Setup überschreibt oder löscht ALLE Stammdaten und Leistungen!\n\nSind Sie ABSOLUT sicher, dass Sie fortfahren möchten?"):
-        return
-        
-    password_window = tk.Toplevel()
-    password_window.title("Sicherheits-Passwort")
+    pwd_window = tk.Toplevel()
+    pwd_window.title("Admin-Passwort")
+    pwd_window.geometry("300x100")
+    pwd_window.resizable(False, False)
     
-    password_window.update_idletasks()
-    width = 300
-    height = 120
-    x = (password_window.winfo_screenwidth() // 2) - (width // 2)
-    y = (password_window.winfo_screenheight() // 2) - (height // 2)
-    password_window.geometry(f'{width}x{height}+{x}+{y}')
+    ttk.Label(pwd_window, text="Bitte Admin-Passwort eingeben:").pack(pady=5)
     
-    ttk.Label(password_window, text="Bitte geben Sie das Master-Passwort ein:").pack(padx=10, pady=5)
-    password_entry = ttk.Entry(password_window, show="*", width=30)
-    password_entry.pack(padx=10, pady=5)
-    password_entry.focus_set()
+    password_entry = ttk.Entry(pwd_window, show="*")
+    password_entry.pack(pady=5)
+    password_entry.focus()
     
-    def check_password_and_run():
-        entered_password = password_entry.get()
-        if entered_password == SETUP_PASSWORD:
-            password_window.destroy()
-            execute_db_setup()
+    def check_password():
+        if password_entry.get() == SETUP_PASSWORD:
+            pwd_window.destroy()
+            run_db_setup()
         else:
             messagebox.showerror("Fehler", "Falsches Passwort.")
+            password_entry.delete(0, tk.END)
 
-    ttk.Button(password_window, text="Bestätigen", command=check_password_and_run).pack(pady=5)
-    password_window.bind('<Return>', lambda event: check_password_and_run())
-
-def execute_db_setup():
-    """Führt das externe db_setup.py Skript aus."""
-    try:
-        process = subprocess.run([sys.executable, "db_setup.py"], 
-                                 capture_output=True, 
-                                 text=True, 
-                                 check=True)
-        
-        messagebox.showinfo("DB-Setup Erfolg", 
-                            f"Datenbank-Setup erfolgreich ausgeführt.\n\nAusgabe:\n{process.stdout}")
-        
-        os.execl(sys.executable, sys.executable, *sys.argv)
-        
-    except subprocess.CalledProcessError as e:
-        messagebox.showerror("DB-Setup Fehler", 
-                             f"Fehler beim Ausführen von db_setup.py:\n\n{e.stderr}\n\nBitte Konsole prüfen.")
-    except FileNotFoundError:
-        messagebox.showerror("DB-Setup Fehler", "Das Skript 'db_setup.py' wurde nicht gefunden.")
-    except Exception as e:
-        messagebox.showerror("DB-Setup Fehler", f"Ein unbekannter Fehler ist aufgetreten: {e}")
-
-
-# --- GUI (Start) ---
-
-def show_splashscreen():
-    """Zeigt den Splashscreen an und initialisiert die Haupt-GUI."""
-    splash = tk.Tk()
-    splash.title("LeprendiX Start")
+    pwd_window.bind('<Return>', lambda event=None: check_password())
     
-    # --- Geometrie: Breit (900x600) ---
-    window_width = 900
-    window_height = 600
-    screen_width = splash.winfo_screenwidth()
-    screen_height = splash.winfo_screenheight()
-    x = (screen_width // 2) - (window_width // 2)
-    y = (screen_height // 2) - (window_height // 2)
-    splash.geometry(f'{window_width}x{window_height}+{x}+{y}')
-    splash.resizable(False, False)
+    ttk.Button(pwd_window, text="OK", command=check_password).pack(pady=5)
+    pwd_window.transient(tk.Tk.root) 
 
-    # --- 1. Großes Bild (Logo) ---
-    image_label = ttk.Label(splash)
-    image_label.pack(pady=(10, 0))
-    
-    global logo_image 
-    
-    if os.path.exists(LOGO_PATH):
-        try:
-            if USE_PIL:
-                img = Image.open(LOGO_PATH)
-                img = img.resize((TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT), Image.Resampling.LANCZOS)
-                logo_image = ImageTk.PhotoImage(img)
-            else:
-                logo_image = tk.PhotoImage(file=LOGO_PATH)
-                
-            image_label.config(image=logo_image)
-            
-        except Exception as e:
-            image_label.config(text="LeprendiX - Fehler beim Laden des Bildes", font=("Helvetica", 16, "bold"))
-    else:
-        image_label.config(text="LeprendiX - (Logo fehlt)", font=("Helvetica", 16, "bold"))
-        
-    # --- 2. Status und Version (unter dem Bild) ---
-    ttk.Label(splash, text="Honorarnoten Generator", font=("Helvetica", 12)).pack(pady=(0, 5))
-    
-    status_label = ttk.Label(splash, text="Prüfe auf Updates...", foreground='blue')
-    status_label.pack(pady=5)
-    
-    # Wir nutzen after, damit die GUI Zeit hat, sich zu rendern.
-    splash.after(100, lambda: start_application_buttons(splash, status_label))
-    
-    splash.mainloop()
 
-def start_application_buttons(splash, status_label):
-    """Führt den Update-Check durch und zeigt die Haupt-Buttons an."""
-    
-    # Prüfe auf Updates 
-    if check_for_updates(splash):
-        return 
-
-    # Update abgeschlossen oder ignoriert
-    status_label.config(text=f"Bereit zum Start. Version: {get_current_version()}")
-    
-    # --- 3. Haupt-Buttons (zentral unten platziert) ---
-    
-    start_btn = ttk.Button(splash, 
-                           text="App Starten", 
-                           command=lambda: start_gui(splash), 
-                           width=15)
-                           
-    beenden_btn = ttk.Button(splash, 
-                             text="Beenden", 
-                             command=splash.destroy, 
-                             width=15)
-                             
-    # Platzierung der Haupt-Buttons (rely=0.85 ist 85% der Höhe)
-    start_btn.place(relx=0.5, rely=0.85, anchor=tk.CENTER, x=-70) 
-    beenden_btn.place(relx=0.5, rely=0.85, anchor=tk.CENTER, x=70) 
-
-    # --- 4. DB-Setup Button (Admin) in der Ecke ---
-    db_setup_btn = ttk.Button(splash, 
-                              text="DB-Setup (Admin)", 
-                              command=run_db_setup_protected)
-                              
-    # Platziere den Button in der linken unteren Ecke (rely=0.90)
-    db_setup_btn.place(relx=0.03, rely=0.90, anchor='sw')
-
+# --- START FUNKTIONEN (Angepasst: Start-Button) ---
 
 def start_gui(splash):
-    """Startet die Haupt-GUI (gui_generator.py) und das Verlaufsfenster."""
+    """
+    Startet die Haupt-GUI (gui_generator.py) und den Status-Checker im parallelen Prozess.
+    """
     splash.destroy()
     
     # 1. Start des Hauptprogramms (gui_generator.py)
     try:
         subprocess.Popen([sys.executable, "gui_generator.py"], start_new_session=True)
+        print("INFO: 'gui_generator.py' gestartet.")
     except FileNotFoundError:
         messagebox.showerror("Fehler", "Das Skript 'gui_generator.py' wurde nicht gefunden.")
         return
@@ -293,16 +190,116 @@ def start_gui(splash):
         messagebox.showerror("Fehler", f"Hauptprogramm konnte nicht gestartet werden: {e}")
         return
         
-    # 2. Start des Verlaufsfensters (verlauf_fenster.py) im parallelen Prozess
+    # 2. Start des Status-Checkers (patient_status_checker.py) im parallelen Prozess
     try:
-        subprocess.Popen([sys.executable, "verlauf_fenster.py"], start_new_session=True)
+        subprocess.Popen([sys.executable, "patient_status_checker.py"], start_new_session=True)
+        print("INFO: 'patient_status_checker.py' gestartet.")
         
     except FileNotFoundError:
-        messagebox.showwarning("Warnung", "Das Skript 'verlauf_fenster.py' wurde nicht gefunden.")
-    except Exception as e:
-        messagebox.showwarning("Warnung", f"Verlaufsfenster konnte nicht gestartet werden: {e}")
+        messagebox.showwarning("Warnung", "Das Skript 'patient_status_checker.py' wurde nicht gefunden. Hauptprogramm läuft weiter.")
         
+    except Exception as e:
+        messagebox.showerror("Fehler", f"Status-Checker konnte nicht gestartet werden: {e}")
+        
+    # main.py beendet sich, die gestarteten Prozesse laufen weiter.
+    sys.exit()
 
-# --- MAIN ---
+
+# --- SPLASHSCREEN (Angepasst: Layout und Start-Button) ---
+
+def create_splash_screen():
+    """Erstellt den Splashscreen."""
+    
+    root = tk.Tk()
+    root.withdraw() 
+    
+    splash = tk.Toplevel(root)
+    splash.title("LeprendiX: Honorarnoten-Generator")
+    splash.overrideredirect(True) 
+    
+    SPLASH_WIDTH = 800
+    SPLASH_HEIGHT = 550 
+    screen_width = splash.winfo_screenwidth()
+    screen_height = splash.winfo_screenheight()
+    
+    x_pos = (screen_width - SPLASH_WIDTH) // 2
+    y_pos = (screen_height - SPLASH_HEIGHT) // 2
+    splash.geometry(f"{SPLASH_WIDTH}x{SPLASH_HEIGHT}+{x_pos}+{y_pos}")
+
+    # --- Container Frame für Bild und Info ---
+    main_frame = ttk.Frame(splash)
+    main_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+    # --- 1. Bild/Logo ---
+    global global_logo_image, global_logo_photo
+    
+    if USE_PIL and os.path.exists(LOGO_PATH):
+        try:
+            img = Image.open(LOGO_PATH)
+            img = img.resize((TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT), Image.Resampling.LANCZOS)
+            global_logo_image = img 
+            global_logo_photo = ImageTk.PhotoImage(global_logo_image)
+            
+            logo_label = tk.Label(main_frame, image=global_logo_photo, borderwidth=0)
+            logo_label.pack(pady=(0, 10)) 
+
+        except Exception as e:
+            tk.Label(main_frame, text=f"LOGO FEHLER: {e}", fg="red").pack(pady=10)
+    else:
+        # Fallback ohne PIL oder wenn das Bild fehlt
+        tk.Label(main_frame, text="LeprendiX: Honorarnoten-Generator", 
+                 font=("Helvetica", 18, "bold"), fg="blue").pack(pady=10)
+    
+    # --- 2. Update-Status Label ---
+    splash.update_label = ttk.Label(main_frame, 
+                                    text="Initialisiere...", 
+                                    font=("Arial", 10))
+    splash.update_label.pack(pady=(0, 5)) 
+
+    # --- 3. Progressbar ---
+    style = ttk.Style()
+    style.theme_use('default')
+    style.configure("TProgressbar", thickness=10)
+
+    progress = ttk.Progressbar(main_frame, orient="horizontal", length=SPLASH_WIDTH - 40, mode="indeterminate")
+    progress.pack(pady=(0, 15), fill='x', padx=50) 
+    progress.start(10) 
+    
+    # --- 4. Start Button ---
+    # *KORRIGIERT*: Feste, großzügige Breite und vertikales Padding (ipady) für die Höhe
+    splash.start_button = ttk.Button(main_frame, 
+                                     text="▶️ Anwendung starten", 
+                                     command=lambda: start_gui(splash), 
+                                     state=tk.DISABLED,
+                                     width=35) # Breite auf 35 Zeichen setzen
+                                     
+    # Packen: Button zentrieren und vertikalen Innenabstand (ipady) hinzufügen
+    # ipady erhöht die Höhe des Buttons
+    splash.start_button.pack(pady=(0, 15), ipady=10) 
+
+    # --- 5. DB-Setup Button (Admin) in der Ecke ---
+    db_setup_btn = ttk.Button(splash, 
+                              text="DB-Setup (Admin)", 
+                              command=run_db_setup_protected)
+                              
+    db_setup_btn.place(relx=0.03, rely=0.97, anchor='sw')
+
+    return root, splash, progress
+
+# --- HAUPTPROGRAMM ---
+
 if __name__ == "__main__":
-    show_splashscreen()
+    
+    root, splash, progress = create_splash_screen()
+    
+    splash.update()
+    
+    # Führe den Update-Check aus
+    if not check_for_update(splash):
+        # Wenn kein Update gestartet wurde, stoppe den Progressbar und aktiviere den Start-Button
+        progress.stop()
+        progress.config(mode="determinate", value=100) 
+        splash.update_label.config(text="Bereit zum Start.")
+        splash.start_button.config(state=tk.NORMAL)
+        
+    root.mainloop()

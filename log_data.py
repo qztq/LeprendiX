@@ -1,53 +1,28 @@
 # log_data.py
-# Funktionen zum Speichern und Laden des Verlaufs der zuletzt bearbeiteten Patienten.
 
+import datetime
 import os
 
-LOG_FILE = "verlauf.txt"
-MAX_ENTRIES = 10 # Maximale Anzahl der Einträge, die gespeichert werden sollen
+# Datei, in der der Verlauf gespeichert wird
+LOG_FILE = 'honorarnoten_verlauf.txt'
 
-def log_patient_name(name: str):
+def log_patient_name(patient_identifier):
     """
-    Speichert den Patientennamen an den Anfang der Verlaufsdatei.
+    Protokolliert den Namen des Patienten und den Zeitpunkt der Erstellung
+    einer Honorarnote in einer einfachen Textdatei (honorarnoten_verlauf.txt).
     """
-    if not name or not name.strip():
-        return
-
-    name = name.strip()
-    current_entries = []
-
-    # 1. Vorhandene Einträge laden (außer dem zu loggenden, falls er schon da ist)
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                current_entries = [line.strip() for line in f if line.strip() and line.strip() != name]
-        except Exception as e:
-            print(f"Fehler beim Lesen der Verlaufsdatei: {e}")
-
-    # 2. Neuen Namen hinzufügen (ganz oben)
-    current_entries.insert(0, name)
-
-    # 3. Datei mit den neuesten Einträgen überschreiben (auf MAX_ENTRIES begrenzen)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] Honorarnote generiert für: {patient_identifier}\n"
+    
     try:
-        with open(LOG_FILE, 'w', encoding='utf-8') as f:
-            for entry in current_entries[:MAX_ENTRIES]:
-                f.write(entry + "\n")
+        # 'a' steht für append (anhängen), damit die Datei nicht überschrieben wird
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+            
     except Exception as e:
-        print(f"Fehler beim Schreiben der Verlaufsdatei: {e}")
+        # Warnung, falls das Protokollieren fehlschlägt, aber die Hauptanwendung
+        # weiterlaufen lassen.
+        print(f"WARNUNG: Fehler beim Schreiben in die Log-Datei ({LOG_FILE}): {e}")
 
-def get_recent_patients() -> list:
-    """
-    Gibt die Liste der zuletzt gespeicherten Patienten zurück.
-    """
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                return [line.strip() for line in f if line.strip()]
-        except Exception:
-            return []
-    return []
-
-# Beispielaufruf (Diesen Aufruf müssten Sie in gui_generator.py integrieren):
-# from log_data import log_patient_name
-# ... nach erfolgreicher Speicherung/Druck:
-# log_patient_name("Tobias Hager")
+# Wenn Sie ein Verlaufsfenster (verlauf_fenster.py) verwenden, benötigt dieses
+# Skript diese Datei, um die Daten bereitzustellen.

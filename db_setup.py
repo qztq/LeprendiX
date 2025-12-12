@@ -8,7 +8,7 @@ DATABASE_NAME = 'patienten.db'
 def setup_database():
     """
     Erstellt die notwendigen SQLite-Tabellen (patienten, leistungen, stammdaten_leistungen).
-    Fügt die neue Spalte 'kilometergeld' in die patienten-Tabelle ein.
+    Fügt die neue Spalte 'kilometergeld' und 'last_selected_kurznamen' in die patienten-Tabelle ein.
     """
     
     conn = sqlite3.connect(DATABASE_NAME)
@@ -16,7 +16,7 @@ def setup_database():
     
     print(f"Datenbank wird eingerichtet oder aktualisiert: {DATABASE_NAME}")
 
-    # 1. Patienten-Tabelle erstellen (mit neuer Spalte kilometergeld)
+    # 1. Patienten-Tabelle erstellen (mit neuer Spalte kilometergeld und last_selected_kurznamen)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS patienten (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,13 +30,13 @@ def setup_database():
         anrede TEXT,
         versicherungsnummer TEXT,
         diagnose TEXT,
-        kilometergeld REAL DEFAULT 0.0, -- NEUE SPALTE FÜR DIE WEGEPAUSCHALE
+        kilometergeld REAL DEFAULT 0.0,
+        last_selected_kurznamen TEXT DEFAULT '', -- NEUE SPALTE FÜR ZULETZT GEWÄHLTE LEISTUNGEN
         UNIQUE(vorname, nachname, plz)
     )
     """)
 
     # 2. Leistungen-Tabelle erstellen
-    # In dieser Tabelle speichern wir den Endbetrag (Einzelbetrag + Kilometergeld)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS leistungen (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +58,13 @@ def setup_database():
         standard_betrag REAL NOT NULL
     )
     """)
+    
+    # Optional: Spalte zu bestehenden DBs hinzufügen
+    try:
+        cursor.execute("SELECT last_selected_kurznamen FROM patienten LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE patienten ADD COLUMN last_selected_kurznamen TEXT DEFAULT ''")
+        print("Spalte 'last_selected_kurznamen' zur patienten-Tabelle hinzugefügt.")
     
     # Optional: Standard-Leistungen einfügen (nur wenn die Tabelle leer ist)
     try:
