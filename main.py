@@ -1,269 +1,308 @@
+# main.py
+# Startscript mit breitem Splashscreen, Auto-Update, geschütztem DB-Setup
+# und parallelem Start von Haupt-App und Verlaufsfenster.
+
+import tkinter as tk
+from tkinter import messagebox, ttk
+import subprocess
 import os
-import sys
-import shutil
 import requests
 import zipfile
-import tempfile
-import hashlib
-import subprocess
-from tkinter import Tk, Button, Label, messagebox
+import shutil
+import sys
+import getpass 
+import tkinter
 
-# ----------------------------------------------------------------------
-# KONFIGURATION
-# ----------------------------------------------------------------------
-DB_FILE_TO_PROTECT = "patienten.db"
+# --- PIL (Pillow) für PNG/JPG-Unterstützung ---
+try:
+    from PIL import Image, ImageTk
+    USE_PIL = True
+except ImportError:
+    USE_PIL = False
+
+# --- KONFIGURATION FÜR DEN UPDATER ---
+GITHUB_TOKEN = "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" 
 REPO_OWNER = "qztq"
 REPO_NAME = "LeprendiX"
 RELEASE_API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+DB_FILE_TO_EXCLUDE = "patienten.db" 
+TEMP_ZIP_NAME = "update_release.zip"
 
-VERSION_FILE = "version.txt"
+# --- SICHERHEIT: Passwort für DB-Setup ---
+SETUP_PASSWORD = "Afrika1!" 
+
+# --- BILD-KONFIGURATION ---
+LOGO_PATH = "logo.png" 
+TARGET_IMAGE_WIDTH = 800  
+TARGET_IMAGE_HEIGHT = 450 
+
+# Globale Variablen für das Bild (verhindern Garbage Collection)
+logo_image = None
 
 
-# ----------------------------------------------------------------------
-# VERSION MANAGEMENT
-# ----------------------------------------------------------------------
+# --- HILFSFUNKTIONEN FÜR DEN UPDATER ---
+
 def get_current_version():
-    if not os.path.exists(VERSION_FILE):
-        return "0.0.0"
+    """Liest die aktuelle Version aus einer lokalen Datei (falls vorhanden)."""
     try:
-        with open(VERSION_FILE, "r", encoding="utf-8") as f:
+        with open("version.txt", "r") as f:
             return f.read().strip()
-    except:
-        return "0.0.0"
+    except FileNotFoundError:
+        return "v0.0.0" 
 
+def update_current_version(new_version):
+    """Speichert die neue Versionsnummer in einer lokalen Datei."""
+    try:
+        with open("version.txt", "w") as f:
+            f.write(new_version)
+    except Exception as e:
+        print(f"Fehler beim Speichern der Versionsnummer: {e}")
 
-def update_current_version(v):
-    with open(VERSION_FILE, "w", encoding="utf-8") as f:
-        f.write(v)
-
-
-# ----------------------------------------------------------------------
-# TOKEN
-# ----------------------------------------------------------------------
-def get_token():
-    """
-    Token wird NICHT in den Code geschrieben.
-    Du setzt ihn per:
-      setx LEPRENDIX_TOKEN "ghp_..."
-    """
-    tok = os.environ.get("LEPRENDIX_TOKEN")
-    if not tok:
-        return None
-    return tok.strip()
-
-
-# ----------------------------------------------------------------------
-# HASH CHECK
-# ----------------------------------------------------------------------
-def sha256_of(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-# ----------------------------------------------------------------------
-# UPDATE CHECK
-# ----------------------------------------------------------------------
-def check_for_updates():
-    token = get_token()
-    if not token:
-        messagebox.showwarning("Updater", "Kein GitHub Token gesetzt.\nBitte LEPRENDIX_TOKEN anlegen.")
-        return
-
+def check_for_updates(root):
+    """Prüft auf GitHub, ob eine neue Version verfügbar ist."""
+    current_version = get_current_version()
+    
     headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json"
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
     }
-
+    
     try:
-        print("Checking:", RELEASE_API_URL)
-        r = requests.get(RELEASE_API_URL, headers=headers, timeout=15)
+        response = requests.get(RELEASE_API_URL, headers=headers)
+        response.raise_for_status()
+        
+        release_data = response.json()
+        latest_version = release_data.get("tag_name")
+        zip_asset = next((asset for asset in release_data.get("assets", []) if asset["name"].endswith(".zip")), None)
+        
+        if not latest_version or not zip_asset:
+            return False
 
-        if r.status_code == 404:
-            messagebox.showinfo("Updater",
-                                "Release nicht gefunden oder Repo privat.\nToken vermutlich ohne Berechtigung.")
-            return
+        if latest_version > current_version:
+            if messagebox.askyesno("Update verfügbar", 
+                                  f"Eine neue Version ({latest_version}) ist verfügbar. Aktuell: {current_version}.\nJetzt herunterladen und installieren?"):
+                download_url = zip_asset["browser_download_url"]
+                download_headers = {"Authorization": f"token {GITHUB_TOKEN}"} 
+                
+                if download_and_replace(download_url, download_headers, latest_version):
+                    root.destroy()
+                    messagebox.showinfo("Update Erfolgreich", "Update abgeschlossen. Die Anwendung wird jetzt neu gestartet.")
+                    os.execl(sys.executable, sys.executable, *sys.argv)
+                return True 
+            else:
+                return False 
+        else:
+            return False
 
-        r.raise_for_status()
-        data = r.json()
-
-        latest = data.get("tag_name")
-        if not latest:
-            messagebox.showinfo("Updater", "Release hat keinen tag_name.")
-            return
-
-        current = get_current_version()
-        print(f"Aktuell: {current} | Latest: {latest}")
-
-        if latest <= current:
-            messagebox.showinfo("Updater", "Keine neuere Version verfügbar.")
-            return
-
-        # ZIP Asset suchen
-        assets = data.get("assets", [])
-        zip_asset = None
-        for a in assets:
-            if a.get("name", "").lower().endswith(".zip"):
-                zip_asset = a
-                break
-
-        if not zip_asset:
-            messagebox.showerror("Updater", "Release hat kein ZIP-Asset.")
-            return
-
-        if not messagebox.askyesno(
-            "Update verfügbar",
-            f"Version {latest} gefunden.\nAktuell: {current}\n\nJetzt aktualisieren?"
-        ):
-            return
-
-        url = zip_asset.get("browser_download_url")
-        digest = zip_asset.get("digest")  # optional
-
-        download_and_install(url, headers, latest, digest)
-
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code in [404, 401]:
+            error_msg = "Prüfen Sie Token und Repository-Namen." if e.response.status_code == 401 else "Release nicht gefunden."
+            print(f"WARNUNG: Konnte Update nicht prüfen (HTTP {e.response.status_code}). {error_msg}")
+        else:
+            print(f"WARNUNG: Ein Fehler ist aufgetreten: {e}")
+        return False
     except Exception as e:
-        messagebox.showerror("Updater Fehler", str(e))
+        print(f"WARNUNG: Ein unbekannter Fehler beim Update-Check: {e}")
+        return False
 
-
-# ----------------------------------------------------------------------
-# DOWNLOAD + INSTALL
-# ----------------------------------------------------------------------
-def download_and_install(url, headers, new_version, digest=None):
-    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-    temp_zip.close()
-
+def download_and_replace(url, headers, new_version):
+    """Lädt die ZIP-Datei herunter, entpackt und ersetzt die Dateien."""
     try:
-        # --- DOWNLOAD ---
-        with requests.get(url, headers=headers, stream=True, timeout=30) as r:
-            r.raise_for_status()
-            with open(temp_zip.name, "wb") as f:
-                for chunk in r.iter_content(8192):
-                    if chunk:
-                        f.write(chunk)
+        # KORREKTUR: Der Header MUSS hier für den Asset-Download übergeben werden
+        r = requests.get(url, headers=headers, stream=True)
+        r.raise_for_status() 
 
-        # --- HASH CHECK ---
-        if digest and digest.startswith("sha256:"):
-            expected = digest.split("sha256:", 1)[1].strip()
-            actual = sha256_of(temp_zip.name)
-            print("Expected:", expected)
-            print("Actual:  ", actual)
-            if actual != expected:
-                os.remove(temp_zip.name)
-                messagebox.showerror("Updater", "SHA256 stimmt nicht!\nUpdate abgebrochen.")
-                return
+        with open(TEMP_ZIP_NAME, 'wb') as f:
+            shutil.copyfileobj(r.raw, f)
+            
+        with zipfile.ZipFile(TEMP_ZIP_NAME, 'r') as zip_ref:
+            for member in zip_ref.namelist():
+                if DB_FILE_TO_EXCLUDE not in member and not member.endswith('/'):
+                    base_filename = member.split('/', 1)[-1] 
+                    
+                    if base_filename:
+                        source = zip_ref.open(member)
+                        target_path = os.path.join(os.getcwd(), base_filename)
+                        
+                        with open(target_path, 'wb') as target:
+                            shutil.copyfileobj(source, target)
 
-        # --- ENTZIP ---
-        tmpdir = tempfile.mkdtemp(prefix="update_")
-        with zipfile.ZipFile(temp_zip.name, "r") as zf:
-            zf.extractall(tmpdir)
-
-        # --- INSTALLATION ---
-        cwd = os.getcwd()
-        backup = tempfile.mkdtemp(prefix="backup_")
-
-        try:
-            for root, dirs, files in os.walk(tmpdir):
-                rel_root = os.path.relpath(root, tmpdir)
-
-                for file in files:
-                    source = os.path.join(root, file)
-
-                    if rel_root == ".":
-                        target_rel = file
-                    else:
-                        target_rel = os.path.join(rel_root, file)
-
-                    target = os.path.join(cwd, target_rel)
-
-                    # DB NIE überschreiben!
-                    if os.path.basename(target).lower() == DB_FILE_TO_PROTECT.lower():
-                        print("Skipping DB:", target)
-                        continue
-
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-
-                    # Backup falls existiert
-                    if os.path.exists(target):
-                        bkp_path = os.path.join(backup, target_rel)
-                        os.makedirs(os.path.dirname(bkp_path), exist_ok=True)
-                        shutil.copy2(target, bkp_path)
-
-                    shutil.copy2(source, target)
-                    print("Updated:", target)
-
-        except Exception as e:
-            # Restore
-            for root, dirs, files in os.walk(backup):
-                for file in files:
-                    src = os.path.join(root, file)
-                    rel = os.path.relpath(src, backup)
-                    dst = os.path.join(cwd, rel)
-                    os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    shutil.copy2(src, dst)
-
-            messagebox.showerror("Update Fehler",
-                                 f"Beim Installieren ist ein Fehler aufgetreten.\n"
-                                 f"Backup wurde wiederhergestellt.\n\n{e}")
-            return
-
+        os.remove(TEMP_ZIP_NAME)
         update_current_version(new_version)
+        return True
 
-        messagebox.showinfo("Update",
-                            "Update erfolgreich installiert!\nDas Programm wird jetzt neu gestartet.")
-
-        restart_app()
-
-    finally:
-        try:
-            os.remove(temp_zip.name)
-        except:
-            pass
-
-
-# ----------------------------------------------------------------------
-# NEUSTART
-# ----------------------------------------------------------------------
-def restart_app():
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
-
-
-# ----------------------------------------------------------------------
-# START VON START.PY
-# ----------------------------------------------------------------------
-def start_app():
-    if not os.path.exists("start.py"):
-        messagebox.showerror("Fehler", "start.py wurde nicht gefunden!")
-        return
-
-    try:
-        subprocess.Popen([sys.executable, "start.py"])
     except Exception as e:
-        messagebox.showerror("Start-Fehler", str(e))
+        messagebox.showerror("Download/Installations Fehler", f"Fehler beim Installieren des Updates: {e}")
+        if os.path.exists(TEMP_ZIP_NAME):
+            os.remove(TEMP_ZIP_NAME)
+        return False
+
+# --- HILFSFUNKTIONEN FÜR DB-SETUP ---
+
+def run_db_setup_protected():
+    """Führt das db_setup.py Script geschützt aus."""
+    
+    if not messagebox.askyesno("Sicherheit: DB-Setup", 
+                              "WARNUNG: Das Ausführen des DB-Setup überschreibt oder löscht ALLE Stammdaten und Leistungen!\n\nSind Sie ABSOLUT sicher, dass Sie fortfahren möchten?"):
+        return
+        
+    password_window = tk.Toplevel()
+    password_window.title("Sicherheits-Passwort")
+    
+    password_window.update_idletasks()
+    width = 300
+    height = 120
+    x = (password_window.winfo_screenwidth() // 2) - (width // 2)
+    y = (password_window.winfo_screenheight() // 2) - (height // 2)
+    password_window.geometry(f'{width}x{height}+{x}+{y}')
+    
+    ttk.Label(password_window, text="Bitte geben Sie das Master-Passwort ein:").pack(padx=10, pady=5)
+    password_entry = ttk.Entry(password_window, show="*", width=30)
+    password_entry.pack(padx=10, pady=5)
+    password_entry.focus_set()
+    
+    def check_password_and_run():
+        entered_password = password_entry.get()
+        if entered_password == SETUP_PASSWORD:
+            password_window.destroy()
+            execute_db_setup()
+        else:
+            messagebox.showerror("Fehler", "Falsches Passwort.")
+
+    ttk.Button(password_window, text="Bestätigen", command=check_password_and_run).pack(pady=5)
+    password_window.bind('<Return>', lambda event: check_password_and_run())
+
+def execute_db_setup():
+    """Führt das externe db_setup.py Skript aus."""
+    try:
+        process = subprocess.run([sys.executable, "db_setup.py"], 
+                                 capture_output=True, 
+                                 text=True, 
+                                 check=True)
+        
+        messagebox.showinfo("DB-Setup Erfolg", 
+                            f"Datenbank-Setup erfolgreich ausgeführt.\n\nAusgabe:\n{process.stdout}")
+        
+        os.execl(sys.executable, sys.executable, *sys.argv)
+        
+    except subprocess.CalledProcessError as e:
+        messagebox.showerror("DB-Setup Fehler", 
+                             f"Fehler beim Ausführen von db_setup.py:\n\n{e.stderr}\n\nBitte Konsole prüfen.")
+    except FileNotFoundError:
+        messagebox.showerror("DB-Setup Fehler", "Das Skript 'db_setup.py' wurde nicht gefunden.")
+    except Exception as e:
+        messagebox.showerror("DB-Setup Fehler", f"Ein unbekannter Fehler ist aufgetreten: {e}")
 
 
-# ----------------------------------------------------------------------
-# GUI
-# ----------------------------------------------------------------------
-def main():
-    root = Tk()
-    root.title("LeprendiX Launcher")
-    root.geometry("360x200")
+# --- GUI (Start) ---
 
-    Label(root, text=f"LeprendiX\nVersion {get_current_version()}",
-          font=("Arial", 14)).pack(pady=15)
+def show_splashscreen():
+    """Zeigt den Splashscreen an und initialisiert die Haupt-GUI."""
+    splash = tk.Tk()
+    splash.title("LeprendiX Start")
+    
+    # --- Geometrie: Breit (900x600) ---
+    window_width = 900
+    window_height = 600
+    screen_width = splash.winfo_screenwidth()
+    screen_height = splash.winfo_screenheight()
+    x = (screen_width // 2) - (window_width // 2)
+    y = (screen_height // 2) - (window_height // 2)
+    splash.geometry(f'{window_width}x{window_height}+{x}+{y}')
+    splash.resizable(False, False)
 
-    Button(root, text="Programm starten", width=18, height=2,
-           command=start_app).pack(pady=5)
+    # --- 1. Großes Bild (Logo) ---
+    image_label = ttk.Label(splash)
+    image_label.pack(pady=(10, 0))
+    
+    global logo_image 
+    
+    if os.path.exists(LOGO_PATH):
+        try:
+            if USE_PIL:
+                img = Image.open(LOGO_PATH)
+                img = img.resize((TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT), Image.Resampling.LANCZOS)
+                logo_image = ImageTk.PhotoImage(img)
+            else:
+                logo_image = tk.PhotoImage(file=LOGO_PATH)
+                
+            image_label.config(image=logo_image)
+            
+        except Exception as e:
+            image_label.config(text="LeprendiX - Fehler beim Laden des Bildes", font=("Helvetica", 16, "bold"))
+    else:
+        image_label.config(text="LeprendiX - (Logo fehlt)", font=("Helvetica", 16, "bold"))
+        
+    # --- 2. Status und Version (unter dem Bild) ---
+    ttk.Label(splash, text="Honorarnoten Generator", font=("Helvetica", 12)).pack(pady=(0, 5))
+    
+    status_label = ttk.Label(splash, text="Prüfe auf Updates...", foreground='blue')
+    status_label.pack(pady=5)
+    
+    # Wir nutzen after, damit die GUI Zeit hat, sich zu rendern.
+    splash.after(100, lambda: start_application_buttons(splash, status_label))
+    
+    splash.mainloop()
 
-    Button(root, text="Nach Updates suchen", width=18, height=2,
-           command=check_for_updates).pack(pady=5)
+def start_application_buttons(splash, status_label):
+    """Führt den Update-Check durch und zeigt die Haupt-Buttons an."""
+    
+    # Prüfe auf Updates 
+    if check_for_updates(splash):
+        return 
 
-    root.mainloop()
+    # Update abgeschlossen oder ignoriert
+    status_label.config(text=f"Bereit zum Start. Version: {get_current_version()}")
+    
+    # --- 3. Haupt-Buttons (zentral unten platziert) ---
+    
+    start_btn = ttk.Button(splash, 
+                           text="App Starten", 
+                           command=lambda: start_gui(splash), 
+                           width=15)
+                           
+    beenden_btn = ttk.Button(splash, 
+                             text="Beenden", 
+                             command=splash.destroy, 
+                             width=15)
+                             
+    # Platzierung der Haupt-Buttons (rely=0.85 ist 85% der Höhe)
+    start_btn.place(relx=0.5, rely=0.85, anchor=tk.CENTER, x=-70) 
+    beenden_btn.place(relx=0.5, rely=0.85, anchor=tk.CENTER, x=70) 
+
+    # --- 4. DB-Setup Button (Admin) in der Ecke ---
+    db_setup_btn = ttk.Button(splash, 
+                              text="DB-Setup (Admin)", 
+                              command=run_db_setup_protected)
+                              
+    # Platziere den Button in der linken unteren Ecke (rely=0.90)
+    db_setup_btn.place(relx=0.03, rely=0.90, anchor='sw')
 
 
+def start_gui(splash):
+    """Startet die Haupt-GUI (gui_generator.py) und das Verlaufsfenster."""
+    splash.destroy()
+    
+    # 1. Start des Hauptprogramms (gui_generator.py)
+    try:
+        subprocess.Popen([sys.executable, "gui_generator.py"], start_new_session=True)
+    except FileNotFoundError:
+        messagebox.showerror("Fehler", "Das Skript 'gui_generator.py' wurde nicht gefunden.")
+        return
+    except Exception as e:
+        messagebox.showerror("Fehler", f"Hauptprogramm konnte nicht gestartet werden: {e}")
+        return
+        
+    # 2. Start des Verlaufsfensters (verlauf_fenster.py) im parallelen Prozess
+    try:
+        subprocess.Popen([sys.executable, "verlauf_fenster.py"], start_new_session=True)
+        
+    except FileNotFoundError:
+        messagebox.showwarning("Warnung", "Das Skript 'verlauf_fenster.py' wurde nicht gefunden.")
+    except Exception as e:
+        messagebox.showwarning("Warnung", f"Verlaufsfenster konnte nicht gestartet werden: {e}")
+        
+
+# --- MAIN ---
 if __name__ == "__main__":
-    main()
+    show_splashscreen()

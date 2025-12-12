@@ -11,6 +11,7 @@ import requests
 import json     
 import subprocess 
 import sys
+import tkinter
 
 from log_data import log_patient_name 
 
