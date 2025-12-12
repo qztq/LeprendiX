@@ -9,7 +9,8 @@ from docx import Document
 import os
 import requests 
 import json     
-import subprocess # Für den Launcher
+import subprocess 
+import sys 
 
 # --- KONFIGURATION ---
 DATABASE_NAME = 'patienten.db'
@@ -19,20 +20,54 @@ OUTPUT_FOLDER = 'Honorarnoten/' # Basisordner
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # --- KONFIGURATION (Teamup API) ---
+# HINWEIS: Hier muss IHR Teamup Key und die Kalender ID stehen.
 TEAMUP_API_KEY = 'c307ae48dc5f918fd9dada7b9e922a00e30c27a8939d8a31eb02dac60efe566a'
 TEAMUP_CALENDAR_ID = 'ks63f68d2f870c62a1'
 TEAMUP_BASE_URL = f"https://api.teamup.com/{TEAMUP_CALENDAR_ID}/events"
 
+# Platzhalter für die Überprüfung, falls der Nutzer den Key nicht eingetragen hat
+TEAMUP_API_KEY_PLACEHOLDER = 'YOUR_TEAMUP_API_KEY_HERE'
 
-# --- DATENBANK LOGIK & HILFSFUNKTIONEN ---
+
+# --- HILFSFUNKTIONEN FÜR DRUCK, DB und API ---
+
+def print_document_silently(file_path):
+    """
+    Versucht, die angegebene Datei direkt an den Standarddrucker zu senden.
+    
+    HINWEIS: Das Verhalten (Dialog unterdrücken) ist stark abhängig von
+    dem installierten Standardprogramm für .docx-Dateien auf dem OS.
+    """
+    if not os.path.exists(file_path):
+        return False, "Datei zum Drucken nicht gefunden."
+
+    try:
+        if sys.platform.startswith('win'):
+            # Windows: Nutzt den 'print' Verb des Dateityps (oft dialoglos)
+            os.startfile(file_path, 'print')
+            return True, "Druckauftrag an Windows-Standarddrucker gesendet."
+            
+        elif sys.platform.startswith('darwin') or sys.platform.startswith('linux'):
+            # macOS/Linux: Nutzt 'lpr' (kann auf einigen Systemen einen Dialog auslösen)
+            subprocess.run(['lpr', file_path], check=True)
+            return True, "Druckauftrag via lpr (Linux/macOS) gesendet."
+            
+        else:
+            return False, f"Automatisches Drucken wird auf dem Betriebssystem '{sys.platform}' nicht unterstützt."
+            
+    except subprocess.CalledProcessError as e:
+        return False, f"Fehler beim LPR-Druckbefehl: {e}"
+    except Exception as e:
+        return False, f"Fehler beim direkten Drucken: {e}"
 
 def get_patient_data(search_name):
-    """Sucht Patienten und gibt ID und alle 11 Adressfelder zurück."""
+    """Sucht Patienten und gibt ID und alle 12 Adressfelder (inkl. Kilometergeld) zurück."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     search_term = f'%{search_name}%'
+    # Wichtig: Kilometergeld ist Spalte 12 (Index 11)
     cursor.execute("""
-    SELECT id, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose
+    SELECT id, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld
     FROM patienten 
     WHERE nachname LIKE ? OR vorname LIKE ?
     """, (search_term, search_term))
@@ -41,7 +76,8 @@ def get_patient_data(search_name):
     return results
 
 def get_patient_leistungen(patient_id):
-    """Holt alle Leistungen (inkl. ID, Datum, Uhrzeiten) für die GUI-Anzeige."""
+    """Holt alle NICHT ABGERECHNETEN Leistungen für die GUI-Anzeige."""
+    # TODO: Muss später um 'WHERE abgerechnet_am IS NULL' erweitert werden
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -56,7 +92,8 @@ def get_patient_leistungen(patient_id):
 
 
 def get_patient_leistungen_for_template(patient_id):
-    """Holt Leistungen (ohne ID) für die Word-Generierung."""
+    """Holt NICHT ABGERECHNETE Leistungen (ohne ID) für die Word-Generierung."""
+    # TODO: Muss später um 'WHERE abgerechnet_am IS NULL' erweitert werden
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -83,19 +120,16 @@ def get_all_stammdaten_dict():
 def search_teamup_events(search_term, start_date=None, end_date=None):
     """
     Sucht Teamup-Kalendereinträge basierend auf dem Titel/Notizen.
-    Die Datumsspanne wird auf die letzten 30 Tage bis 30 Tage in die Zukunft begrenzt, 
-    um die Limits des Free Tiers zu berücksichtigen.
     """
     
     clean_api_key = TEAMUP_API_KEY.strip()
     
-    # Korrigierter Header: 'Teamup-Token'
     headers = {
         'Teamup-Token': clean_api_key, 
         'Accept': 'application/json'
     }
     
-    # BEGRENZUNG DES ZEITRAUMS AUF 30 TAGE (Free Tier-Anpassung)
+    # BEGRENZUNG DES ZEITRAUMS
     if start_date is None:
         start_date = (datetime.date.today() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
     if end_date is None:
@@ -155,7 +189,8 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
 def fill_template(patient_id, patient_data_tuple):
     """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
     
-    _, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose = patient_data_tuple
+    # patient_data_tuple hat 12 Elemente: Index 0=id, ..., 11=kilometergeld
+    _, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld = patient_data_tuple
     
     leistungen_liste = get_patient_leistungen_for_template(patient_id)
     
@@ -169,6 +204,7 @@ def fill_template(patient_id, patient_data_tuple):
     
     total_betrag = 0.0
     
+    # Statische Platzhalter
     replacements = {
         '{{Rechnungsnummer}}': honorar_nummer,
         '{{Anrede}}': anrede, 
@@ -194,8 +230,10 @@ def fill_template(patient_id, patient_data_tuple):
     block_paragraphs = []
     
     in_block = False
+    
+    # Text-Ersetzung und Block-Suche in einem Durchlauf
     for p in document.paragraphs:
-        # Erster Durchlauf: Statische Platzhalter ersetzen
+        # Statische Platzhalter ersetzen
         for key, value in replacements.items():
             if key in p.text:
                 p.text = p.text.replace(key, value)
@@ -218,15 +256,14 @@ def fill_template(patient_id, patient_data_tuple):
     
     if block_start_paragraph and block_end_paragraph:
         
-        from docx.api import Document as DocxDocument
         template_text = '\n'.join([p.text for p in block_paragraphs])
         
-        for datum_str, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag in leistungen_liste: 
+        for datum_db, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag in leistungen_liste: 
             
-            datum_formatiert = datetime.datetime.strptime(datum_str, '%Y-%m-%d').strftime('%d.%m.%Y')
+            datum_formatiert = datetime.datetime.strptime(datum_db, '%Y-%m-%d').strftime('%d.%m.%Y')
             datum_uhrzeit_text = f"{datum_formatiert}, von {uhrzeit_von} bis {uhrzeit_bis}" 
             
-            summe_leistung = einzelbetrag
+            summe_leistung = einzelbetrag # Enthält bereits den Kilometergeld-Aufschlag
             total_betrag += summe_leistung
             
             leistung_block = template_text.replace('{{LEISTUNG_DATUM}}', datum_uhrzeit_text)
@@ -248,6 +285,7 @@ def fill_template(patient_id, patient_data_tuple):
                 p._element.getparent().remove(p._element)
             block_end_paragraph.text = ''
         else:
+             # Falls keine Leistungen da sind, Platzhalter entfernen
              block_start_paragraph.text = '' 
              for p in block_paragraphs:
                  p._element.getparent().remove(p._element)
@@ -255,26 +293,19 @@ def fill_template(patient_id, patient_data_tuple):
 
 
     # Ersetzen des Gesamtbetrags
-    # Ersetzen des Gesamtbetrags
     gesamt_betrag_str = f"{total_betrag:.2f}"
     
     for paragraph in document.paragraphs:
         if '{{Gesamt_Betrag}}' in paragraph.text:
-            # DIES WAR DER FEHLER: paragraph.text = paragraph.replace(...)
-            # KORREKTUR: Muss paragraph.text auf beiden Seiten des '=' verwenden
             paragraph.text = paragraph.text.replace('{{Gesamt_Betrag}}', gesamt_betrag_str)
 
-    # --- NEU: Speichern des Dokuments mit neuer Ordnerstruktur und Dateinamen ---
+    # --- Speichern des Dokuments ---
     
-    # 1. Patientenspezifischen Ordner erstellen (z.B. Honorarnoten/Mustermann_Max/)
     patient_folder_name = f"{nachname}_{vorname}"
     patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
     
-    # 2. Dateinamen anpassen (z.B. Honorarnote Krankenkasse HN-2025-12-001.docx)
     output_filename = f"Honorarnote Krankenkasse {honorar_nummer}.docx"
-    
-    # 3. Pfad zusammenfügen
     output_path = os.path.join(patient_output_path, output_filename)
 
     document.save(output_path)
@@ -332,8 +363,18 @@ class HonorarGeneratorApp:
         self.current_patient_label = ttk.Label(tab, text="Kein Patient ausgewählt", foreground='blue')
         self.current_patient_label.grid(row=2, column=1, columnspan=2, padx=5, pady=5, sticky='w')
 
-        ttk.Button(tab, text="HONORARNOTE GENERIEREN", command=self.generate_invoice).grid(row=3, column=0, columnspan=3, pady=20)
+        # Frame für die Generierungs-Buttons
+        btn_frame = ttk.Frame(tab)
+        btn_frame.grid(row=3, column=0, columnspan=3, pady=20)
         
+        # Bestehender Button
+        ttk.Button(btn_frame, text="HONORARNOTE GENERIEREN (Speichern & Öffnen)", command=self.generate_invoice).pack(side=tk.LEFT, padx=10)
+        
+        # NEUER BUTTON: Generieren und Sofort Drucken
+        ttk.Button(btn_frame, text="✅ Generieren & Sofort Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
+        
+        # TODO: Archivierungsbutton hier einfügen, der alle abgerechneten Leistungen markiert
+
         tab.grid_rowconfigure(1, weight=1)
 
     def search_patients(self):
@@ -363,12 +404,15 @@ class HonorarGeneratorApp:
             self.patient_data = self.results_listbox.patient_data_list[index] 
             self.update_patient_info()
             
+            # Automatisch zum Leistungs-Tab wechseln und Liste aktualisieren
             self.notebook.select(self.tab_leistung)
             self.update_leistung_list() 
 
     def update_patient_info(self):
         if self.patient_data:
-            text = f"{self.patient_data[2]} {self.patient_data[1]} (ID: {self.patient_data[0]}, VersNr: {self.patient_data[9]})"
+            # patient_data[11] ist das Kilometergeld
+            km_geld = self.patient_data[11] if len(self.patient_data) > 11 and self.patient_data[11] is not None else 0.0
+            text = f"{self.patient_data[2]} {self.patient_data[1]} (ID: {self.patient_data[0]}, VersNr: {self.patient_data[9]}, KM: €{km_geld:.2f})"
             self.current_patient_label.config(text=text)
             if hasattr(self, 'leistung_patient_label'):
                 self.leistung_patient_label.config(text=text, foreground='blue')
@@ -378,6 +422,7 @@ class HonorarGeneratorApp:
                 self.leistung_patient_label.config(text="Bitte Patient in Tab 1 auswählen", foreground='red')
 
     def generate_invoice(self):
+        """Generiert die Honorarnote und öffnet die Datei."""
         if not self.patient_data:
             messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
             return
@@ -387,10 +432,58 @@ class HonorarGeneratorApp:
         try:
             output_path = fill_template(patient_id, self.patient_data) 
             messagebox.showinfo("Erfolg", f"Honorarnote erfolgreich erstellt!\nGespeichert unter: {output_path}")
+            
+            # Öffnen der Datei nach Generierung
+            if sys.platform.startswith('win'):
+                os.startfile(output_path)
+            elif sys.platform.startswith('darwin'):
+                subprocess.call(('open', output_path))
+            elif sys.platform.startswith('linux'):
+                subprocess.call(('xdg-open', output_path))
+                
+            # TODO: Hier Funktion zum Markieren der Leistungen als "abgerechnet" aufrufen
+            
         except FileNotFoundError as e:
              messagebox.showerror("Fehler", str(e))
         except Exception as e:
-            messagebox.showerror("Fehler", f"Fehler bei der Generierung: {e}")
+            import traceback
+            messagebox.showerror("Fehler", f"Fehler bei der Generierung: {e}\n\nDetails siehe Konsole.")
+            traceback.print_exc()
+
+    def generate_and_print_invoice(self):
+        """Generiert die Honorarnote und versucht, sie direkt zu drucken."""
+        if not self.patient_data:
+            messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
+            return
+
+        try:
+            # 1. Generiere die Honorarnote
+            output_path = fill_template(self.patient_data[0], self.patient_data) 
+            
+            # 2. Versuche, sie sofort zu drucken
+            success, message = print_document_silently(output_path)
+            
+            if success:
+                messagebox.showinfo("Druckerfolg", f"Honorarnote erstellt und erfolgreich gedruckt.\n{message}")
+                # TODO: Hier Funktion zum Markieren der Leistungen als "abgerechnet" aufrufen
+                
+            else:
+                # Fallback: Datei anzeigen, falls Drucken fehlschlägt
+                if sys.platform.startswith('win'):
+                    os.startfile(output_path)
+                elif sys.platform.startswith('darwin'):
+                    subprocess.call(('open', output_path))
+                elif sys.platform.startswith('linux'):
+                    subprocess.call(('xdg-open', output_path))
+                    
+                messagebox.showwarning("Druckfehler", f"Druckauftrag konnte nicht direkt gesendet werden:\n{message}\nDie Datei wurde im Viewer geöffnet.")
+                
+        except FileNotFoundError as e:
+             messagebox.showerror("Fehler", str(e))
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Fehler", f"Fehler bei Generierung/Druck: {e}")
+            traceback.print_exc()
 
 
     # --- 2. Patienten Verwalten Tab (Hinzufügen und Bearbeiten) ---
@@ -407,7 +500,8 @@ class HonorarGeneratorApp:
         
         fields = [
             "Anrede", "Vorname", "Nachname", "Versicherungsnummer", 
-            "Straße", "Hausnummer", "Adresszusatz", "PLZ", "Ort", "Diagnose"
+            "Straße", "Hausnummer", "Adresszusatz", "PLZ", "Ort", "Diagnose",
+            "Kilometergeld (€)" # NEUES FELD
         ]
         self.patient_entries = {}
 
@@ -419,6 +513,7 @@ class HonorarGeneratorApp:
 
         self.patient_entries["Anrede"].insert(0, "Herr/Frau")
         self.patient_entries["Diagnose"].insert(0, "Z71")
+        self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
         
         self.save_patient_button = ttk.Button(tab, text="Patient Hinzufügen", command=self.add_patient_gui)
         self.save_patient_button.grid(row=len(fields) + 1, column=0, columnspan=2, pady=10)
@@ -444,6 +539,7 @@ class HonorarGeneratorApp:
         
         self.clear_patient_form(clear_defaults=False) 
         
+        # patient_data_tuple: Index 0=id, 1=vorname, ..., 10=diagnose, 11=kilometergeld
         data_map = {
             "Anrede": patient_data_tuple[8],
             "Vorname": patient_data_tuple[1],
@@ -454,7 +550,8 @@ class HonorarGeneratorApp:
             "Adresszusatz": patient_data_tuple[5],
             "PLZ": patient_data_tuple[6],
             "Ort": patient_data_tuple[7],
-            "Diagnose": patient_data_tuple[10]
+            "Diagnose": patient_data_tuple[10],
+            "Kilometergeld (€)": f"{patient_data_tuple[11]:.2f}" if patient_data_tuple[11] is not None else "0.00"
         }
         
         for field, value in data_map.items():
@@ -472,6 +569,7 @@ class HonorarGeneratorApp:
         if clear_defaults:
             self.patient_entries["Anrede"].insert(0, "Herr/Frau")
             self.patient_entries["Diagnose"].insert(0, "Z71")
+            self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
         
         self.save_patient_button.config(text="Patient Hinzufügen")
         self.patient_search_entry.delete(0, tk.END)
@@ -489,10 +587,17 @@ class HonorarGeneratorApp:
         anrede = self.patient_entries["Anrede"].get().strip()
         versicherungsnummer = self.patient_entries["Versicherungsnummer"].get().strip()
         diagnose = self.patient_entries["Diagnose"].get().strip()
+        kilometergeld_str = self.patient_entries["Kilometergeld (€)"].get().strip().replace(',', '.') 
 
         if not vorname or not nachname:
             messagebox.showwarning("Achtung", "Vor- und Nachname sind Pflichtfelder.")
             return
+
+        try:
+             kilometergeld = float(kilometergeld_str)
+        except ValueError:
+             messagebox.showwarning("Achtung", "Kilometergeld muss eine gültige Zahl sein (z.B. 5.50).")
+             return
 
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
@@ -500,11 +605,22 @@ class HonorarGeneratorApp:
         try:
             if self.patient_id_to_edit:
                 # AKTUALLISIEREN
+                
+                # FIX: Prüfe, ob die neuen Schlüssel mit einem ANDEREN Patienten kollidieren
+                cursor.execute("""
+                SELECT id FROM patienten 
+                WHERE vorname = ? AND nachname = ? AND plz = ? AND id != ?
+                """, (vorname, nachname, plz, self.patient_id_to_edit))
+                
+                if cursor.fetchone():
+                    raise sqlite3.IntegrityError("Konflikt mit existierendem Patienten")
+                
+                # Wenn kein Konflikt mit einem ANDEREN Patienten, führe Update aus:
                 cursor.execute("""
                 UPDATE patienten 
-                SET nachname=?, vorname=?, strasse=?, hausnummer=?, adresszusatz=?, plz=?, ort=?, anrede=?, versicherungsnummer=?, diagnose=?
+                SET nachname=?, vorname=?, strasse=?, hausnummer=?, adresszusatz=?, plz=?, ort=?, anrede=?, versicherungsnummer=?, diagnose=?, kilometergeld=?
                 WHERE id=?
-                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, self.patient_id_to_edit))
+                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, self.patient_id_to_edit))
                 
                 conn.commit()
                 messagebox.showinfo("Erfolg", f"Patient '{vorname} {nachname}' erfolgreich aktualisiert (ID: {self.patient_id_to_edit}).")
@@ -513,16 +629,17 @@ class HonorarGeneratorApp:
             else:
                 # HINZUFÜGEN
                 cursor.execute("""
-                INSERT INTO patienten (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose))
+                INSERT INTO patienten (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld))
                 
                 conn.commit()
                 messagebox.showinfo("Erfolg", f"Neuer Patient '{vorname} {nachname}' erfolgreich gespeichert.")
                 self.clear_patient_form()
                 
         except sqlite3.IntegrityError:
-            messagebox.showerror("Fehler", f"Patient '{vorname} {nachname}' existiert bereits. Bitte über die Suchfunktion bearbeiten.")
+            # Wird bei INSERT oder bei Konflikt mit ANDEREM Patienten beim UPDATE ausgelöst
+            messagebox.showerror("Fehler", f"Patient '{vorname} {nachname}' mit dieser PLZ existiert bereits in der Datenbank.")
         except Exception as e:
             messagebox.showerror("Fehler", f"Datenbankfehler: {e}")
             
@@ -556,7 +673,7 @@ class HonorarGeneratorApp:
         self.time_to_entry.insert(0, "11:50")
 
         # NEU: Button zum Starten der Kalender-Suche
-        ttk.Button(date_time_frame, text="📅 Termin aus Teamup laden", command=self.open_teamup_search).pack(side=tk.LEFT, padx=20)
+        ttk.Button(date_time_frame, text="📅 Termine aus Teamup laden", command=self.open_teamup_search).pack(side=tk.LEFT, padx=20)
 
 
         # Zweite Zeile: Leistung wählen
@@ -566,13 +683,18 @@ class HonorarGeneratorApp:
         self.leistung_combobox.bind('<<ComboboxSelected>>', self.load_betrag_from_stammdaten) 
         
         # Dritte Zeile: Betrag
-        ttk.Label(tab, text="Betrag (€):").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        ttk.Label(tab, text="Basis Betrag (€) + KM-Geld:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
         self.amount_entry = ttk.Entry(tab, width=15)
         self.amount_entry.grid(row=3, column=1, padx=5, pady=5, sticky='w')
 
         self.add_leistung_button = ttk.Button(tab, text="Leistung Hinzufügen", command=self.add_leistung_gui)
-        self.add_leistung_button.grid(row=4, column=0, columnspan=3, pady=10)
+        self.add_leistung_button.grid(row=4, column=0, columnspan=2, pady=10, sticky='w', padx=5)
         
+        # NEU: Patient abschließen Button
+        ttk.Button(tab, text="Patient Abschließen (zu Generierung)", 
+                   command=lambda: self.notebook.select(self.tab_generate)).grid(row=4, column=1, columnspan=2, pady=10, sticky='e', padx=5)
+
+
         # --- Treeview und Steuerungs-Buttons ---
         ttk.Label(tab, text="Aktuelle offene Leistungen:").grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky='w')
         
@@ -580,10 +702,10 @@ class HonorarGeneratorApp:
         self.leistung_tree.heading('ID', text='ID')
         self.leistung_tree.heading('Datum', text='Datum/Uhrzeit') 
         self.leistung_tree.heading('Beschreibung', text='Beschreibung')
-        self.leistung_tree.heading('Betrag', text='Betrag')
+        self.leistung_tree.heading('Betrag', text='Betrag (Inkl. KM-Geld)') # Hinweis auf KM-Geld
         self.leistung_tree.column('ID', width=40, anchor='center') 
         self.leistung_tree.column('Datum', width=160)
-        self.leistung_tree.column('Betrag', width=80, anchor='e')
+        self.leistung_tree.column('Betrag', width=120, anchor='e')
         self.leistung_tree.grid(row=6, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
         tab.grid_rowconfigure(6, weight=1) 
         
@@ -596,29 +718,38 @@ class HonorarGeneratorApp:
         self.leistung_tree.bind('<<TreeviewSelect>>', self.select_leistung_for_edit)
 
 
-    def open_teamup_search(self):
-        """Öffnet einen Dialog zum Suchen und Auswählen von Teamup-Einträgen."""
+    def get_current_kilometergeld(self):
+        """Ruft das Kilometergeld des aktuell ausgewählten Patienten ab."""
+        if not self.patient_data:
+            return 0.0
         
-        if not TEAMUP_API_KEY or TEAMUP_API_KEY == 'YOUR_TEAMUP_API_KEY_HERE':
-             messagebox.showerror("Konfiguration", "Bitte tragen Sie Ihren Teamup API Key und die Kalender ID in der gui_generator.py ein.")
-             return
-             
+        # Kilometergeld ist Spalte 12, Index 11 in patient_data
+        km_geld = self.patient_data[11] if len(self.patient_data) > 11 and self.patient_data[11] is not None else 0.0
+        return km_geld
+
+    def open_teamup_search(self):
+        """Öffnet einen Dialog zum Suchen und Auswählen von Teamup-Einträgen. Erlaubt Mehrfachauswahl."""
+        
+        if not self.patient_data:
+            messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst einen Patienten im ersten Tab aus.")
+            return
+
         search_window = tk.Toplevel(self.master)
         search_window.title("Teamup Termin-Suche")
-        search_window.geometry("550x450")
+        search_window.geometry("600x500") 
         
         ttk.Label(search_window, text="Suchbegriff (Name/Titel):").pack(pady=5, padx=10, anchor='w')
-        search_entry = ttk.Entry(search_window, width=50)
+        search_entry = ttk.Entry(search_window, width=60)
         search_entry.pack(pady=5, padx=10)
         search_entry.focus_set()
         
-        # Wenn Patient ausgewählt, Nachnamen vorausfüllen
-        initial_search_term = ""
-        if self.patient_data and self.patient_data[2]: # patient_data[2] ist Nachname
-             initial_search_term = self.patient_data[2]
+        initial_search_term = self.patient_data[2] if self.patient_data and self.patient_data[2] else ""
+        if initial_search_term:
              search_entry.insert(0, initial_search_term)
         
-        results_tree = ttk.Treeview(search_window, columns=('Titel', 'Datum', 'Von', 'Bis'), show='headings')
+        results_tree = ttk.Treeview(search_window, columns=('Titel', 'Datum', 'Von', 'Bis'), 
+                                    selectmode='extended', 
+                                    show='headings')
         results_tree.heading('Titel', text='Titel')
         results_tree.heading('Datum', text='Datum')
         results_tree.heading('Von', text='Von')
@@ -628,7 +759,7 @@ class HonorarGeneratorApp:
         results_tree.column('Bis', width=60, anchor='center')
         results_tree.pack(pady=5, padx=10, fill='both', expand=True)
 
-        self._teamup_event_data = []
+        self._teamup_event_data = [] 
 
         def perform_search(search_term_override=None):
             """Führt die API-Suche aus und füllt das Treeview."""
@@ -658,49 +789,56 @@ class HonorarGeneratorApp:
                  search_entry.insert(0, patient_lastname)
                  perform_search(patient_lastname)
              else:
-                 messagebox.showwarning("Achtung", "Kein Patient ausgewählt. Geben Sie den Suchbegriff manuell ein.")
+                 messagebox.showwarning("Achtung", "Kein Patient ausgewählt.")
 
         
+        # --- FUNKTION ZUERST DEFINIEREN ---
+        def load_selected_event(event=None):
+            """Speichert ALLE ausgewählten Termine als separate Leistungen."""
+            
+            selected_ids = results_tree.selection() 
+            
+            if not selected_ids:
+                messagebox.showwarning("Auswahl", "Bitte wählen Sie mindestens einen Termin aus.")
+                return
+
+            if not self.leistung_combobox.get():
+                messagebox.showwarning("Fehlende Daten", "Bitte wählen Sie im Hauptfenster eine Leistung aus, die für alle Termine verwendet werden soll.")
+                return
+
+            selected_events_to_add = []
+            
+            for selected_id in selected_ids:
+                try:
+                    index = int(selected_id)
+                    event_data = self._teamup_event_data[index] 
+                    selected_events_to_add.append(event_data)
+                except (IndexError, ValueError):
+                    continue
+
+            if not selected_events_to_add:
+                messagebox.showwarning("Fehler", "Keine gültigen Termine zur Übernahme gefunden.")
+                return
+            
+            self.add_multiple_leistungen_from_teamup(selected_events_to_add)
+            
+            search_window.destroy()
+            
+        # --- HIER WIRD DIE FUNKTION ALS COMMAND VERWENDET ---
         control_frame = ttk.Frame(search_window)
         control_frame.pack(pady=10)
 
         ttk.Button(control_frame, text="Suchen (Manuell)", command=lambda: perform_search()).pack(side=tk.LEFT, padx=10)
         
-        # Button zur Suche nach Patientennamen
         ttk.Button(control_frame, text=f"Nachname ({initial_search_term}) suchen", 
                    command=search_by_patient_name, 
                    state=tk.NORMAL if self.patient_data else tk.DISABLED).pack(side=tk.LEFT, padx=10)
 
-        ttk.Button(search_window, text="Termin Übernehmen", command=load_selected_event).pack(pady=5)
+        ttk.Button(search_window, text=f"Termin(e) Übernehmen & Speichern", 
+                   command=load_selected_event).pack(pady=5) 
         
-        def load_selected_event(event=None):
-            """Lädt den ausgewählten Termin in die Leistungsfelder und schließt das Fenster."""
-            selected_id = results_tree.focus()
-            
-            if selected_id:
-                try:
-                    index = int(selected_id)
-                    title, date_str, time_from, time_to = self._teamup_event_data[index]
-                    
-                    self.date_entry.delete(0, tk.END)
-                    self.date_entry.insert(0, date_str)
-                    
-                    self.time_from_entry.delete(0, tk.END)
-                    self.time_from_entry.insert(0, time_from)
-                    
-                    self.time_to_entry.delete(0, tk.END)
-                    self.time_to_entry.insert(0, time_to)
-                    
-                    messagebox.showinfo("Laden Erfolgreich", f"Termin '{title}' geladen. Überprüfen Sie bitte Betrag und Leistungstyp.")
-                    
-                    search_window.destroy()
-                    
-                except (IndexError, ValueError) as e:
-                    messagebox.showerror("Fehler", "Ungültige Auswahl.")
-            
-        results_tree.bind('<Double-1>', load_selected_event)
+        results_tree.bind('<Double-1>', lambda event: load_selected_event())
         
-        # Zentrierung des Fensters
         search_window.update_idletasks()
         width = search_window.winfo_width()
         height = search_window.winfo_height()
@@ -709,7 +847,7 @@ class HonorarGeneratorApp:
         search_window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
 
         if self.patient_data:
-             perform_search(initial_search_term) # Automatische Suche starten
+             perform_search(initial_search_term) 
 
 
     def load_leistung_stammdaten_for_combobox(self):
@@ -730,7 +868,7 @@ class HonorarGeneratorApp:
             self.amount_entry.insert(0, f"{betrag:.2f}")
 
     def add_leistung_gui(self):
-        """Fügt neue Leistung in die DB ein, nun mit Uhrzeit."""
+        """Fügt neue Leistung in die DB ein, nun mit Uhrzeit und Kilometergeld-Zuschlag."""
         if not self.patient_data:
             messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
             return
@@ -753,6 +891,10 @@ class HonorarGeneratorApp:
             datum_db = datetime.datetime.strptime(datum_str, '%d.%m.%Y').strftime('%Y-%m-%d')
             betrag = float(betrag_str)
             
+            # --- Kilometergeld HINZUFÜGEN ---
+            km_geld = self.get_current_kilometergeld()
+            end_betrag = betrag + km_geld 
+            
             if len(time_from_str) < 5 or len(time_to_str) < 5 or ":" not in time_from_str:
                  raise ValueError("Uhrzeit muss im Format HH:MM angegeben werden.")
                  
@@ -767,10 +909,10 @@ class HonorarGeneratorApp:
             cursor.execute("""
             INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
             VALUES (?, ?, ?, ?, ?, ?)
-            """, (patient_id, datum_db, time_from_str, time_to_str, beschreibung, betrag))
+            """, (patient_id, datum_db, time_from_str, time_to_str, beschreibung, end_betrag))
             
             conn.commit()
-            messagebox.showinfo("Erfolg", f"Leistung vom {datum_str} erfolgreich hinzugefügt.")
+            messagebox.showinfo("Erfolg", f"Leistung vom {datum_str} (Gesamt: €{end_betrag:.2f}) erfolgreich hinzugefügt.")
             self.amount_entry.delete(0, tk.END)
             self.update_leistung_list()
             
@@ -778,6 +920,63 @@ class HonorarGeneratorApp:
             messagebox.showerror("Fehler", f"Datenbankfehler: {e}")
             
         conn.close()
+
+    def add_multiple_leistungen_from_teamup(self, events_list):
+        """
+        Fügt mehrere Leistungen gleichzeitig in die DB ein, basierend auf der Teamup-Auswahl.
+        """
+        if not self.patient_data:
+            messagebox.showwarning("Fehler", "Kein Patient ausgewählt. Vorgang abgebrochen.")
+            return
+
+        patient_id = self.patient_data[0]
+        selected_leistung = self.leistung_combobox.get() 
+        betrag_str = self.amount_entry.get().strip().replace(',', '.')
+        
+        if not selected_leistung or not betrag_str:
+            messagebox.showwarning("Fehler", "Bitte wählen Sie Leistung und Betrag im Hauptfenster aus, bevor Sie Termine übernehmen.")
+            return
+            
+        try:
+            basis_betrag = float(betrag_str)
+            beschreibung = selected_leistung.split(" - ", 1)[1]
+            
+            # --- Kilometergeld HINZUFÜGEN ---
+            km_geld = self.get_current_kilometergeld()
+            end_betrag = basis_betrag + km_geld
+            
+        except ValueError:
+            messagebox.showerror("Fehler", "Ungültiger Betrag.")
+            return
+
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        success_count = 0
+        
+        for title, date_str, time_from, time_to in events_list:
+            try:
+                # Datum in DB-Format konvertieren (von TT.MM.JJJJ zu YYYY-MM-DD)
+                datum_db = datetime.datetime.strptime(date_str, '%d.%m.%Y').strftime('%Y-%m-%d')
+                
+                cursor.execute("""
+                INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, (patient_id, datum_db, time_from, time_to, beschreibung, end_betrag)) 
+                
+                success_count += 1
+                
+            except Exception as e:
+                print(f"Fehler beim Speichern des Termins {date_str}: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        if success_count > 0:
+            messagebox.showinfo("Erfolg", f"{success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.\n(Je €{end_betrag:.2f})")
+            self.update_leistung_list()
+        else:
+            messagebox.showwarning("Ergebnis", "Es konnten keine neuen Leistungen hinzugefügt werden.")
+
 
     def update_leistung_list(self):
         """Aktualisiert die Liste der Leistungen im Treeview."""
@@ -816,7 +1015,12 @@ class HonorarGeneratorApp:
 
     def select_leistung_for_edit(self, event):
         """Speichert die ID der ausgewählten Leistung für die Bearbeitung/Löschung."""
-        self.selected_leistung_id = self.leistung_tree.focus()
+        # Sicherstellen, dass die Auswahl keine 'total'-Zeile ist
+        focus_id = self.leistung_tree.focus()
+        if focus_id and focus_id != '':
+            item_values = self.leistung_tree.item(focus_id, 'values')
+            if item_values and item_values[0] != '---' and item_values[0] != '':
+                 self.selected_leistung_id = focus_id
         
     def load_leistung_for_edit(self):
         """Lädt ausgewählte Leistung in die Eingabefelder zum Bearbeiten."""
@@ -840,12 +1044,18 @@ class HonorarGeneratorApp:
              messagebox.showerror("Fehler", f"Leistung ID {leistung_id} konnte nicht in der Datenbank gefunden werden.")
              return
 
-        # [0]datum_db, [1]uhrzeit_von, [2]uhrzeit_bis, [3]beschreibung, [4]einzelbetrag
+        # [0]datum_db, [1]uhrzeit_von, [2]uhrzeit_bis, [3]beschreibung, [4]einzelbetrag (inkl. KM-Geld)
+        
+        # Um den Basis-Betrag anzuzeigen, müssen wir das KM-Geld wieder abziehen:
+        km_geld = self.get_current_kilometergeld()
+        basis_betrag = res[4] - km_geld
+        
         datum_formatiert = datetime.datetime.strptime(res[0], '%Y-%m-%d').strftime('%d.%m.%Y')
         uhrzeit_von = res[1]
         uhrzeit_bis = res[2]
         beschreibung = res[3]
-        betrag_str = f"{res[4]:.2f}"
+        
+        betrag_str = f"{basis_betrag:.2f}"
 
         self.date_entry.delete(0, tk.END)
         self.date_entry.insert(0, datum_formatiert)
@@ -864,17 +1074,18 @@ class HonorarGeneratorApp:
                  break
         
         if not found_match:
-             messagebox.showwarning("Stammdaten", "Beschreibung konnte nicht in Stammdaten gefunden werden.")
+             messagebox.showwarning("Stammdaten", "Beschreibung konnte nicht in Stammdaten gefunden werden. Bitte Leistung manuell wählen.")
              
+        # Button-Funktion auf Update umstellen
         self.add_leistung_button.config(text=f"Leistung Aktualisieren (ID: {leistung_id})", command=lambda: self.update_leistung_gui(leistung_id))
-        messagebox.showinfo("Laden", f"Leistung ID {leistung_id} zum Bearbeiten geladen. Klicken Sie 'Aktualisieren' um zu speichern.")
+        messagebox.showinfo("Laden", f"Leistung ID {leistung_id} zum Bearbeiten geladen. Basisbetrag (€{basis_betrag:.2f}) angezeigt.")
 
     def update_leistung_gui(self, leistung_id):
-        """Aktualisiert eine bestehende Leistung, nun mit Uhrzeit."""
+        """Aktualisiert eine bestehende Leistung, nun mit Uhrzeit und Kilometergeld-Zuschlag."""
         datum_str = self.date_entry.get().strip()
         time_from_str = self.time_from_entry.get().strip()
         time_to_str = self.time_to_entry.get().strip()
-        betrag_str = self.amount_entry.get().strip().replace(',', '.')
+        betrag_str = self.amount_entry.get().strip().replace(',', '.') # Basisbetrag
         selected_leistung = self.leistung_combobox.get()
         
         if not selected_leistung:
@@ -886,7 +1097,11 @@ class HonorarGeneratorApp:
         try:
             datetime.datetime.strptime(datum_str, '%d.%m.%Y')
             datum_db = datetime.datetime.strptime(datum_str, '%d.%m.%Y').strftime('%Y-%m-%d')
-            betrag = float(betrag_str)
+            basis_betrag = float(betrag_str)
+            
+            # --- Kilometergeld HINZUFÜGEN ---
+            km_geld = self.get_current_kilometergeld()
+            end_betrag = basis_betrag + km_geld
             
             if len(time_from_str) < 5 or len(time_to_str) < 5 or ":" not in time_from_str:
                  raise ValueError("Uhrzeit muss im Format HH:MM angegeben werden.")
@@ -903,12 +1118,12 @@ class HonorarGeneratorApp:
             UPDATE leistungen 
             SET datum = ?, uhrzeit_von = ?, uhrzeit_bis = ?, beschreibung = ?, einzelbetrag = ?
             WHERE id = ?
-            """, (datum_db, time_from_str, time_to_str, beschreibung, betrag, leistung_id))
+            """, (datum_db, time_from_str, time_to_str, beschreibung, end_betrag, leistung_id))
             
             conn.commit()
-            messagebox.showinfo("Erfolg", f"Leistung ID {leistung_id} erfolgreich aktualisiert.")
+            messagebox.showinfo("Erfolg", f"Leistung ID {leistung_id} erfolgreich aktualisiert (Gesamt: €{end_betrag:.2f}).")
             self.update_leistung_list()
-            self.add_leistung_button.config(text="Leistung Hinzufügen", command=self.add_leistung_gui)
+            self.add_leistung_button.config(text="Leistung Hinzufügen", command=self.add_leistung_gui) # Button zurücksetzen
             
         except Exception as e:
             messagebox.showerror("Fehler", f"Datenbankfehler beim Aktualisieren: {e}")
