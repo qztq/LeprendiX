@@ -10,7 +10,9 @@ import os
 import requests 
 import json     
 import subprocess 
-import sys 
+import sys
+
+from log_data import log_patient_name 
 
 # --- KONFIGURATION ---
 DATABASE_NAME = 'patienten.db'
@@ -300,7 +302,7 @@ def fill_template(patient_id, patient_data_tuple):
             paragraph.text = paragraph.text.replace('{{Gesamt_Betrag}}', gesamt_betrag_str)
 
     # --- Speichern des Dokuments ---
-    
+    log_patient_name(f"{nachname}_{vorname}")
     patient_folder_name = f"{nachname}_{vorname}"
     patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
