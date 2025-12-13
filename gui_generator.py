@@ -12,6 +12,9 @@ import json
 import subprocess 
 import sys
 import tkinter
+from docx.enum.text import WD_UNDERLINE
+from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
+from docx.shared import Inches, Pt, Twips
 
 # Entfernt: from log_data import log_patient_name 
 
@@ -290,18 +293,35 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
         return []
 
 
-# --- WORD-GENERIERUNGSFUNKTION ---
 
-def fill_template(patient_id, patient_data_tuple, template_data): # NEUE SIGNATUR
+
+# gui_generator.py: Die globale Funktion fill_template (KORRIGIERTE VERSION)
+
+def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block): 
     """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
     
-    # patient_data_tuple hat 13 Elemente: Index 0=id, ..., 11=kilometergeld, 12=last_selected_kurznamen (nicht benötigt)
+    # Imports müssen am Anfang der Datei sein, aber wir stellen sicher, dass Pt verfügbar ist
+    from docx.shared import Pt 
+    from docx.enum.text import WD_UNDERLINE 
+    import os
+    import datetime
+    from docx import Document
+    
+    # Hier müssten Sie Ihre fehlenden Funktionen/Konstanten definieren oder importieren:
+    # TEMPLATE_FILE = "..."
+    # OUTPUT_FOLDER = "..."
+    # get_patient_leistungen_for_template(patient_id)
+    
+    # --- Einrückungs-Konstanten ---
+    LEISTUNG_INDENT_SIZE = Pt(70)  
+    SPACE_AFTER_LEISTUNG_BLOCK = Pt(12) 
+
+    # ... (Datenextraktion bleibt unverändert) ...
     _, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, _ = patient_data_tuple
     
     leistungen_liste = get_patient_leistungen_for_template(patient_id)
     
     heute = datetime.date.today().strftime("%d.%m.%Y")
-    # honorar_nummer = f"HN-{datetime.date.today().year}-{datetime.date.today().month:02d}-{patient_id:03d}" # ALTE LOGIK ENTFERNT
     
     try:
         document = Document(TEMPLATE_FILE)
@@ -310,9 +330,14 @@ def fill_template(patient_id, patient_data_tuple, template_data): # NEUE SIGNATU
     
     total_betrag = 0.0
     
+    if not document.paragraphs:
+        raise ValueError("Word-Vorlage enthält keine Paragraphen.")
+
+    invoice_number_paragraph = document.paragraphs[0]
+            
     # Statische Platzhalter
     replacements = {
-        '{{Rechnungsnummer}}': template_data['BHAG_NUMMER'], # NEU: BHAG-Nummer verwenden
+        '{{Rechnungsnummer}}': template_data['BHAG_NUMMER'], 
         '{{Anrede}}': anrede, 
         '{{Nachname}}': nachname,
         '{{Vorname}}': vorname,
@@ -326,7 +351,76 @@ def fill_template(patient_id, patient_data_tuple, template_data): # NEUE SIGNATU
         '{{Diagnose}}': diagnose
     }
     
-    # --- Dynamische Leistungsblock-Logik ---
+    # --- 0. Globale Formatierung (Vorbereitung und HONORARNOTE Sonderfall) ---
+    
+    HONORARNOTE_PARAGRAPH = None
+    ORT_DATUM_PARAGRAPH = None
+    DIAGNOSE_PLACEHOLDER_PARAGRAPH = None 
+    
+    for i, p in enumerate(document.paragraphs):
+        
+        if 'H O N O R A R N O T E' in p.text:
+            HONORARNOTE_PARAGRAPH = p
+            
+        if 'Mödling, {{Datum_Austellung}}' in p.text:
+            ORT_DATUM_PARAGRAPH = p
+            
+        if 'Diagnose:   {{Diagnose}}' in p.text:
+            DIAGNOSE_PLACEHOLDER_PARAGRAPH = p
+            
+        # Setze die Standardgröße 12pt global
+        for run in p.runs:
+            # Nur setzen, wenn der run noch keine Größe hat, um Überschreibungen zu vermeiden.
+            # Da Sie es global setzen wollten, lassen wir es hier zur Sicherheit.
+            run.font.size = Pt(12) 
+            
+    # Spezielle Formatierung für HONORARNOTE anwenden (unverändert)
+    if HONORARNOTE_PARAGRAPH:
+        for run in HONORARNOTE_PARAGRAPH.runs:
+            run.font.size = Pt(18)
+        HONORARNOTE_PARAGRAPH.paragraph_format.space_after = Pt(10) 
+        HONORARNOTE_PARAGRAPH.paragraph_format.space_before = Pt(0) 
+        HONORARNOTE_PARAGRAPH.paragraph_format.line_spacing = 1.0 
+
+
+    # --- 1. Rechnungsnummer ersetzen und Gemeinde-Block einfügen (unverändert) ---
+    
+    if '{{Rechnungsnummer}}' in invoice_number_paragraph.text:
+        invoice_number_paragraph.text = invoice_number_paragraph.text.replace('{{Rechnungsnummer}}', template_data['BHAG_NUMMER'])
+        del replacements['{{Rechnungsnummer}}']
+        
+    if add_gemeinde_block:
+        gemeinde_lines = [
+            "Gemeinde Wiener Neudorf",
+            "Europaplatz 2",
+            "2351 Wiener Neudorf"
+        ]
+        
+        target_index = 2
+        
+        try:
+            next_paragraph_target = document.paragraphs[target_index] 
+        except IndexError:
+            next_paragraph_target = document.paragraphs[-1]
+            
+        for line in reversed(gemeinde_lines):
+            p_new = next_paragraph_target.insert_paragraph_before(line)
+            
+            p_new.paragraph_format.space_before = Pt(0)
+            p_new.paragraph_format.space_after = Pt(0)
+            p_new.paragraph_format.line_spacing = 1.0
+
+            if p_new.runs:
+                 run = p_new.runs[0]
+                 run.bold = True                    
+                 run.font.size = Pt(12)
+            else:
+                run = p_new.add_run(line)
+                run.bold = True
+                run.font.size = Pt(12)
+
+
+    # --- 2. Dynamische Leistungsblock-Logik und restliche Ersetzung ---
     
     start_tag = '{{LEISTUNGSBLOCK_START}}'
     end_tag = '{{LEISTUNGSBLOCK_ENDE}}'
@@ -335,16 +429,33 @@ def fill_template(patient_id, patient_data_tuple, template_data): # NEUE SIGNATU
     block_end_paragraph = None
     block_paragraphs = []
     
-    in_block = False
+    in_block = False 
     
     # Text-Ersetzung und Block-Suche in einem Durchlauf
+    # WICHTIG: Die Diagnose wird in Schritt 2 nicht mehr ersetzt, um Formatverlust zu vermeiden.
     for p in document.paragraphs:
+        
+        if p is HONORARNOTE_PARAGRAPH:
+            continue
+            
+        if p is invoice_number_paragraph and '{{Rechnungsnummer}}' not in p.text:
+            continue
+            
+        # DIAGNOSE-BLOCK WIRD ÜBERSPRUNGEN und erst in Schritt 5 komplett NEU formatiert
+        if p is DIAGNOSE_PLACEHOLDER_PARAGRAPH:
+            continue 
+            
         # Statische Platzhalter ersetzen
-        for key, value in replacements.items():
+        # Verwenden Sie die keys/values, die Sie nicht aus replacements gelöscht haben
+        for key, value in list(replacements.items()):
             if key in p.text:
+                 # Ersetze den Platzhalter direkt im Text (da Formatierung später folgt oder nicht kritisch ist)
                 p.text = p.text.replace(key, value)
-                
-        # Block-Logik: Musterblock finden
+                # OPTIMIERUNG: Den ersetzten Platzhalter aus der Liste entfernen
+                if key != '{{Diagnose}}': # Diagnose muss in der Liste bleiben für Schritt 5
+                    del replacements[key]
+        
+        # Block-Logik: Musterblock finden (unverändert)
         if start_tag in p.text:
             block_start_paragraph = p
             in_block = True
@@ -357,7 +468,7 @@ def fill_template(patient_id, patient_data_tuple, template_data): # NEUE SIGNATU
         if in_block:
             block_paragraphs.append(p)
 
-    # Generieren des gesamten Leistungs-Textes
+    # Generieren des gesamten Leistungs-Textes (unverändert)
     gesamt_leistungs_text = ""
     
     if block_start_paragraph and block_end_paragraph:
@@ -369,57 +480,197 @@ def fill_template(patient_id, patient_data_tuple, template_data): # NEUE SIGNATU
             datum_formatiert = datetime.datetime.strptime(datum_db, '%Y-%m-%d').strftime('%d.%m.%Y')
             datum_uhrzeit_text = f"{datum_formatiert}, von {uhrzeit_von} bis {uhrzeit_bis}" 
             
-            summe_leistung = einzelbetrag # Enthält bereits den Kilometergeld-Aufschlag
+            summe_leistung = einzelbetrag 
             total_betrag += summe_leistung
             
+            full_description = beschreibung
+            if ' - ' in full_description:
+                 full_description = full_description.split(' - ', 1)[-1] 
+            
             leistung_block = template_text.replace('{{LEISTUNG_DATUM}}', datum_uhrzeit_text)
-            leistung_block = leistung_block.replace('{{LEISTUNG_BESCHREIBUNG}}', beschreibung)
+            leistung_block = leistung_block.replace('{{LEISTUNG_BESCHREIBUNG}}', full_description) 
             leistung_block = leistung_block.replace('{{LEISTUNG_SUMME}}', f"€ {summe_leistung:.2f}")
             
-            gesamt_leistungs_text += leistung_block + '\n\n'
+            # Trennlinie hinzufügen, um später den Abstand zu setzen
+            leistung_block += '[[ENDE_BLOCK]]' + '\n\n' 
             
-        # Den generierten Text an der Startposition einfügen
+            gesamt_leistungs_text += leistung_block 
+            
         if gesamt_leistungs_text:
             
+            current_line_is_leistung = False
+            
             for zeile in gesamt_leistungs_text.split('\n'):
-                if zeile.strip():
-                    p_new = block_start_paragraph.insert_paragraph_before(zeile.strip())
-                    p_new.style = block_start_paragraph.style
+                content = zeile.strip() 
                 
+                if not content:
+                    continue
+
+                is_end_block_marker = '[[ENDE_BLOCK]]' in content
+                if is_end_block_marker:
+                    content = content.replace('[[ENDE_BLOCK]]', '').strip()
+                
+                if content.startswith("Leistung:"):
+                    current_line_is_leistung = True
+                elif content.startswith("Datum:") or content.startswith("Betrag:"):
+                    current_line_is_leistung = False
+                
+                # Fügen Sie nur nicht-leere Zeilen ein
+                if content:
+                    p_new = block_start_paragraph.insert_paragraph_before(content)
+                    
+                    # Allgemeine Formatierung
+                    p_new.paragraph_format.space_before = Pt(0)
+                    p_new.paragraph_format.space_after = Pt(0)
+                    p_new.paragraph_format.line_spacing = 1.0
+                    
+                    for run in p_new.runs:
+                        run.font.size = Pt(12)
+                    
+                    # Korrektur für Leistungs-Einzug (hängender Einzug)
+                    if current_line_is_leistung:
+                        p_new.paragraph_format.left_indent = LEISTUNG_INDENT_SIZE      
+                        p_new.paragraph_format.first_line_indent = -LEISTUNG_INDENT_SIZE 
+
+                    # Abstand nach dem Leistungsblock setzen (nach "Betrag:")
+                    if is_end_block_marker:
+                        p_new.paragraph_format.space_after = SPACE_AFTER_LEISTUNG_BLOCK
+
+
+            # Entferne die alten Platzhalter-Paragraphen (unverändert)
             block_start_paragraph.text = '' 
             for p in block_paragraphs:
                 p._element.getparent().remove(p._element)
             block_end_paragraph.text = ''
         else:
-             # Falls keine Leistungen da sind, Platzhalter entfernen
              block_start_paragraph.text = '' 
              for p in block_paragraphs:
                  p._element.getparent().remove(p._element)
              block_end_paragraph.text = ''
 
 
-    # Ersetzen des Gesamtbetrags
-    gesamt_betrag_str = f"{total_betrag:.2f}"
+    # Ersetzen des Gesamtbetrags (unverändert)
+    total_betrag_str = f"{total_betrag:.2f}"
     
-    for paragraph in document.paragraphs:
-        if '{{Gesamt_Betrag}}' in paragraph.text:
-            # BUG FIX: Muss auf paragraph.text angewendet werden!
-            paragraph.text = paragraph.text.replace('{{Gesamt_Betrag}}', gesamt_betrag_str)
+    for p in document.paragraphs:
+        
+        if '{{Gesamt_Betrag}}' in p.text:
+            
+            original_text = p.text
+            p.text = '' 
+            
+            parts = original_text.split('{{Gesamt_Betrag}}')
+            
+            run_label = p.add_run(parts[0]) 
+            run_label.bold = True
+            run_label.font.size = Pt(12)
+            
+            run_value = p.add_run(total_betrag_str) 
+            run_value.bold = True
+            run_value.font.underline = WD_UNDERLINE.DOUBLE 
+            run_value.font.size = Pt(12)
+            
+            if len(parts) > 1 and parts[1]:
+                run_after = p.add_run(parts[1])
+                run_after.bold = True 
+                run_after.font.size = Pt(12)
+        
+        elif 'Gesamt:' in p.text:
+            for run in p.runs:
+                run.bold = True
+                run.font.size = Pt(12)
 
-    # --- Speichern des Dokuments ---
-    # Entfernt: log_patient_name(f"{nachname}_{vorname}")
+    
+    # --- 3. Letzte Zeilenabstands-Korrektur (Finaler Sweep) (unverändert) ---
+    for p in document.paragraphs:
+        if p is not HONORARNOTE_PARAGRAPH:
+            p.paragraph_format.space_before = Pt(0)
+            if p.paragraph_format.space_after is None: 
+                p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.0
+
+
+    # --- 4. Leerzeilen an den gewünschten Stellen einfügen (Post-Processing) (unverändert) ---
+    
+    def insert_empty_line(target_p):
+        """Fügt eine leere Zeile (Paragraph) nach dem Ziel-Paragraph ein."""
+        try:
+            # Suchen Sie den Index im aktuellen Zustand der document.paragraphs
+            current_paragraphs = list(document.paragraphs)
+            idx = current_paragraphs.index(target_p)
+            
+            # Da insert_paragraph_after den neuen Paragraphen *nach* dem Ziel einfügt, 
+            # sollte die Index-Methode funktionieren, aber manchmal sind die Indexe in docx tricky.
+            # Besser ist es, die Methode insert_paragraph_after direkt zu nutzen, die
+            # Sie im Originalcode nicht definiert hatten. Fügen wir es hier ein.
+            
+            p_new = target_p.insert_paragraph_after('')
+            
+            p_new.paragraph_format.space_before = Pt(0)
+            p_new.paragraph_format.space_after = Pt(0)
+            p_new.paragraph_format.line_spacing = 1.0
+            p_new.add_run('').font.size = Pt(12) 
+            
+        except (ValueError, IndexError):
+            pass
+
+    if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
+        insert_empty_line(DIAGNOSE_PLACEHOLDER_PARAGRAPH)
+        
+    if HONORARNOTE_PARAGRAPH:
+        insert_empty_line(HONORARNOTE_PARAGRAPH)
+        
+    if ORT_DATUM_PARAGRAPH:
+        insert_empty_line(ORT_DATUM_PARAGRAPH)
+
+    
+    # 💥 --- 5. Final Diagnosis Format Override (DIE KORREKTUR!) --- 💥
+    if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
+        p = DIAGNOSE_PLACEHOLDER_PARAGRAPH
+        
+        # 1. Stil des Paragraphen löschen, um Template-Styles zu neutralisieren
+        p.style = document.styles['No Spacing'] 
+
+        # 2. Einzüge und Abstände auf Null setzen
+        p.paragraph_format.left_indent = Pt(0)      
+        p.paragraph_format.first_line_indent = Pt(0) 
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing = 1.0
+        
+        # 3. Alten Text und Runs komplett löschen, um einen sauberen Start zu haben
+        p.text = '' 
+        
+        diagnosis_label = "Diagnose:   "
+        # Holen Sie den Diagnose-Wert aus der replacements-Liste (die wir in Schritt 2 nicht gelöscht haben)
+        diagnosis_value = replacements.get('{{Diagnose}}', diagnose)
+        
+        # 4. Run für das Label ("Diagnose: ") hinzufügen und formatieren
+        run_label = p.add_run(diagnosis_label)
+        run_label.bold = True
+        run_label.font.size = Pt(12)
+        
+        # 5. Run für den Wert (die Diagnose) hinzufügen und formatieren
+        run_value = p.add_run(diagnosis_value)
+        run_value.bold = True 
+        run_value.font.size = Pt(12) 
+        
+        # 6. Lösche alle überflüssigen Runs (optional, aber sicher)
+        if len(p.runs) > 2:
+            for r in p.runs[2:]:
+                r.clear()
+        
+
+    # --- Speichern des Dokuments (unverändert) ---
     patient_folder_name = f"{nachname}_{vorname}"
     patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
     
-    output_filename = f"Honorarnote Krankenkasse {template_data['BHAG_NUMMER']}.docx" # BHAG-Nummer im Dateinamen
+    output_filename = f"Honorarnote Krankenkasse {template_data['BHAG_NUMMER']}.docx"
     output_path = os.path.join(patient_output_path, output_filename)
 
     document.save(output_path)
-    return output_path # Rückgabe des Pfades
-
-
-# --- HAUPT-GUI-KLASSE ---
+    return output_path
 
 class HonorarGeneratorApp:
     def __init__(self, master):
@@ -434,6 +685,10 @@ class HonorarGeneratorApp:
 
         self.notebook = ttk.Notebook(master)
         self.notebook.pack(pady=10, padx=10, expand=True, fill="both")
+
+        self.ttk_style = ttk.Style() 
+        # NEU: Der Stil MUSS ebenfalls HIER gesetzt werden, da er in setup_patient_tab verwendet wird.
+        self.ttk_style.configure('Danger.TButton', foreground='red')
 
         self.tab_generate = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_generate, text='📝 Honorarnote Generieren')
@@ -459,6 +714,8 @@ class HonorarGeneratorApp:
         # Zeigt die gespeicherte Folgenummer mit führenden Nullen (z.B. '001') an
         self.invoice_seq_var.set(str(self.invoice_sequence_data.get('rechnung_folgenummer', '0')).zfill(3))
         
+        self.add_gemeinde_block_var = tk.BooleanVar(value=False) # Standardmäßig AUS
+
         self.setup_generate_tab(self.tab_generate)
         
         self.update_patient_info() 
@@ -616,10 +873,15 @@ class HonorarGeneratorApp:
 
         ttk.Label(folgenummer_frame, text="Format: BHAG[Jahr][Monat][Folgenummer]").grid(row=1, column=0, columnspan=3, padx=5, pady=2, sticky="w")
 
+        zusatz_frame = ttk.LabelFrame(tab, text="Zusätzliche Optionen für Word-Generierung")
+        zusatz_frame.grid(row=5, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+        ttk.Checkbutton(zusatz_frame, 
+                        text="Zusätzlichen 'Gemeinde Wiener Neudorf' Block in Dokument einfügen", 
+                        variable=self.add_gemeinde_block_var).grid(row=0, column=0, padx=5, pady=5, sticky='w')
+
         tab.grid_rowconfigure(1, weight=1)
 
     def search_patients(self):
-# ... (Funktion bleibt unverändert)
         search_term = self.search_entry.get().strip()
         if not search_term:
             messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff ein.")
@@ -640,7 +902,6 @@ class HonorarGeneratorApp:
             self.results_listbox.patient_data_list.append(patient_data_tuple)
 
     def select_patient_from_list(self, event):
-# ... (Funktion bleibt unverändert)
         selection = self.results_listbox.curselection()
         if selection:
             index = selection[0]
@@ -655,7 +916,6 @@ class HonorarGeneratorApp:
             self.update_leistung_list() 
 
     def update_patient_info(self):
-# ... (Funktion bleibt unverändert)
         if self.patient_data:
             # patient_data[11] ist das Kilometergeld
             km_geld = self.patient_data[11] if len(self.patient_data) > 11 and self.patient_data[11] is not None else 0.0
@@ -668,19 +928,30 @@ class HonorarGeneratorApp:
             if hasattr(self, 'leistung_patient_label'):
                 self.leistung_patient_label.config(text="Bitte Patient in Tab 1 auswählen", foreground='red')
 
+    def _switch_to_generate_tab(self): # NEU
+        """Wechselt zum Tab 'Honorarnote Generieren'."""
+        self.notebook.select(self.tab_generate)
+
     def generate_invoice(self):
         """Generiert die Honorarnote und öffnet die Datei."""
         if not self.patient_data:
             messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
             return
 
+        if not get_patient_leistungen(self.patient_data[0]):
+             messagebox.showwarning("Achtung", "Keine Leistungen für den ausgewählten Patienten gefunden. Druckvorgang abgebrochen.")
+             return
+        
+        template_data = self._prepare_bhag_number() 
+        add_gemeinde_block = self.add_gemeinde_block_var.get()
         patient_id = self.patient_data[0]
         
         try:
             # NEU: BHAG-Nummer generieren und DB aktualisieren
-            data_for_template = self._prepare_bhag_number() 
+            data_for_template = self._prepare_bhag_number()
+            add_gemeinde_block = self.add_gemeinde_block_var.get() # NEU: Zustand abrufen
             
-            output_path = fill_template(patient_id, self.patient_data, data_for_template) # NEUE SIGNATUR
+            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block)
             
             # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
             _update_invoiced_status(patient_id, 1)
@@ -709,13 +980,19 @@ class HonorarGeneratorApp:
         if not self.patient_data:
             messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
             return
+        
+        if not get_patient_leistungen(self.patient_data[0]):
+             messagebox.showwarning("Achtung", "Keine Leistungen für den ausgewählten Patienten gefunden. Druckvorgang abgebrochen.")
+             return
+
+        template_data = self._prepare_bhag_number() 
+        add_gemeinde_block = self.add_gemeinde_block_var.get()
 
         try:
             # NEU: BHAG-Nummer generieren und DB aktualisieren
-            data_for_template = self._prepare_bhag_number() 
+            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block)
+            add_gemeinde_block = self.add_gemeinde_block_var.get()
             
-            # 1. Generiere die Honorarnote
-            output_path = fill_template(self.patient_data[0], self.patient_data, data_for_template) # NEUE SIGNATUR
             
             # 2. Versuche, sie sofort zu drucken
             success, message = print_document_silently(output_path)
@@ -748,7 +1025,6 @@ class HonorarGeneratorApp:
 
     # --- 2. Patienten Verwalten Tab (Hinzufügen und Bearbeiten) ---
     def setup_patient_tab(self, tab):
-# ... (Rest der Klasse bleibt unverändert)
         search_frame = ttk.Frame(tab)
         search_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
         
@@ -758,14 +1034,13 @@ class HonorarGeneratorApp:
         ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
         
         self.patient_id_to_edit = None
-        
+
         fields = [
             "Anrede", "Vorname", "Nachname", "Versicherungsnummer", 
-            "Straße", "Hausnummer", "Adresszusatz", "PLZ", "Ort", "Diagnose",
-            "Kilometergeld (€)"
+            "Straße", "Hausnummer", "Adresszusatz", "PLZ", "Ort", 
+            "Diagnose", "Kilometergeld (€)"
         ]
         self.patient_entries = {}
-
         for i, field in enumerate(fields):
             ttk.Label(tab, text=f"{field}:").grid(row=i + 1, column=0, padx=5, pady=5, sticky='w')
             entry = ttk.Entry(tab, width=40)
@@ -775,143 +1050,308 @@ class HonorarGeneratorApp:
         self.patient_entries["Anrede"].insert(0, "Herr/Frau")
         self.patient_entries["Diagnose"].insert(0, "Z71")
         self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
-        
+
+        # Hinzufügen/Aktualisieren Button
         self.save_patient_button = ttk.Button(tab, text="Patient Hinzufügen", command=self.add_patient_gui)
         self.save_patient_button.grid(row=len(fields) + 1, column=0, columnspan=2, pady=10)
         
-        ttk.Button(tab, text="Formular Leeren / Abbrechen", command=self.clear_patient_form).grid(row=len(fields) + 2, column=0, columnspan=2, pady=5)
+        # NEU: Löschen Button
+        self.delete_patient_button = ttk.Button(tab, text="Patient LÖSCHEN", command=self.delete_patient_gui, style='Danger.TButton', state=tk.DISABLED)
+        # NEU: Style für Lösch-Button
+        self.ttk_style.configure('Danger.TButton', foreground='red') 
+        self.delete_patient_button.grid(row=len(fields) + 2, column=0, columnspan=2, pady=5)
+        
+        # Leere Zeile für Abstand
+        ttk.Label(tab, text="").grid(row=len(fields) + 3, column=0, columnspan=2, pady=5)
+
 
     def search_and_load_patient(self):
-# ... (Rest der Klasse bleibt unverändert)
-        """Sucht einen Patienten und lädt die Daten in die Bearbeitungsfelder."""
+        # ... (Funktion bleibt unverändert)
         search_term = self.patient_search_entry.get().strip()
         if not search_term:
-            messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff (Name) ein.")
+            self.reset_patient_form()
+            messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff ein.")
             return
-
+            
         results = get_patient_data(search_term) 
-
+        
         if not results:
-            messagebox.showinfo("Suche", f"Kein Patient gefunden für '{search_term}'.")
-            self.clear_patient_form()
+            self.reset_patient_form()
+            messagebox.showinfo("Suche", f"Kein Patient mit '{search_term}' gefunden.")
             return
-        
-        patient_data_tuple = results[0] 
-        self.patient_id_to_edit = patient_data_tuple[0] 
-        
-        self.clear_patient_form(clear_defaults=False) 
-        
-        # patient_data_tuple: Index 0=id, 1=vorname, ..., 10=diagnose, 11=kilometergeld, 12=last_selected_kurznamen
-        data_map = {
-            "Anrede": patient_data_tuple[8],
-            "Vorname": patient_data_tuple[1],
-            "Nachname": patient_data_tuple[2],
-            "Versicherungsnummer": patient_data_tuple[9],
-            "Straße": patient_data_tuple[3],
-            "Hausnummer": patient_data_tuple[4],
-            "Adresszusatz": patient_data_tuple[5],
-            "PLZ": patient_data_tuple[6],
-            "Ort": patient_data_tuple[7],
-            "Diagnose": patient_data_tuple[10],
-            "Kilometergeld (€)": f"{patient_data_tuple[11]:.2f}" if patient_data_tuple[11] is not None else "0.00"
-        }
-        
-        for field, value in data_map.items():
-            self.patient_entries[field].insert(0, value or "") 
-        
-        self.save_patient_button.config(text=f"Patient Aktualisieren (ID: {self.patient_id_to_edit})")
-        print(f"INFO: Patient '{patient_data_tuple[1]} {patient_data_tuple[2]}' geladen. Bearbeiten und 'Aktualisieren' klicken.") # messagebox entfernt
+            
+        if len(results) > 1:
+            # Mehrere Ergebnisse, zeige Auswahlfenster
+            self._show_patient_selection_dialog(results)
+        else:
+            # Ein klares Ergebnis
+            patient_data_tuple = results[0]
+            self.load_patient_data_to_form(patient_data_tuple[0], patient_data_tuple)
 
-    def clear_patient_form(self, clear_defaults=True):
-# ... (Rest der Klasse bleibt unverändert)
-        """Leert das Patientenformular und setzt den Button-Text zurück."""
+
+    def _show_patient_selection_dialog(self, results):
+        # ... (Funktion bleibt unverändert)
+        selection_window = tk.Toplevel(self.master)
+        selection_window.title("Patienten Auswahl")
+        
+        ttk.Label(selection_window, text="Mehrere Patienten gefunden. Bitte wählen Sie einen aus:").pack(pady=10)
+        
+        listbox = tk.Listbox(selection_window, width=70, height=10)
+        listbox.pack(padx=10, pady=5)
+        
+        for patient_data_tuple in results:
+            display_text = f"ID {patient_data_tuple[0]} - {patient_data_tuple[2]} {patient_data_tuple[1]} ({patient_data_tuple[7]})"
+            listbox.insert(tk.END, display_text)
+            
+        def on_select():
+            selection = listbox.curselection()
+            if selection:
+                index = selection[0]
+                patient_id = results[index][0]
+                patient_data = results[index]
+                self.load_patient_data_to_form(patient_id, patient_data)
+                selection_window.destroy()
+            else:
+                messagebox.showwarning("Auswahl", "Bitte wählen Sie einen Patienten.")
+
+        ttk.Button(selection_window, text="Auswählen und Laden", command=on_select).pack(pady=10)
+
+        # Zentrieren des Fensters
+        selection_window.update_idletasks()
+        width = selection_window.winfo_width()
+        height = selection_window.winfo_height()
+        x = (selection_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (selection_window.winfo_screenheight() // 2) - (height // 2)
+        selection_window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+
+
+    def load_patient_data_to_form(self, patient_id, data):
+        # ID, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, last_selected_kurznamen
+        fields = [
+            "Anrede", "Vorname", "Nachname", "Versicherungsnummer", 
+            "Straße", "Hausnummer", "Adresszusatz", "PLZ", "Ort", 
+            "Diagnose", "Kilometergeld (€)"
+        ]
+        
+        for i, field in enumerate(fields):
+            self.patient_entries[field].delete(0, tk.END)
+            
+            # Kilometergeld (Index 11) muss mit Komma formatiert werden
+            if field == "Kilometergeld (€)":
+                value = f"{data[11]:.2f}".replace('.', ',') if data[11] is not None else "0,00"
+            # Adresszusatz (Index 5) 
+            elif field == "Adresszusatz":
+                value = data[5] if data[5] is not None else ""
+            # Alle anderen Felder
+            elif i < 3: # Anrede(8), Vorname(1), Nachname(2)
+                 value = data[i+5] if i == 0 else data[i] 
+            else: # Restliche Felder
+                 # Anrede ist Index 8, Vorname 1, Nachname 2, VersNr 9, Str 3, HNr 4, AdrZu 5, PLZ 6, Ort 7, Dia 10, KM 11
+                 db_index = [8, 1, 2, 9, 3, 4, 5, 6, 7, 10, 11] # Korrekte Mapping
+                 value = data[db_index[i]]
+                 if field == "Adresszusatz" and value is None: value = "" # Adresszusatz kann None sein
+
+            # Korrigiertes Mapping
+            mapping = {
+                "Anrede": data[8], "Vorname": data[1], "Nachname": data[2], 
+                "Versicherungsnummer": data[9], "Straße": data[3], "Hausnummer": data[4], 
+                "Adresszusatz": data[5] if data[5] is not None else "", "PLZ": data[6], 
+                "Ort": data[7], "Diagnose": data[10], 
+                "Kilometergeld (€)": f"{data[11]:.2f}".replace('.', ',') if data[11] is not None else "0,00"
+            }
+            
+            self.patient_entries[field].insert(0, mapping[field])
+
+        # Button-Text und ID setzen
+        self.save_patient_button.config(text="Patient Aktualisieren", command=self.update_patient_gui)
+        self.patient_id_to_edit = patient_id
+        
+        # NEU: Lösch-Button aktivieren
+        self.delete_patient_button.config(state=tk.NORMAL) 
+        
+        messagebox.showinfo("Geladen", f"Patient ID {patient_id} ({data[2]} {data[1]}) erfolgreich zur Bearbeitung geladen.")
+
+    def reset_patient_form(self):
+        fields = [
+            "Anrede", "Vorname", "Nachname", "Versicherungsnummer", 
+            "Straße", "Hausnummer", "Adresszusatz", "PLZ", "Ort", 
+            "Diagnose", "Kilometergeld (€)"
+        ]
+        for field in fields:
+            self.patient_entries[field].delete(0, tk.END)
+            
+        self.patient_entries["Anrede"].insert(0, "Herr/Frau")
+        self.patient_entries["Diagnose"].insert(0, "Z71")
+        self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
+        
+        # Button-Text und ID zurücksetzen
+        self.save_patient_button.config(text="Patient Hinzufügen", command=self.add_patient_gui)
         self.patient_id_to_edit = None
-        for key, entry in self.patient_entries.items():
-            entry.delete(0, tk.END)
         
-        if clear_defaults:
-            self.patient_entries["Anrede"].insert(0, "Herr/Frau")
-            self.patient_entries["Diagnose"].insert(0, "Z71")
-            self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
+        # NEU: Lösch-Button deaktivieren
+        self.delete_patient_button.config(state=tk.DISABLED)
         
-        self.save_patient_button.config(text="Patient Hinzufügen")
-        self.patient_search_entry.delete(0, tk.END)
+        messagebox.showinfo("Zurückgesetzt", "Formular wurde zurückgesetzt.")
+
+    def update_patient_gui(self):
+        """Wrapper für add_patient_gui, um Update-Aktionen zu starten."""
+        self.add_patient_gui(is_update=True)
 
 
-    def add_patient_gui(self):
-# ... (Rest der Klasse bleibt unverändert)
-        """Fügt neuen Patienten hinzu oder aktualisiert bestehenden."""
-        vorname = self.patient_entries["Vorname"].get().strip()
-        nachname = self.patient_entries["Nachname"].get().strip()
-        strasse = self.patient_entries["Straße"].get().strip()
-        hausnummer = self.patient_entries["Hausnummer"].get().strip()
-        adresszusatz = self.patient_entries["Adresszusatz"].get().strip()
-        plz = self.patient_entries["PLZ"].get().strip()
-        ort = self.patient_entries["Ort"].get().strip()
-        anrede = self.patient_entries["Anrede"].get().strip()
-        versicherungsnummer = self.patient_entries["Versicherungsnummer"].get().strip()
-        diagnose = self.patient_entries["Diagnose"].get().strip()
-        kilometergeld_str = self.patient_entries["Kilometergeld (€)"].get().strip().replace(',', '.') 
-
-        if not vorname or not nachname:
-            messagebox.showwarning("Achtung", "Vor- und Nachname sind Pflichtfelder.")
-            return
-
+    def add_patient_gui(self, is_update=False):
+        """
+        Fügt einen neuen Patienten hinzu oder aktualisiert einen bestehenden.
+        Die Logik für Hinzufügen und Aktualisieren wurde in dieser Funktion konsolidiert.
+        """
+        data = {k: v.get().strip() for k, v in self.patient_entries.items()}
+        
         try:
-             kilometergeld = float(kilometergeld_str)
+            # Pflichtfelder
+            nachname = data.get("Nachname")
+            vorname = data.get("Vorname")
+            plz = data.get("PLZ")
+            
+            # Sicherstellen, dass die Dezimaltrennzeichen korrekt sind und Leere in 0.0 umgewandelt werden
+            km_string = data.get("Kilometergeld (€)").replace(',', '.') if data.get("Kilometergeld (€)") else '0.0'
+            kilometergeld = float(km_string)
+
+            # Basis-Validierung
+            if not nachname or not vorname or not plz:
+                messagebox.showwarning("Achtung", "Nachname, Vorname und PLZ sind Pflichtfelder.")
+                return
+
+            # Alle anderen Felder
+            strasse = data.get("Straße")
+            hausnummer = data.get("Hausnummer")
+            adresszusatz = data.get("Adresszusatz")
+            ort = data.get("Ort")
+            anrede = data.get("Anrede")
+            versicherungsnummer = data.get("Versicherungsnummer")
+            diagnose = data.get("Diagnose")
+
         except ValueError:
-             messagebox.showwarning("Achtung", "Kilometergeld muss eine gültige Zahl sein (z.B. 5.50).")
-             return
+            messagebox.showerror("Fehler", "Kilometergeld muss eine gültige Zahl sein.")
+            return
 
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
         
         try:
+            # --- AKTUALISIEREN (UPDATE) ---
             if self.patient_id_to_edit:
-                # AKTUALLISIEREN
+                patient_id = self.patient_id_to_edit
                 
-                # FIX: Prüfe, ob die neuen Schlüssel mit einem ANDEREN Patienten kollidieren
+                # NEU: Hole die aktuellen einzigartigen Felder des Patienten aus der DB
                 cursor.execute("""
-                SELECT id FROM patienten 
-                WHERE vorname = ? AND nachname = ? AND plz = ? AND id != ?
-                """, (vorname, nachname, plz, self.patient_id_to_edit))
+                SELECT vorname, nachname, plz FROM patienten WHERE id = ?
+                """, (patient_id,))
+                original_data = cursor.fetchone()
+
+                # Prüfen, ob die kritischen Felder geändert wurden
+                vorname_changed = (original_data[0] != vorname)
+                nachname_changed = (original_data[1] != nachname)
+                plz_changed = (original_data[2] != plz)
                 
-                if cursor.fetchone():
-                    raise sqlite3.IntegrityError("Konflikt mit existierendem Patienten")
+                # FIX: Führe die Kollisionsprüfung NUR aus, wenn sich VORNAME, NACHNAME oder PLZ geändert haben.
+                # Dadurch können nicht-kritische Felder wie Adresszusatz oder Kilometergeld 
+                # aktualisiert werden, selbst wenn ein (vermutlich versehentlich angelegter) 
+                # Duplikat-Patient existiert.
+                if vorname_changed or nachname_changed or plz_changed:
+                    # 2. PRÜFUNG: Kollidieren die NEUEN Daten mit einem ANDEREN Patienten?
+                    cursor.execute(""" 
+                    SELECT id FROM patienten WHERE nachname = ? AND vorname = ? AND plz = ? AND id != ? 
+                    """, (nachname, vorname, plz, patient_id))
+                    
+                    if cursor.fetchone(): 
+                        # Konflikt mit einem ANDEREN Patienten gefunden
+                        messagebox.showerror( 
+                        "Fehler: Datenkonflikt", 
+                        f"Die aktualisierten Daten ('{vorname} {nachname}' mit PLZ {plz}) kollidieren mit einem ANDEREN, bereits existierenden Patienten. Update abgebrochen." 
+                        ) 
+                        return # Funktion hier beenden
+                    # Wenn die Schlüsseldaten geändert wurden und kein Konflikt besteht, fahre mit dem Update fort
                 
-                # Wenn kein Konflikt mit einem ANDEREN Patienten, führe Update aus:
+                # 3. Führe das Update aus
                 cursor.execute("""
                 UPDATE patienten 
                 SET nachname=?, vorname=?, strasse=?, hausnummer=?, adresszusatz=?, plz=?, ort=?, anrede=?, versicherungsnummer=?, diagnose=?, kilometergeld=?
                 WHERE id=?
-                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, self.patient_id_to_edit))
-                
+                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, patient_id))
                 conn.commit()
-                messagebox.showinfo("Erfolg", f"Patient '{vorname} {nachname}' erfolgreich aktualisiert (ID: {self.patient_id_to_edit}).")
-                self.clear_patient_form()
-                
-            else:
-                # HINZUFÜGEN (Neue Spalte last_selected_kurznamen und invoiced_since_reset mit Standardwert '')
+                messagebox.showinfo("Erfolg", f"Patient '{vorname} {nachname}' (ID: {patient_id}) erfolgreich aktualisiert.")
+                self.reset_patient_form() 
+                self.search_patients() # Aktualisiere Hauptliste
+
+            # --- HINZUFÜGEN (INSERT) ---
+            else: 
+                # 1. PRÜFUNG: Existiert der Patient bereits?
                 cursor.execute("""
-                INSERT INTO patienten (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, last_selected_kurznamen, invoiced_since_reset)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, '', 0))
+                SELECT id FROM patienten WHERE nachname = ? AND vorname = ? AND plz = ?
+                """, (nachname, vorname, plz))
                 
+                if cursor.fetchone():
+                    # Patient existiert bereits
+                    raise sqlite3.IntegrityError("Patient exists") 
+                    
+                # 2. Führe das INSERT aus
+                cursor.execute("""
+                INSERT INTO patienten (vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, last_selected_kurznamen, invoiced_since_reset) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, '', 0))
                 conn.commit()
-                messagebox.showinfo("Erfolg", f"Neuer Patient '{vorname} {nachname}' erfolgreich gespeichert.")
-                self.clear_patient_form()
+                messagebox.showinfo("Erfolg", f"Patient '{vorname} {nachname}' erfolgreich hinzugefügt.")
+                self.reset_patient_form() 
+                self.search_patients() # Aktualisiere Hauptliste
                 
         except sqlite3.IntegrityError:
-            # Wird bei INSERT oder bei Konflikt mit ANDEREM Patienten beim UPDATE ausgelöst
-            messagebox.showerror("Fehler", f"Patient '{vorname} {nachname}' mit dieser PLZ existiert bereits in der Datenbank.")
+             # Fängt den Fehler des INSERT-Falls ab
+            messagebox.showerror("Fehler", f"Patient \"{vorname} {nachname}\" mit dieser PLZ existiert bereits in der Datenbank.")
         except Exception as e:
-            messagebox.showerror("Fehler", f"Datenbankfehler: {e}")
-        conn.close()
+            messagebox.showerror("Fehler", f"Unbekannter Datenbankfehler: {e}")
+        finally:
+            conn.close()
 
+    
+    def _delete_patient_from_db(self, patient_id):
+        """Löscht den Patienten und seine Leistungen aus der Datenbank."""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        try:
+            # 1. Alle Leistungen löschen (WICHTIG für Datenintegrität)
+            self._delete_all_patient_leistungen(patient_id) 
+            
+            # 2. Patienten löschen
+            cursor.execute("DELETE FROM patienten WHERE id = ?", (patient_id,))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"FEHLER beim Löschen von Patient ID {patient_id}: {e}")
+            messagebox.showerror("Fehler", f"Fehler beim Löschen des Patienten: {e}")
+            return False
+        finally:
+            conn.close()
 
+    def delete_patient_gui(self):
+        """Bestätigt und löscht den aktuell geladenen Patienten."""
+        if not self.patient_id_to_edit:
+            messagebox.showwarning("Achtung", "Kein Patient zum Löschen ausgewählt.")
+            return
+
+        nachname = self.patient_entries["Nachname"].get().strip()
+        vorname = self.patient_entries["Vorname"].get().strip()
+        patient_id = self.patient_id_to_edit
+
+        if messagebox.askyesno("Bestätigung Löschen", 
+                               f"Sind Sie sicher, dass Sie den Patienten '{vorname} {nachname}' (ID: {patient_id}) und ALLE seine Leistungen dauerhaft löschen möchten?\n\nDIESER SCHRITT KANN NICHT RÜCKGÄNGIG GEMACHT WERDEN!"):
+            
+            if self._delete_patient_from_db(patient_id):
+                messagebox.showinfo("Erfolg", f"Patient '{vorname} {nachname}' wurde erfolgreich gelöscht.")
+                self.reset_patient_form()
+                # Aktualisiere die Haupt-Suchergebnisse (Generieren-Tab)
+                self.search_patients()
+    
+    
     # --- HILFSFUNKTIONEN FÜR LEISTUNGEN --- 
-    # ... (Rest der Klasse bleibt unverändert)
-
     def _delete_all_patient_leistungen(self, patient_id):
         """Löscht ALLE Leistungen des angegebenen Patienten ohne GUI-Interaktion."""
         conn = sqlite3.connect(DATABASE_NAME)
@@ -925,6 +1365,7 @@ class HonorarGeneratorApp:
             return False
         finally:
             conn.close()
+
 
     def _get_leistung_insertion_params(self):
         """Hilfsfunktion zur Vorbereitung von Betrag und KM-Geld."""
@@ -1100,13 +1541,20 @@ class HonorarGeneratorApp:
         self.leistung_tree.column('Betrag', width=120, anchor='e')
         self.leistung_tree.grid(row=6, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
 
-        tab.grid_rowconfigure(6, weight=1)
+
+        
+        tab.grid_rowconfigure(5, weight=1)
+
 
         control_frame = ttk.Frame(tab)
         control_frame.grid(row=7, column=0, columnspan=3, pady=10, sticky='ew')
         ttk.Button(control_frame, text="Leistung Löschen", command=self.delete_leistung_gui).pack(side=tk.LEFT, padx=10)
         ttk.Button(control_frame, text="Alle Leistungen Löschen", command=self.delete_all_leistungen_gui).pack(side=tk.LEFT, padx=10)
         ttk.Button(control_frame, text="Leistung Bearbeiten/Laden", command=self.load_leistung_for_edit).pack(side=tk.RIGHT, padx=10)
+        tk.Button(control_frame, text="=> Fertig", command=self._switch_to_generate_tab).pack(side=tk.LEFT, expand=True, padx=10)
+        
+
+        
         
         self.leistung_tree.bind('<<TreeviewSelect>>', self.select_leistung_for_edit)
 

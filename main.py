@@ -33,8 +33,8 @@ SETUP_PASSWORD = "Afrika1!"
 
 # --- BILD-KONFIGURATION ---\r\n
 LOGO_PATH = "logo.png" 
-TARGET_IMAGE_WIDTH = 800  
-TARGET_IMAGE_HEIGHT = 450 
+TARGET_IMAGE_WIDTH = 750 
+TARGET_IMAGE_HEIGHT = 400 
 
 # Globale Variablen für das...\r\n
 global_logo_image = None
