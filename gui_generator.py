@@ -295,7 +295,7 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
 
 
 
-# gui_generator.py: Die globale Funktion fill_template (KORRIGIERTE VERSION)
+# gui_generator.py: Die globale Funktion fill_template (KORRIGIERTE VERSION MIT SEITENUMBRUCH-SCHUTZ)
 
 def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block): 
     """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
@@ -414,7 +414,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
                 run.font.size = Pt(12)
 
 
-    # --- 2. Dynamische Leistungsblock-Logik und restliche Ersetzung ---
+    # --- 2. Dynamische Leistungsblock-Logik und restliche Ersetzung (mit Seitenumbruch-Schutz) ---
     
     start_tag = '{{LEISTUNGSBLOCK_START}}'
     end_tag = '{{LEISTUNGSBLOCK_ENDE}}'
@@ -428,14 +428,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     # Text-Ersetzung und Block-Suche in einem Durchlauf
     for p in document.paragraphs:
         
-        if p is HONORARNOTE_PARAGRAPH:
-            continue
-            
-        if p is invoice_number_paragraph and '{{Rechnungsnummer}}' not in p.text:
-            continue
-            
-        # DIAGNOSE-BLOCK WIRD ÜBERSPRUNGEN und erst in Schritt 5 komplett neu formatiert
-        if p is DIAGNOSE_PLACEHOLDER_PARAGRAPH:
+        if p is HONORARNOTE_PARAGRAPH or p is invoice_number_paragraph or p is DIAGNOSE_PLACEHOLDER_PARAGRAPH:
             continue
             
         # Statische Platzhalter ersetzen
@@ -487,6 +480,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         if gesamt_leistungs_text:
             
             current_line_is_leistung = False
+            lines_of_last_block = [] # Speichert die Zeilen des letzten vollständigen Blocks
             
             for zeile in gesamt_leistungs_text.split('\n'):
                 content = zeile.strip() 
@@ -495,16 +489,27 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
                     continue
 
                 is_end_block_marker = '[[ENDE_BLOCK]]' in content
-                if is_end_block_marker:
-                    content = content.replace('[[ENDE_BLOCK]]', '').strip()
                 
+                # Wir sammeln die Zeilen des aktuellen Blocks, um später keep_with_next zu setzen
+                if not is_end_block_marker:
+                    lines_of_last_block.append(content)
+
+
                 if content.startswith("Leistung:"):
                     current_line_is_leistung = True
                 elif content.startswith("Datum:") or content.startswith("Betrag:"):
                     current_line_is_leistung = False
                 
-                # Fügen Sie nur nicht-leere Zeilen ein
+                
+                # Fügen Sie den Paragraphen ein
                 if content:
+                    
+                    # Wenn wir den Ende-Marker des Blocks sehen, ignorieren wir ihn für den Inhalt
+                    if is_end_block_marker:
+                        content = content.replace('[[ENDE_BLOCK]]', '').strip()
+                        if not content:
+                            continue
+
                     p_new = block_start_paragraph.insert_paragraph_before(content)
                     
                     # Allgemeine Formatierung
@@ -520,9 +525,21 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
                         p_new.paragraph_format.left_indent = LEISTUNG_INDENT_SIZE      
                         p_new.paragraph_format.first_line_indent = -LEISTUNG_INDENT_SIZE 
 
-                    # Abstand nach dem Leistungsblock setzen (nach "Betrag:")
-                    if is_end_block_marker:
+                    
+                    # 💥 NEUE LOGIK FÜR SEITENUMBRUCH-SCHUTZ:
+                    # Der Schutz muss für alle Zeilen eines Blocks aktiviert werden, AUSSER für die letzte Zeile.
+                    if not is_end_block_marker:
+                        # Setze Keep_with_next für alle Zeilen, die nicht die letzte Zeile des Blocks sind.
+                        p_new.paragraph_format.keep_with_next = True
+                    else:
+                        # Für die letzte Zeile (mit dem ENDE_BLOCK Marker) setzen wir es auf False
+                        p_new.paragraph_format.keep_with_next = False
+                        
+                        # Setze Abstand nach dem Leistungsblock (nach "Betrag:")
                         p_new.paragraph_format.space_after = SPACE_AFTER_LEISTUNG_BLOCK
+                        
+                        # Setze den Block zurück für den nächsten Durchgang
+                        lines_of_last_block = []
 
 
             # Entferne die alten Platzhalter-Paragraphen
@@ -581,10 +598,9 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     # --- 4. Leerzeilen an den gewünschten Stellen einfügen (Post-Processing) ---
     
     def insert_empty_line(target_p):
-        """Fügt eine leere Zeile (Paragraph) nach dem Ziel-Paragraph ein."""
+        """Fügt eine leere Zeile (Paragraph) VOR dem Ziel-Paragraph ein."""
+        # Korrigierte Logik, da insert_paragraph_after nicht existiert
         try:
-            # KORRIGIERT: Muss insert_paragraph_before verwenden.
-            # Dadurch wird die Leerzeile VOR dem Ziel-Paragraphen eingefügt.
             p_new = target_p.insert_paragraph_before('')
             
             p_new.paragraph_format.space_before = Pt(0)
@@ -595,11 +611,19 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         except (ValueError, IndexError, AttributeError):
             pass
 
+    # Wichtig: Die Leerzeilen werden jetzt VOR dem Paragraphen eingefügt.
+    # Wenn Sie eine Leerzeile NACH dem Paragraphen wünschen, müssen Sie
+    # den nächsten Paragraphen finden und DIESEM die Leerzeile VORANSTELLEN.
+    
+    # Hier verwenden wir die einfache Methode, die Leerzeile VOR dem Block einzufügen
     if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
         insert_empty_line(DIAGNOSE_PLACEHOLDER_PARAGRAPH)
         
     if HONORARNOTE_PARAGRAPH:
-        insert_empty_line(HONORARNOTE_PARAGRAPH)
+        # Fügt eine Leerzeile VOR der Honorarnote ein (was nicht gewünscht ist).
+        # Lassen Sie dies am besten weg, da die Abstände (space_after) am Anfang
+        # des Dokuments besser gesteuert werden sollten.
+        pass # insert_empty_line(HONORARNOTE_PARAGRAPH)
         
     if ORT_DATUM_PARAGRAPH:
         insert_empty_line(ORT_DATUM_PARAGRAPH)
@@ -644,7 +668,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         
 
     # --- Speichern des Dokuments ---
-    patient_folder_name = f"{nachname}_{vorname}"
+    patient_folder_name = f"{nachname}+" "+{vorname}"
     patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
     
@@ -837,10 +861,10 @@ class HonorarGeneratorApp:
         btn_frame.grid(row=3, column=0, columnspan=3, pady=20)
         
         # Bestehender Button
-        ttk.Button(btn_frame, text="HONORARNOTE GENERIEREN (Speichern & Öffnen)", command=self.generate_invoice).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Speichern & Öffnen", command=self.generate_invoice).pack(side=tk.LEFT, padx=10)
         
         # NEUER BUTTON: Generieren und Sofort Drucken
-        ttk.Button(btn_frame, text="✅ Generieren & Sofort Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="✅ Speichern & Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
         
         # --- Honorarnoten-Folgenummer (NEU) ---
         folgenummer_frame = ttk.LabelFrame(tab, text="Honorar-Folgenummer (BHAG-Nr.)")
@@ -1621,8 +1645,6 @@ class HonorarGeneratorApp:
         def replace_selected_events():
             """Ersetzt alle bestehenden Leistungen mit den ausgewählten Terminen."""
             # Zusätzliche Sicherheitsabfrage für das Ersetzen
-            if not messagebox.askyesno("WARNUNG: Leistungen ERSETZEN", "Sind Sie sicher, dass Sie ALLE bestehenden offenen Leistungen dieses Patienten löschen und durch die ausgewählten Termine ERSETZEN möchten?"):
-                return
             events = _get_selected_events_and_validate()
             if events:
                 self.replace_all_leistungen_from_teamup(events)
@@ -1631,15 +1653,15 @@ class HonorarGeneratorApp:
         # --- BUTTONS IM DIALOG ---
         search_button_frame = ttk.Frame(search_window)
         search_button_frame.pack(pady=10)
-        ttk.Button(search_button_frame, text="Suchen (Manuell)", command=lambda: perform_search()).pack(side=tk.LEFT, padx=10)
-        ttk.Button(search_button_frame, text=f"Nachname ({initial_search_term}) suchen", command=search_by_patient_name, state=tk.NORMAL if self.patient_data else tk.DISABLED).pack(side=tk.LEFT, padx=10)
+        ttk.Button(search_button_frame, text="Manuelle Suche", command=lambda: perform_search()).pack(side=tk.LEFT, padx=10)
+        ttk.Button(search_button_frame, text=f"Name ({initial_search_term}) suchen", command=search_by_patient_name, state=tk.NORMAL if self.patient_data else tk.DISABLED).pack(side=tk.LEFT, padx=10)
         
         action_frame = ttk.Frame(search_window)
         action_frame.pack(pady=10)
-        ttk.Button(action_frame, text="Termin(e) HINZUFÜGEN (Zu den Bestehenden)", command=add_selected_events).pack(side=tk.LEFT, padx=10)
+        ttk.Button(action_frame, text="+ Hinzufügen", command=add_selected_events).pack(side=tk.LEFT, padx=10)
         
         # NEUER BUTTON FÜR ERSETZEN
-        ttk.Button(action_frame, text="WARNUNG: Termin(e) ERSETZEN (Alle Bestehenden Löschen!)", command=replace_selected_events).pack(side=tk.LEFT, padx=10) 
+        ttk.Button(action_frame, text="Auswahl Speichern", command=replace_selected_events).pack(side=tk.LEFT, padx=10) 
 
         # Doppelklick auf Eintrag soll Hinzufügen auslösen
         results_tree.bind('<Double-1>', lambda event: add_selected_events())

@@ -94,21 +94,7 @@ def setup_database():
         cursor.execute("ALTER TABLE patienten ADD COLUMN last_selected_kurznamen TEXT DEFAULT ''")
         print("Spalte 'last_selected_kurznamen' zur patienten-Tabelle hinzugefügt.")
     
-    # Optional: Standard-Leistungen einfügen (nur wenn die Tabelle leer ist)
-    try:
-        cursor.execute("SELECT COUNT(*) FROM stammdaten_leistungen")
-        if cursor.fetchone()[0] == 0:
-            initial_data = [
-                ('Erstgespräch', 'Psychotherapeutische Einzelstunde (50 Minuten) - Erstgespräch', 100.00),
-                ('Einzelsitzung', 'Psychotherapeutische Einzelstunde (50 Minuten)', 90.00),
-                ('Doppelstunde', 'Psychotherapeutische Doppelstunde (100 Minuten)', 180.00),
-            ]
-            cursor.executemany("INSERT INTO stammdaten_leistungen (kurzname, beschreibung, standard_betrag) VALUES (?, ?, ?)", initial_data)
-            print("Standard-Leistungen eingefügt.")
-            
-    except Exception as e:
-         print(f"Fehler beim Einfügen von Stammdaten: {e}")
-         
+           
     conn.commit()
     conn.close()
     print("Datenbank-Setup abgeschlossen.")
