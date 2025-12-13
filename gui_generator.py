@@ -307,11 +307,6 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     import datetime
     from docx import Document
     
-    # Hier müssten Sie Ihre fehlenden Funktionen/Konstanten definieren oder importieren:
-    # TEMPLATE_FILE = "..."
-    # OUTPUT_FOLDER = "..."
-    # get_patient_leistungen_for_template(patient_id)
-    
     # --- Einrückungs-Konstanten ---
     LEISTUNG_INDENT_SIZE = Pt(70)  
     SPACE_AFTER_LEISTUNG_BLOCK = Pt(12) 
@@ -319,6 +314,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     # ... (Datenextraktion bleibt unverändert) ...
     _, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, _ = patient_data_tuple
     
+    # Annahme: get_patient_leistungen_for_template, TEMPLATE_FILE, OUTPUT_FOLDER sind hier verfügbar
     leistungen_liste = get_patient_leistungen_for_template(patient_id)
     
     heute = datetime.date.today().strftime("%d.%m.%Y")
@@ -370,11 +366,9 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
             
         # Setze die Standardgröße 12pt global
         for run in p.runs:
-            # Nur setzen, wenn der run noch keine Größe hat, um Überschreibungen zu vermeiden.
-            # Da Sie es global setzen wollten, lassen wir es hier zur Sicherheit.
             run.font.size = Pt(12) 
             
-    # Spezielle Formatierung für HONORARNOTE anwenden (unverändert)
+    # Spezielle Formatierung für HONORARNOTE anwenden
     if HONORARNOTE_PARAGRAPH:
         for run in HONORARNOTE_PARAGRAPH.runs:
             run.font.size = Pt(18)
@@ -383,7 +377,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         HONORARNOTE_PARAGRAPH.paragraph_format.line_spacing = 1.0 
 
 
-    # --- 1. Rechnungsnummer ersetzen und Gemeinde-Block einfügen (unverändert) ---
+    # --- 1. Rechnungsnummer ersetzen und Gemeinde-Block einfügen ---
     
     if '{{Rechnungsnummer}}' in invoice_number_paragraph.text:
         invoice_number_paragraph.text = invoice_number_paragraph.text.replace('{{Rechnungsnummer}}', template_data['BHAG_NUMMER'])
@@ -432,7 +426,6 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     in_block = False 
     
     # Text-Ersetzung und Block-Suche in einem Durchlauf
-    # WICHTIG: Die Diagnose wird in Schritt 2 nicht mehr ersetzt, um Formatverlust zu vermeiden.
     for p in document.paragraphs:
         
         if p is HONORARNOTE_PARAGRAPH:
@@ -441,21 +434,16 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         if p is invoice_number_paragraph and '{{Rechnungsnummer}}' not in p.text:
             continue
             
-        # DIAGNOSE-BLOCK WIRD ÜBERSPRUNGEN und erst in Schritt 5 komplett NEU formatiert
+        # DIAGNOSE-BLOCK WIRD ÜBERSPRUNGEN und erst in Schritt 5 komplett neu formatiert
         if p is DIAGNOSE_PLACEHOLDER_PARAGRAPH:
-            continue 
+            continue
             
         # Statische Platzhalter ersetzen
-        # Verwenden Sie die keys/values, die Sie nicht aus replacements gelöscht haben
-        for key, value in list(replacements.items()):
+        for key, value in replacements.items():
             if key in p.text:
-                 # Ersetze den Platzhalter direkt im Text (da Formatierung später folgt oder nicht kritisch ist)
                 p.text = p.text.replace(key, value)
-                # OPTIMIERUNG: Den ersetzten Platzhalter aus der Liste entfernen
-                if key != '{{Diagnose}}': # Diagnose muss in der Liste bleiben für Schritt 5
-                    del replacements[key]
         
-        # Block-Logik: Musterblock finden (unverändert)
+        # Block-Logik: Musterblock finden
         if start_tag in p.text:
             block_start_paragraph = p
             in_block = True
@@ -468,7 +456,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         if in_block:
             block_paragraphs.append(p)
 
-    # Generieren des gesamten Leistungs-Textes (unverändert)
+    # Generieren des gesamten Leistungs-Textes
     gesamt_leistungs_text = ""
     
     if block_start_paragraph and block_end_paragraph:
@@ -537,7 +525,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
                         p_new.paragraph_format.space_after = SPACE_AFTER_LEISTUNG_BLOCK
 
 
-            # Entferne die alten Platzhalter-Paragraphen (unverändert)
+            # Entferne die alten Platzhalter-Paragraphen
             block_start_paragraph.text = '' 
             for p in block_paragraphs:
                 p._element.getparent().remove(p._element)
@@ -549,7 +537,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
              block_end_paragraph.text = ''
 
 
-    # Ersetzen des Gesamtbetrags (unverändert)
+    # Ersetzen des Gesamtbetrags
     total_betrag_str = f"{total_betrag:.2f}"
     
     for p in document.paragraphs:
@@ -581,7 +569,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
                 run.font.size = Pt(12)
 
     
-    # --- 3. Letzte Zeilenabstands-Korrektur (Finaler Sweep) (unverändert) ---
+    # --- 3. Letzte Zeilenabstands-Korrektur (Finaler Sweep) ---
     for p in document.paragraphs:
         if p is not HONORARNOTE_PARAGRAPH:
             p.paragraph_format.space_before = Pt(0)
@@ -590,28 +578,21 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
             p.paragraph_format.line_spacing = 1.0
 
 
-    # --- 4. Leerzeilen an den gewünschten Stellen einfügen (Post-Processing) (unverändert) ---
+    # --- 4. Leerzeilen an den gewünschten Stellen einfügen (Post-Processing) ---
     
     def insert_empty_line(target_p):
         """Fügt eine leere Zeile (Paragraph) nach dem Ziel-Paragraph ein."""
         try:
-            # Suchen Sie den Index im aktuellen Zustand der document.paragraphs
-            current_paragraphs = list(document.paragraphs)
-            idx = current_paragraphs.index(target_p)
-            
-            # Da insert_paragraph_after den neuen Paragraphen *nach* dem Ziel einfügt, 
-            # sollte die Index-Methode funktionieren, aber manchmal sind die Indexe in docx tricky.
-            # Besser ist es, die Methode insert_paragraph_after direkt zu nutzen, die
-            # Sie im Originalcode nicht definiert hatten. Fügen wir es hier ein.
-            
-            p_new = target_p.insert_paragraph_after('')
+            # KORRIGIERT: Muss insert_paragraph_before verwenden.
+            # Dadurch wird die Leerzeile VOR dem Ziel-Paragraphen eingefügt.
+            p_new = target_p.insert_paragraph_before('')
             
             p_new.paragraph_format.space_before = Pt(0)
             p_new.paragraph_format.space_after = Pt(0)
             p_new.paragraph_format.line_spacing = 1.0
             p_new.add_run('').font.size = Pt(12) 
             
-        except (ValueError, IndexError):
+        except (ValueError, IndexError, AttributeError):
             pass
 
     if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
@@ -624,44 +605,45 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         insert_empty_line(ORT_DATUM_PARAGRAPH)
 
     
-    # 💥 --- 5. Final Diagnosis Format Override (DIE KORREKTUR!) --- 💥
+    # 💥 --- 5. Final Diagnosis Format Override (DIE ULTIMATIVE KORREKTUR!) --- 💥
     if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
-        p = DIAGNOSE_PLACEHOLDER_PARAGRAPH
         
-        # 1. Stil des Paragraphen löschen, um Template-Styles zu neutralisieren
-        p.style = document.styles['No Spacing'] 
-
-        # 2. Einzüge und Abstände auf Null setzen
-        p.paragraph_format.left_indent = Pt(0)      
-        p.paragraph_format.first_line_indent = Pt(0) 
-        p.paragraph_format.space_before = Pt(0)
-        p.paragraph_format.space_after = Pt(0)
-        p.paragraph_format.line_spacing = 1.0
-        
-        # 3. Alten Text und Runs komplett löschen, um einen sauberen Start zu haben
-        p.text = '' 
+        target_p = DIAGNOSE_PLACEHOLDER_PARAGRAPH
+        p_element = target_p._element
         
         diagnosis_label = "Diagnose:   "
-        # Holen Sie den Diagnose-Wert aus der replacements-Liste (die wir in Schritt 2 nicht gelöscht haben)
         diagnosis_value = replacements.get('{{Diagnose}}', diagnose)
         
-        # 4. Run für das Label ("Diagnose: ") hinzufügen und formatieren
-        run_label = p.add_run(diagnosis_label)
+        # 1. Neuen Paragraphen VOR dem alten Platzhalter einfügen
+        p_new = target_p.insert_paragraph_before('')
+        
+        # 2. Formatierung für den Paragraphen festlegen (Abstände und neutraler Stil)
+        p_new.paragraph_format.left_indent = Pt(0)      
+        p_new.paragraph_format.first_line_indent = Pt(0) 
+        p_new.paragraph_format.space_before = Pt(0)
+        p_new.paragraph_format.space_after = Pt(0)
+        p_new.paragraph_format.line_spacing = 1.0
+        
+        # 3. Text in zwei Runs einfügen und formatieren
+        
+        # Run für das Label ("Diagnose: ")
+        run_label = p_new.add_run(diagnosis_label)
         run_label.bold = True
         run_label.font.size = Pt(12)
         
-        # 5. Run für den Wert (die Diagnose) hinzufügen und formatieren
-        run_value = p.add_run(diagnosis_value)
+        # Run für den Wert (die Diagnose)
+        run_value = p_new.add_run(diagnosis_value)
         run_value.bold = True 
         run_value.font.size = Pt(12) 
         
-        # 6. Lösche alle überflüssigen Runs (optional, aber sicher)
-        if len(p.runs) > 2:
-            for r in p.runs[2:]:
-                r.clear()
+        # 4. Den alten Platzhalter-Paragraphen KOMPLETT aus dem Dokument entfernen
+        p_element.getparent().remove(p_element)
+        
+        # Setze den Platzhalter auf den neuen Paragraphen, um die Leerzeile in Schritt 4 zu erhalten
+        DIAGNOSE_PLACEHOLDER_PARAGRAPH = p_new
         
 
-    # --- Speichern des Dokuments (unverändert) ---
+    # --- Speichern des Dokuments ---
     patient_folder_name = f"{nachname}_{vorname}"
     patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
