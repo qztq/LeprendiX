@@ -68,7 +68,56 @@ def _update_invoiced_status(patient_id, status=1):
 # Sicherstellen, dass die Spalte beim Start existiert
 _ensure_status_column()
 
+# HINZUFÜGEN in gui_generator.py (nach den anderen DB-Helfern, aber vor der Klasse HonorarGeneratorApp)
+def _set_search_patient_id(patient_id):
+    """Setzt die ID eines Patienten, der im Status-Checker zur Suche im Hauptfenster ausgewählt wurde. 
+       Wird nur vom Status-Checker aufgerufen."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    key = 'last_selected_patient_id_for_search'
+    try:
+        # Führt ein INSERT OR REPLACE aus (fügt ein, oder überschreibt, wenn der Key existiert)
+        cursor.execute("INSERT OR REPLACE INTO einstellungen (key, value) VALUES (?, ?)", (key, str(patient_id)))
+        conn.commit()
+    except Exception as e:
+        # Die Tabelle 'einstellungen' muss existieren. Wenn nicht, wird hier ein Fehler ausgegeben.
+        print(f"FEHLER beim Setzen der Search-Target-ID: {e}")
+    finally:
+        conn.close()
 
+# KORRIGIERT: gui_generator.py (Funktion außerhalb der Klasse)
+
+def _get_and_clear_search_patient_id():
+    """
+    Holt die ID des zur Suche markierten Patienten, löscht den Eintrag 
+    und gibt die ID zurück.
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    key = 'last_selected_patient_id_for_search'
+    patient_id = None # Initialisiere patient_id
+
+    try:
+        # 1. Hole die ID
+        cursor.execute("SELECT value FROM einstellungen WHERE key = ?", (key,))
+        result = cursor.fetchone()
+        
+        if result:
+            patient_id = int(result[0])
+            # 2. Lösche den Eintrag, damit er nur einmal verwendet wird
+            cursor.execute("DELETE FROM einstellungen WHERE key = ?", (key,))
+            conn.commit()
+            
+    except Exception as e:
+        print(f"FEHLER beim Lesen/Löschen der Search-Target-ID: {e}")
+        patient_id = None # Sicherstellen, dass bei Fehler keine ID zurückkommt
+        
+    finally:
+        # Nur Aufräumarbeiten im finally-Block
+        conn.close() 
+        
+    # Der Rückgabewert erfolgt nun außerhalb des finally-Blocks
+    return patient_id
 # --- HILFSFUNKTIONEN FÜR DRUCK, DB und API ---
 
 def print_document_silently(file_path):
@@ -243,7 +292,7 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
 
 # --- WORD-GENERIERUNGSFUNKTION ---
 
-def fill_template(patient_id, patient_data_tuple):
+def fill_template(patient_id, patient_data_tuple, template_data): # NEUE SIGNATUR
     """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
     
     # patient_data_tuple hat 13 Elemente: Index 0=id, ..., 11=kilometergeld, 12=last_selected_kurznamen (nicht benötigt)
@@ -252,7 +301,7 @@ def fill_template(patient_id, patient_data_tuple):
     leistungen_liste = get_patient_leistungen_for_template(patient_id)
     
     heute = datetime.date.today().strftime("%d.%m.%Y")
-    honorar_nummer = f"HN-{datetime.date.today().year}-{datetime.date.today().month:02d}-{patient_id:03d}" 
+    # honorar_nummer = f"HN-{datetime.date.today().year}-{datetime.date.today().month:02d}-{patient_id:03d}" # ALTE LOGIK ENTFERNT
     
     try:
         document = Document(TEMPLATE_FILE)
@@ -263,7 +312,7 @@ def fill_template(patient_id, patient_data_tuple):
     
     # Statische Platzhalter
     replacements = {
-        '{{Rechnungsnummer}}': honorar_nummer,
+        '{{Rechnungsnummer}}': template_data['BHAG_NUMMER'], # NEU: BHAG-Nummer verwenden
         '{{Anrede}}': anrede, 
         '{{Nachname}}': nachname,
         '{{Vorname}}': vorname,
@@ -354,7 +403,8 @@ def fill_template(patient_id, patient_data_tuple):
     
     for paragraph in document.paragraphs:
         if '{{Gesamt_Betrag}}' in paragraph.text:
-            paragraph.text = paragraph.replace('{{Gesamt_Betrag}}', gesamt_betrag_str)
+            # BUG FIX: Muss auf paragraph.text angewendet werden!
+            paragraph.text = paragraph.text.replace('{{Gesamt_Betrag}}', gesamt_betrag_str)
 
     # --- Speichern des Dokuments ---
     # Entfernt: log_patient_name(f"{nachname}_{vorname}")
@@ -362,7 +412,7 @@ def fill_template(patient_id, patient_data_tuple):
     patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
     
-    output_filename = f"Honorarnote Krankenkasse {honorar_nummer}.docx"
+    output_filename = f"Honorarnote Krankenkasse {template_data['BHAG_NUMMER']}.docx" # BHAG-Nummer im Dateinamen
     output_path = os.path.join(patient_output_path, output_filename)
 
     document.save(output_path)
@@ -387,8 +437,7 @@ class HonorarGeneratorApp:
 
         self.tab_generate = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_generate, text='📝 Honorarnote Generieren')
-        self.setup_generate_tab(self.tab_generate)
-
+        
         self.tab_patient = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_patient, text='👤 Patienten Verwalten')
         self.setup_patient_tab(self.tab_patient)
@@ -401,10 +450,133 @@ class HonorarGeneratorApp:
         self.notebook.add(self.tab_stammdaten, text='⚙️ Stammdaten Leistungen')
         self.setup_stammdaten_tab(self.tab_stammdaten)
         
+        # NEU: Initialisierung des TK-Stil-Objekts (FIX für AttributeError)
+        self.ttk_style = ttk.Style() 
+        
+        # NEU: Initialisierung der Folgenummer (BHAG-Logik)
+        self.invoice_seq_var = tk.StringVar() 
+        self.invoice_sequence_data = self._get_invoice_sequence_data()
+        # Zeigt die gespeicherte Folgenummer mit führenden Nullen (z.B. '001') an
+        self.invoice_seq_var.set(str(self.invoice_sequence_data.get('rechnung_folgenummer', '0')).zfill(3))
+        
+        self.setup_generate_tab(self.tab_generate)
+        
         self.update_patient_info() 
         self.load_leistung_stammdaten_buttons() 
 
 
+   
+    def _get_invoice_sequence_data(self):
+        """Holt die aktuelle Folgenummer, Jahr und Monat aus der Einstellungen-Tabelle."""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        data = {}
+        now = datetime.datetime.now()
+        
+        # Standardwerte (für den Fall, dass die DB-Tabelle noch nicht existiert)
+        default_data = {
+            'rechnung_jahr': str(now.year),
+            'rechnung_monat': str(now.month).zfill(2),
+            'rechnung_folgenummer': '0' # Start bei 0
+        }
+        
+        try:
+            cursor.execute("SELECT key, value FROM einstellungen WHERE key IN ('rechnung_jahr', 'rechnung_monat', 'rechnung_folgenummer')")
+            for key, value in cursor.fetchall():
+                data[key] = value
+            
+            # Stelle sicher, dass alle Schlüssel vorhanden sind
+            return {**default_data, **data}
+            
+        except sqlite3.OperationalError:
+            # Fallback, wenn die Tabelle noch nicht existiert (z.B. wenn db_setup.py nicht lief)
+            print("WARNUNG: Einstellungen-Tabelle nicht gefunden. Verwende Standardwerte.")
+            return default_data
+        finally:
+            conn.close()
+
+    def _update_invoice_sequence_data(self, key, value):
+        """Aktualisiert oder fügt einen Wert in der Einstellungen-Tabelle ein."""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        try:
+            # Versucht, den Wert zu aktualisieren (UPDATE OR IGNORE ist sicherer)
+            cursor.execute("UPDATE einstellungen SET value = ? WHERE key = ?", (str(value), key))
+            if cursor.rowcount == 0:
+                 # Wenn kein Update möglich war, wird ein INSERT versucht
+                 cursor.execute("INSERT OR IGNORE INTO einstellungen (key, value) VALUES (?, ?)", (key, str(value)))
+            conn.commit()
+        except Exception as e:
+            print(f"FEHLER beim Aktualisieren der Folgenummer in der DB ({key}): {e}")
+            messagebox.showerror("Fehler", f"Fehler beim Aktualisieren der Folgenummer in der DB ({key}): {e}")
+        finally:
+            conn.close()
+
+    def _save_custom_invoice_number(self):
+        """Speichert die manuell eingegebene Folgenummer und aktualisiert die DB."""
+        try:
+            new_nummer_str = self.invoice_seq_var.get().strip()
+            
+            # Validierung: Muss eine Zahl sein (max. 3 Ziffern, wir akzeptieren bis 999)
+            if not new_nummer_str.isdigit() or len(new_nummer_str) > 3 or int(new_nummer_str) < 0:
+                messagebox.showerror("Fehler", "Folgenummer muss eine Zahl zwischen 0 und 999 sein.")
+                # Setzt auf den letzten gültigen Wert zurück (intern gespeichert)
+                self.invoice_seq_var.set(str(self.invoice_sequence_data['rechnung_folgenummer']).zfill(3)) 
+                return
+
+            new_nummer = int(new_nummer_str)
+
+            # Aktualisiere interne Daten und DB
+            self.invoice_sequence_data['rechnung_folgenummer'] = str(new_nummer)
+            self._update_invoice_sequence_data('rechnung_folgenummer', str(new_nummer))
+            
+            # Aktualisiere das Anzeige-Feld (mit führenden Nullen)
+            self.invoice_seq_var.set(str(new_nummer).zfill(3))
+            
+            messagebox.showinfo("Erfolg", f"Folgenummer manuell auf '{str(new_nummer).zfill(3)}' gespeichert.")
+            
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Fehler beim Speichern der Folgenummer: {e}")
+
+    def _prepare_bhag_number(self):
+        """Generiert die nächste BHAG-Nummer, aktualisiert die DB und die GUI."""
+        now = datetime.datetime.now()
+        current_year = str(now.year)
+        current_month = str(now.month).zfill(2) 
+
+        # Hole die gespeicherten Daten (als String)
+        stored_year = self.invoice_sequence_data.get('rechnung_jahr', current_year)
+        stored_month = self.invoice_sequence_data.get('rechnung_monat', current_month)
+        current_folgenummer = int(self.invoice_sequence_data.get('rechnung_folgenummer', '0'))
+
+        # --- Reset-Logik (Jährlich) ---
+        if current_year != stored_year:
+            # Jährlicher Reset: Setze auf 1 und aktualisiere Jahr/Monat
+            new_folgenummer = 1
+            self.invoice_sequence_data['rechnung_jahr'] = current_year
+            self.invoice_sequence_data['rechnung_monat'] = current_month
+            self._update_invoice_sequence_data('rechnung_jahr', current_year)
+            self._update_invoice_sequence_data('rechnung_monat', current_month)
+        else:
+            # Normales Inkremement
+            new_folgenummer = current_folgenummer + 1
+
+        # 2. Folgenummer formatieren und BHAG-Nummer generieren
+        folgenummer_str = str(new_folgenummer).zfill(3) # z.B. '001', '010'
+        bhag_nummer = f"BHAG{current_year}{current_month}{folgenummer_str}"
+
+        # 3. Datenbank und GUI aktualisieren
+        self.invoice_sequence_data['rechnung_folgenummer'] = str(new_folgenummer)
+        self._update_invoice_sequence_data('rechnung_folgenummer', str(new_folgenummer))
+        self.invoice_seq_var.set(folgenummer_str) # Aktualisiere das Feld im GUI
+        
+        # Stelle sicher, dass die Monatsangabe immer aktuell ist (falls sie sich innerhalb des Jahres ändert)
+        if stored_month != current_month:
+            self.invoice_sequence_data['rechnung_monat'] = current_month
+            self._update_invoice_sequence_data('rechnung_monat', current_month)
+
+        return {'BHAG_NUMMER': bhag_nummer}
+        
     # --- 1. Generieren Tab ---
     def setup_generate_tab(self, tab):
         ttk.Label(tab, text="Patienten-Suche (Nachname/Vorname):").grid(row=0, column=0, padx=5, pady=5, sticky='w')
@@ -431,11 +603,23 @@ class HonorarGeneratorApp:
         # NEUER BUTTON: Generieren und Sofort Drucken
         ttk.Button(btn_frame, text="✅ Generieren & Sofort Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
         
-        # TODO: Archivierungsbutton hier einfügen, der alle abgerechneten Leistungen markiert
+        # --- Honorarnoten-Folgenummer (NEU) ---
+        folgenummer_frame = ttk.LabelFrame(tab, text="Honorar-Folgenummer (BHAG-Nr.)")
+        folgenummer_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+
+        ttk.Label(folgenummer_frame, text="Aktuelle Folgenummer (000-999):").grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        self.invoice_seq_entry = ttk.Entry(folgenummer_frame, textvariable=self.invoice_seq_var, width=5)
+        self.invoice_seq_entry.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+
+        save_folgenummer_btn = ttk.Button(folgenummer_frame, text="Folgenummer speichern (manuell korrigieren)", command=self._save_custom_invoice_number)
+        save_folgenummer_btn.grid(row=0, column=2, padx=5, pady=2, sticky="w")
+
+        ttk.Label(folgenummer_frame, text="Format: BHAG[Jahr][Monat][Folgenummer]").grid(row=1, column=0, columnspan=3, padx=5, pady=2, sticky="w")
 
         tab.grid_rowconfigure(1, weight=1)
 
     def search_patients(self):
+# ... (Funktion bleibt unverändert)
         search_term = self.search_entry.get().strip()
         if not search_term:
             messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff ein.")
@@ -456,6 +640,7 @@ class HonorarGeneratorApp:
             self.results_listbox.patient_data_list.append(patient_data_tuple)
 
     def select_patient_from_list(self, event):
+# ... (Funktion bleibt unverändert)
         selection = self.results_listbox.curselection()
         if selection:
             index = selection[0]
@@ -470,6 +655,7 @@ class HonorarGeneratorApp:
             self.update_leistung_list() 
 
     def update_patient_info(self):
+# ... (Funktion bleibt unverändert)
         if self.patient_data:
             # patient_data[11] ist das Kilometergeld
             km_geld = self.patient_data[11] if len(self.patient_data) > 11 and self.patient_data[11] is not None else 0.0
@@ -491,7 +677,10 @@ class HonorarGeneratorApp:
         patient_id = self.patient_data[0]
         
         try:
-            output_path = fill_template(patient_id, self.patient_data) 
+            # NEU: BHAG-Nummer generieren und DB aktualisieren
+            data_for_template = self._prepare_bhag_number() 
+            
+            output_path = fill_template(patient_id, self.patient_data, data_for_template) # NEUE SIGNATUR
             
             # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
             _update_invoiced_status(patient_id, 1)
@@ -522,8 +711,11 @@ class HonorarGeneratorApp:
             return
 
         try:
+            # NEU: BHAG-Nummer generieren und DB aktualisieren
+            data_for_template = self._prepare_bhag_number() 
+            
             # 1. Generiere die Honorarnote
-            output_path = fill_template(self.patient_data[0], self.patient_data) 
+            output_path = fill_template(self.patient_data[0], self.patient_data, data_for_template) # NEUE SIGNATUR
             
             # 2. Versuche, sie sofort zu drucken
             success, message = print_document_silently(output_path)
@@ -556,6 +748,7 @@ class HonorarGeneratorApp:
 
     # --- 2. Patienten Verwalten Tab (Hinzufügen und Bearbeiten) ---
     def setup_patient_tab(self, tab):
+# ... (Rest der Klasse bleibt unverändert)
         search_frame = ttk.Frame(tab)
         search_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
         
@@ -589,6 +782,7 @@ class HonorarGeneratorApp:
         ttk.Button(tab, text="Formular Leeren / Abbrechen", command=self.clear_patient_form).grid(row=len(fields) + 2, column=0, columnspan=2, pady=5)
 
     def search_and_load_patient(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Sucht einen Patienten und lädt die Daten in die Bearbeitungsfelder."""
         search_term = self.patient_search_entry.get().strip()
         if not search_term:
@@ -629,6 +823,7 @@ class HonorarGeneratorApp:
         print(f"INFO: Patient '{patient_data_tuple[1]} {patient_data_tuple[2]}' geladen. Bearbeiten und 'Aktualisieren' klicken.") # messagebox entfernt
 
     def clear_patient_form(self, clear_defaults=True):
+# ... (Rest der Klasse bleibt unverändert)
         """Leert das Patientenformular und setzt den Button-Text zurück."""
         self.patient_id_to_edit = None
         for key, entry in self.patient_entries.items():
@@ -644,6 +839,7 @@ class HonorarGeneratorApp:
 
 
     def add_patient_gui(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Fügt neuen Patienten hinzu oder aktualisiert bestehenden."""
         vorname = self.patient_entries["Vorname"].get().strip()
         nachname = self.patient_entries["Nachname"].get().strip()
@@ -699,7 +895,7 @@ class HonorarGeneratorApp:
                 cursor.execute("""
                 INSERT INTO patienten (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, last_selected_kurznamen, invoiced_since_reset)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, '', 0)) # Standardstatus 0 (Rot)
+                """, (nachname, vorname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, '', 0))
                 
                 conn.commit()
                 messagebox.showinfo("Erfolg", f"Neuer Patient '{vorname} {nachname}' erfolgreich gespeichert.")
@@ -710,11 +906,12 @@ class HonorarGeneratorApp:
             messagebox.showerror("Fehler", f"Patient '{vorname} {nachname}' mit dieser PLZ existiert bereits in der Datenbank.")
         except Exception as e:
             messagebox.showerror("Fehler", f"Datenbankfehler: {e}")
-            
         conn.close()
 
 
-    # --- HILFSFUNKTIONEN FÜR LEISTUNGEN ---
+    # --- HILFSFUNKTIONEN FÜR LEISTUNGEN --- 
+    # ... (Rest der Klasse bleibt unverändert)
+
     def _delete_all_patient_leistungen(self, patient_id):
         """Löscht ALLE Leistungen des angegebenen Patienten ohne GUI-Interaktion."""
         conn = sqlite3.connect(DATABASE_NAME)
@@ -733,14 +930,14 @@ class HonorarGeneratorApp:
         """Hilfsfunktion zur Vorbereitung von Betrag und KM-Geld."""
         manual_betrag_str = self.amount_entry.get().strip().replace(',', '.')
         try:
-             manual_betrag = float(manual_betrag_str)
-             use_manual_override = manual_betrag > 0.009
+            manual_betrag = float(manual_betrag_str)
+            use_manual_override = manual_betrag > 0.009
         except ValueError:
-             use_manual_override = False
-             manual_betrag = 0.0
+            use_manual_override = False
+            manual_betrag = 0.0
         km_geld = self.get_current_kilometergeld()
         return manual_betrag, use_manual_override, km_geld
-        
+
     def _reset_leistung_selection(self):
         """Hilfsfunktion zum Zurücksetzen der Button-Auswahl in der GUI."""
         self.selected_leistungs_kurznamen.clear()
@@ -748,64 +945,86 @@ class HonorarGeneratorApp:
             if hasattr(widget, 'is_selected') and widget.is_selected:
                 widget.config(style='TButton')
                 widget.is_selected = False
-                
-    def _insert_multiple_leistungen(self, patient_id, events_list):
-        """Kernlogik zum Einfügen von Leistungen. Gibt die Anzahl der erfolgreich eingefügten Elemente zurück."""
-        
-        manual_betrag, use_manual_override, km_geld = self._get_leistung_insertion_params()
 
+    def add_leistung_to_db(self, patient_id, datum_str, time_from, time_to, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld):
+        """Fügt eine einzelne Leistung in die DB ein."""
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        try:
+            datum_db = datetime.datetime.strptime(datum_str, '%d.%m.%Y').strftime('%Y-%m-%d')
+
+            betrag = manual_betrag if use_manual_override else standard_betrag
+            end_betrag = betrag + km_geld 
+
+            # Beschreibung basierend auf manuellem Override oder Stammdaten
+            beschreibung = self.stammdaten_betraege.get(kurzname, kurzname)
+            if use_manual_override:
+                beschreibung = f"Manuelle Eingabe ({kurzname})"
+
+            cursor.execute("""
+            INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (patient_id, datum_db, time_from, time_to, beschreibung, end_betrag))
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"FEHLER: Fehler beim Speichern der Leistung {kurzname}: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def _insert_multiple_leistungen(self, patient_id, events_list):
+        """Fügt mehrere Leistungen aus Teamup-Einträgen in die DB ein."""
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
         total_success_count = 0
-        
-        # Iteriere über alle ausgewählten Leistungen (Buttons)
-        for kurzname in self.selected_leistungs_kurznamen:
-            
-            # Beschreibung und Basisbetrag finden
-            full_item = next((item for item in self.stammdaten_betraege if item.startswith(kurzname + ' - ')), None)
-            
-            if full_item:
-                 beschreibung = full_item.split(" - ", 1)[1]
-                 basis_betrag = self.stammdaten_betraege.get(full_item, 0.0)
-            else:
-                 print(f"FEHLER: Leistung '{kurzname}' nicht in Stammdaten gefunden.")
-                 continue
+        km_geld = self.get_current_kilometergeld()
 
-            current_basis_betrag = manual_betrag if use_manual_override else basis_betrag
-            end_betrag = current_basis_betrag + km_geld 
+        for title, date_str, time_from, time_to in events_list:
             
-            # Für diese Leistung, füge alle ausgewählten Termine hinzu
-            for title, date_str, time_from, time_to in events_list:
+            # WICHTIG: Die ausgewählten Leistungen (self.selected_leistungs_kurznamen) werden auf jeden Termin angewendet.
+            for kurzname in self.selected_leistungs_kurznamen:
+                
+                # Hole den Betrag für diese Leistung
+                # Der Kurzname in stammdaten_betraege ist im Format 'Kurzname - Beschreibung'
+                stammdaten_key = [k for k in self.stammdaten_betraege.keys() if k.startswith(kurzname + ' -')]
+                if not stammdaten_key:
+                    print(f"WARNUNG: Stammdaten für '{kurzname}' nicht gefunden. Überspringe.")
+                    continue
+                
+                standard_betrag = self.stammdaten_betraege[stammdaten_key[0]]
+                end_betrag = standard_betrag + km_geld
+                
+                # Die Beschreibung der Leistung wird aus den Stammdaten übernommen
+                final_beschreibung = stammdaten_key[0] 
+                
                 try:
-                    # Datum in DB-Format konvertieren (von TT.MM.JJJJ zu YYYY-MM-DD)
                     datum_db = datetime.datetime.strptime(date_str, '%d.%m.%Y').strftime('%Y-%m-%d')
-                    
-                    final_beschreibung = beschreibung
-                    
+
+                    # Die Beschreibung wird aus den Stammdaten übernommen, nicht aus dem Teamup-Titel
                     cursor.execute("""
                     INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
                     VALUES (?, ?, ?, ?, ?, ?)
-                    """, (patient_id, datum_db, time_from, time_to, final_beschreibung, end_betrag)) 
-                    
+                    """, (patient_id, datum_db, time_from, time_to, final_beschreibung, end_betrag))
                     total_success_count += 1
-                    
                 except Exception as e:
                     print(f"FEHLER: Fehler beim Speichern des Termins {date_str} für Leistung {kurzname}: {e}")
-        
+
         conn.commit()
         conn.close()
-        return total_success_count
-    # --- ENDE HILFSFUNKTIONEN FÜR LEISTUNGEN ---
+        return total_success_count 
     
-    
-    # --- 3. Leistungen Hinzufügen/Prüfen Tab (Mit Uhrzeiten und Teamup) ---
-    
+    # --- ENDE HILFSFUNKTIONEN FÜR LEISTUNGEN --- 
+
+    # --- 3. Leistungen Hinzufügen/Prüfen Tab (Mit Uhrzeiten und Teamup) --- 
+    # ... (Rest der Klasse bleibt unverändert)
+
     def _on_canvas_configure(self, event):
         """Passt die Breite des inneren Frames an die Breite des Canvas an."""
         self.leistung_canvas.itemconfig(self.window_id, width=event.width)
 
     def setup_leistung_tab(self, tab):
-        
+# ... (Rest der Klasse bleibt unverändert)
         ttk.Label(tab, text="Aktueller Patient:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.leistung_patient_label = ttk.Label(tab, text="Bitte Patient in Tab 1 auswählen", foreground='red')
         self.leistung_patient_label.grid(row=0, column=1, columnspan=2, padx=5, pady=5, sticky='w')
@@ -813,79 +1032,76 @@ class HonorarGeneratorApp:
         # Erste Zeile: Datum und Uhrzeit Frame
         date_time_frame = ttk.Frame(tab)
         date_time_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='w')
-        
         ttk.Label(date_time_frame, text="Datum (TT.MM.JJJJ):").pack(side=tk.LEFT, padx=(0,5))
         self.date_entry = ttk.Entry(date_time_frame, width=15)
         self.date_entry.pack(side=tk.LEFT, padx=(0,15))
         self.date_entry.insert(0, datetime.date.today().strftime("%d.%m.%Y"))
-        
         ttk.Label(date_time_frame, text="Von (HH:MM):").pack(side=tk.LEFT, padx=(0,5))
-        self.time_from_entry = ttk.Entry(date_time_frame, width=8) 
+        self.time_from_entry = ttk.Entry(date_time_frame, width=8)
         self.time_from_entry.pack(side=tk.LEFT, padx=(0,5))
         self.time_from_entry.insert(0, "11:00")
-        
         ttk.Label(date_time_frame, text="Bis (HH:MM):").pack(side=tk.LEFT, padx=(5,5))
-        self.time_to_entry = ttk.Entry(date_time_frame, width=8) 
+        self.time_to_entry = ttk.Entry(date_time_frame, width=8)
         self.time_to_entry.pack(side=tk.LEFT, padx=(0,5))
         self.time_to_entry.insert(0, "11:50")
 
         # NEU: Button zum Starten der Kalender-Suche
-        ttk.Button(date_time_frame, text="📅 Termine aus Teamup laden", command=self.open_teamup_search).pack(side=tk.LEFT, padx=20)
+        ttk.Button(date_time_frame, text="📅 Teamup-Termine Importieren/Ersetzen", command=self.open_teamup_search).pack(side=tk.LEFT, padx=10)
 
-
-        # NEU: Scrollbarer Bereich für Leistungs-Buttons (Ersetzt die Combobox)
-        ttk.Label(tab, text="Leistung wählen (Mehrfachauswahl möglich):").grid(row=2, column=0, padx=5, pady=5, sticky='nw')
+        # Leistungsbuttons Frame (Scrollable)
+        leistung_scroll_frame = ttk.Frame(tab)
+        leistung_scroll_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
         
-        leistung_select_frame = ttk.Frame(tab)
-        leistung_select_frame.grid(row=2, column=1, columnspan=2, padx=5, pady=5, sticky='nsew')
-        
-        # Canvas und Scrollbar für die Button-Liste
-        self.leistung_canvas = tk.Canvas(leistung_select_frame, borderwidth=0)
+        self.leistung_canvas = tk.Canvas(leistung_scroll_frame)
         self.leistung_canvas.pack(side="left", fill="both", expand=True)
-        
-        self.leistung_scrollbar = ttk.Scrollbar(leistung_select_frame, orient="vertical", command=self.leistung_canvas.yview)
-        self.leistung_scrollbar.pack(side="right", fill="y")
-        
-        self.leistung_canvas.config(yscrollcommand=self.leistung_scrollbar.set)
-        
+
+        leistung_scrollbar = ttk.Scrollbar(leistung_scroll_frame, orient="vertical", command=self.leistung_canvas.yview)
+        leistung_scrollbar.pack(side="right", fill="y")
+
+        self.leistung_canvas.configure(yscrollcommand=leistung_scrollbar.set)
+        self.leistung_canvas.bind('<Configure>', self._on_canvas_configure)
+
         self.leistung_button_frame = ttk.Frame(self.leistung_canvas)
         self.window_id = self.leistung_canvas.create_window((0, 0), window=self.leistung_button_frame, anchor="nw")
         
-        self.leistung_button_frame.bind("<Configure>", lambda e: self.leistung_canvas.configure(scrollregion = self.leistung_canvas.bbox("all")))
-        self.leistung_canvas.bind('<Configure>', self._on_canvas_configure) # Für Breitenanpassung
-
-        tab.grid_rowconfigure(2, weight=1) # Gibt dem Button-Bereich Platz
-
-
-        # Vierte Zeile: Betrag (Optionaler Override)
-        ttk.Label(tab, text="Manueller Basis Betrag (€, optionaler Override):").grid(row=3, column=0, padx=5, pady=5, sticky='w')
-        self.amount_entry = ttk.Entry(tab, width=15)
-        self.amount_entry.grid(row=3, column=1, padx=5, pady=5, sticky='w')
+        # Zeile 3: Manuelle Beschreibung und Betrag
+        manual_frame = ttk.Frame(tab)
+        manual_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky='w')
+        
+        ttk.Label(manual_frame, text="Manuelle Betragseingabe (€):").pack(side=tk.LEFT, padx=(0,5))
+        self.amount_entry = ttk.Entry(manual_frame, width=10)
+        self.amount_entry.pack(side=tk.LEFT, padx=(0,15))
         self.amount_entry.insert(0, "0.00")
         
-        # Fünfte Zeile: Buttons
-        self.add_leistung_button = ttk.Button(tab, text="Leistung Hinzufügen (Alle Ausgewählten)", command=self.add_leistung_gui)
-        self.add_leistung_button.grid(row=4, column=0, columnspan=2, pady=10, sticky='w', padx=5)
+        self.add_leistung_button = ttk.Button(manual_frame, text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
+        self.add_leistung_button.pack(side=tk.LEFT, padx=10)
         
-        # Patient abschließen Button
-        ttk.Button(tab, text="Patient Abschließen (zu Generierung)", 
-                   command=lambda: self.notebook.select(self.tab_generate)).grid(row=4, column=1, columnspan=2, pady=10, sticky='e', padx=5)
+        ttk.Button(manual_frame, text="Zurücksetzen", command=lambda: self._reset_leistung_selection()).pack(side=tk.LEFT, padx=10)
 
+        # Zeile 4: Trennlinie
+        ttk.Separator(tab, orient='horizontal').grid(row=4, column=0, columnspan=3, sticky='ew', pady=5)
 
-        # --- Treeview und Steuerungs-Buttons ---
-        ttk.Label(tab, text="Aktuelle offene Leistungen:").grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky='w')
+        # Zeile 5: Gesamtübersicht
+        self.summary_label = ttk.Label(tab, text="Gesamtsumme: €0.00 | Nicht abgerechnete Leistungen: 0")
+        self.summary_label.grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky='w')
+
+        # Zeile 6: Treeview
+        columns = ('ID', 'Datum', 'Von', 'Bis', 'Beschreibung', 'Betrag')
+        self.leistung_tree = ttk.Treeview(tab, columns=columns, show='headings', selectmode='browse')
+        for col in columns:
+            self.leistung_tree.heading(col, text=col)
         
-        self.leistung_tree = ttk.Treeview(tab, columns=('ID', 'Datum', 'Beschreibung', 'Betrag'), show='headings')
-        self.leistung_tree.heading('ID', text='ID')
-        self.leistung_tree.heading('Datum', text='Datum/Uhrzeit') 
-        self.leistung_tree.heading('Beschreibung', text='Beschreibung')
-        self.leistung_tree.heading('Betrag', text='Betrag (Inkl. KM-Geld)') # Hinweis auf KM-Geld
-        self.leistung_tree.column('ID', width=40, anchor='center') 
-        self.leistung_tree.column('Datum', width=160)
+        # Spaltenbreiten 
+        self.leistung_tree.column('ID', width=40, anchor='center')
+        self.leistung_tree.column('Datum', width=100, anchor='center')
+        self.leistung_tree.column('Von', width=60, anchor='center')
+        self.leistung_tree.column('Bis', width=60, anchor='center')
+        self.leistung_tree.column('Beschreibung', width=300, anchor='w')
         self.leistung_tree.column('Betrag', width=120, anchor='e')
         self.leistung_tree.grid(row=6, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
-        tab.grid_rowconfigure(6, weight=1) 
-        
+
+        tab.grid_rowconfigure(6, weight=1)
+
         control_frame = ttk.Frame(tab)
         control_frame.grid(row=7, column=0, columnspan=3, pady=10, sticky='ew')
         ttk.Button(control_frame, text="Leistung Löschen", command=self.delete_leistung_gui).pack(side=tk.LEFT, padx=10)
@@ -894,31 +1110,29 @@ class HonorarGeneratorApp:
         
         self.leistung_tree.bind('<<TreeviewSelect>>', self.select_leistung_for_edit)
 
-
     def get_current_kilometergeld(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Ruft das Kilometergeld des aktuell ausgewählten Patienten ab."""
         if not self.patient_data:
             return 0.0
-        
         # Kilometergeld ist Spalte 12, Index 11 in patient_data
         km_geld = self.patient_data[11] if len(self.patient_data) > 11 and self.patient_data[11] is not None else 0.0
         return km_geld
 
     def open_teamup_search(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Öffnet einen Dialog zum Suchen und Auswählen von Teamup-Einträgen. Erlaubt Mehrfachauswahl."""
-        
         if not self.patient_data:
             messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst einen Patienten im ersten Tab aus.")
             return
-
-        if not self.selected_leistungs_kurznamen: 
+        if not self.selected_leistungs_kurznamen:
             messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst im Hauptfenster mindestens eine Leistung (Button) aus, die den Terminen zugewiesen werden soll.")
             return
 
         search_window = tk.Toplevel(self.master)
         search_window.title("Teamup Termin-Suche")
-        search_window.geometry("600x500") 
-        
+        search_window.geometry("600x500")
+
         ttk.Label(search_window, text="Suchbegriff (Name/Titel):").pack(pady=5, padx=10, anchor='w')
         search_entry = ttk.Entry(search_window, width=60)
         search_entry.pack(pady=5, padx=10)
@@ -926,124 +1140,80 @@ class HonorarGeneratorApp:
         
         initial_search_term = self.patient_data[2] if self.patient_data and self.patient_data[2] else ""
         if initial_search_term:
-             search_entry.insert(0, initial_search_term)
-        
-        results_tree = ttk.Treeview(search_window, columns=('Titel', 'Datum', 'Von', 'Bis'), 
-                                    selectmode='extended', 
-                                    show='headings')
+            search_entry.insert(0, initial_search_term)
+
+        results_tree = ttk.Treeview(search_window, columns=('Titel', 'Datum', 'Von', 'Bis'), selectmode='extended', show='headings')
         results_tree.heading('Titel', text='Titel')
         results_tree.heading('Datum', text='Datum')
         results_tree.heading('Von', text='Von')
         results_tree.heading('Bis', text='Bis')
-        results_tree.column('Datum', width=90)
+        results_tree.column('Datum', width=90, anchor='center')
         results_tree.column('Von', width=60, anchor='center')
         results_tree.column('Bis', width=60, anchor='center')
-        results_tree.pack(pady=5, padx=10, fill='both', expand=True)
+        results_tree.pack(pady=10, padx=10, expand=True, fill='both')
 
-        self._teamup_event_data = [] 
-
-        def perform_search(search_term_override=None):
-            """Führt die API-Suche aus und füllt das Treeview."""
-            term = search_term_override or search_entry.get().strip()
-            
-            if not term:
-                messagebox.showwarning("Eingabe", "Bitte geben Sie einen Suchbegriff ein.")
-                return
-            
-            for item in results_tree.get_children():
-                results_tree.delete(item)
-            
-            events = search_teamup_events(term)
-            self._teamup_event_data = events
-
-            if not events:
-                results_tree.insert('', tk.END, values=('Keine Termine gefunden.', '', '', ''))
-                return
-
-            for i, (title, date_str, time_from, time_to) in enumerate(events):
-                results_tree.insert('', tk.END, values=(title, date_str, time_from, time_to), iid=i)
-        
-        def search_by_patient_name():
-             if self.patient_data:
-                 patient_lastname = self.patient_data[2]
-                 search_entry.delete(0, tk.END)
-                 search_entry.insert(0, patient_lastname)
-                 perform_search(patient_lastname)
-             else:
-                 messagebox.showwarning("Achtung", "Kein Patient ausgewählt.")
-
-        
-        # --- HILFSFUNKTIONEN FÜR AKTIONEN ---
-        def _get_selected_events_and_validate():
-            """Gibt die Liste der ausgewählten Event-Tupel oder None bei Fehler zurück."""
-            selected_ids = results_tree.selection() 
-            
-            if not selected_ids:
-                messagebox.showwarning("Auswahl", "Bitte wählen Sie mindestens einen Termin aus.")
-                return None
-
-            if not self.selected_leistungs_kurznamen: 
-                messagebox.showwarning("Fehlende Daten", "Bitte wählen Sie im Hauptfenster eine Leistung aus, die für alle Termine verwendet werden soll.")
-                return None
+        def perform_search(term=None):
+            search_term = term if term is not None else search_entry.get().strip()
+            results = search_teamup_events(search_term)
+            results_tree.delete(*results_tree.get_children())
+            if results:
+                for title, date, time_from, time_to in results:
+                    results_tree.insert('', tk.END, values=(title, date, time_from, time_to))
+            else:
+                results_tree.insert('', tk.END, values=(f"Keine Termine für '{search_term}' gefunden.", "", "", ""))
                 
-            selected_events_to_add = []
-            for selected_id in selected_ids:
-                try:
-                    index = int(selected_id)
-                    event_data = self._teamup_event_data[index] 
-                    selected_events_to_add.append(event_data)
-                except (IndexError, ValueError):
-                    continue
-            
-            if not selected_events_to_add:
-                messagebox.showwarning("Fehler", "Keine gültigen Termine zur Übernahme gefunden.")
+        def search_by_patient_name():
+            perform_search(self.patient_data[2])
+
+        def _get_selected_events_and_validate():
+            selected_items = results_tree.selection()
+            if not selected_items:
+                messagebox.showwarning("Achtung", "Bitte wählen Sie Termine aus der Liste aus.")
                 return None
+
+            selected_events_to_add = []
+            for item in selected_items:
+                title, date_str, time_from, time_to = results_tree.item(item, 'values')
+                # Schnelle Validierung der Zeit
+                if not (time_from and time_to and ':' in time_from and ':' in time_to):
+                    messagebox.showwarning("Fehler", "Ausgewählter Eintrag enthält ungültige Zeitangaben.")
+                    return None
+                selected_events_to_add.append((title, date_str, time_from, time_to))
             return selected_events_to_add
-            
+
         def add_selected_events():
             """Fügt ausgewählte Termine HINZU."""
             events = _get_selected_events_and_validate()
             if events:
-                 self.add_multiple_leistungen_from_teamup(events)
-                 search_window.destroy()
+                self.add_multiple_leistungen_from_teamup(events)
+                search_window.destroy()
 
         def replace_selected_events():
             """Ersetzt alle bestehenden Leistungen mit den ausgewählten Terminen."""
-            
             # Zusätzliche Sicherheitsabfrage für das Ersetzen
-            if not messagebox.askyesno("WARNUNG: Leistungen ERSETZEN", 
-                                       "Sind Sie sicher, dass Sie ALLE bestehenden offenen Leistungen dieses Patienten löschen und durch die ausgewählten Termine ERSETZEN möchten?"):
+            if not messagebox.askyesno("WARNUNG: Leistungen ERSETZEN", "Sind Sie sicher, dass Sie ALLE bestehenden offenen Leistungen dieses Patienten löschen und durch die ausgewählten Termine ERSETZEN möchten?"):
                 return
-                
             events = _get_selected_events_and_validate()
             if events:
                 self.replace_all_leistungen_from_teamup(events)
                 search_window.destroy()
 
-
         # --- BUTTONS IM DIALOG ---
         search_button_frame = ttk.Frame(search_window)
         search_button_frame.pack(pady=10)
-
         ttk.Button(search_button_frame, text="Suchen (Manuell)", command=lambda: perform_search()).pack(side=tk.LEFT, padx=10)
+        ttk.Button(search_button_frame, text=f"Nachname ({initial_search_term}) suchen", command=search_by_patient_name, state=tk.NORMAL if self.patient_data else tk.DISABLED).pack(side=tk.LEFT, padx=10)
         
-        ttk.Button(search_button_frame, text=f"Nachname ({initial_search_term}) suchen", 
-                   command=search_by_patient_name, 
-                   state=tk.NORMAL if self.patient_data else tk.DISABLED).pack(side=tk.LEFT, padx=10)
-
         action_frame = ttk.Frame(search_window)
         action_frame.pack(pady=10)
-
-        ttk.Button(action_frame, text="Termin(e) HINZUFÜGEN (Zu den Bestehenden)", 
-                   command=add_selected_events).pack(side=tk.LEFT, padx=10) 
-                   
-        # NEUER BUTTON FÜR ERSETZEN
-        ttk.Button(action_frame, text="WARNUNG: Termin(e) ERSETZEN (Alle Bestehenden Löschen!)", 
-                   command=replace_selected_events).pack(side=tk.LEFT, padx=10)
+        ttk.Button(action_frame, text="Termin(e) HINZUFÜGEN (Zu den Bestehenden)", command=add_selected_events).pack(side=tk.LEFT, padx=10)
         
+        # NEUER BUTTON FÜR ERSETZEN
+        ttk.Button(action_frame, text="WARNUNG: Termin(e) ERSETZEN (Alle Bestehenden Löschen!)", command=replace_selected_events).pack(side=tk.LEFT, padx=10) 
+
         # Doppelklick auf Eintrag soll Hinzufügen auslösen
         results_tree.bind('<Double-1>', lambda event: add_selected_events())
-        
+
         search_window.update_idletasks()
         width = search_window.winfo_width()
         height = search_window.winfo_height()
@@ -1052,76 +1222,60 @@ class HonorarGeneratorApp:
         search_window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
 
         if self.patient_data:
-             perform_search(initial_search_term) 
-
+            perform_search(initial_search_term)
 
     def load_leistung_stammdaten_buttons(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Lädt die Stammdaten und befüllt den Button-Bereich."""
         stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
         self.stammdaten_betraege = stammdaten_dict 
-        
-        # Vorhandene Buttons löschen
+
+        # Lösche vorhandene Buttons
         for widget in self.leistung_button_frame.winfo_children():
             widget.destroy()
-            
-        # Neuen Style für ausgewählte Buttons definieren
-        style = ttk.Style()
-        try:
-            # Versuche, den Style zu konfigurieren, falls er noch nicht existiert
-            style.configure('Selected.TButton', background='lightgreen', foreground='black')
-        except:
-             pass 
 
-        # Neue Buttons erstellen
-        for item in stammdaten_list:
-            kurzname = item.split(" - ", 1)[0]
-            betrag = self.stammdaten_betraege.get(item, 0.0)
+        # Erstelle neue Buttons
+        for i, item in enumerate(stammdaten_list):
+            kurzname = item.split(' - ')[0]
+            betrag = stammdaten_dict[item]
             
-            # Button-Text: Kurzname (Beschreibung) - Betrag
-            button_text = f"{kurzname} (€{betrag:.2f})"
-            
+            # Korrigiert: Verwenden Sie self.ttk_style anstelle von self.master.style
+            if 'Selected.TButton' not in self.ttk_style.theme_names(): 
+                # Definiert den Stil (wird nur einmal ausgeführt)
+                self.ttk_style.configure('Selected.TButton', background='light green', foreground='black')
+
             btn = ttk.Button(self.leistung_button_frame, 
-                             text=button_text, 
-                             command=lambda kn=kurzname: self.toggle_leistung_selection(kn))
+                             text=f"{kurzname} (€{betrag:.2f})", 
+                             command=lambda k=kurzname: self.toggle_leistung_selection(k))
             
-            # Jeder Button in einer neuen Zeile, Sticky West
-            btn.pack(fill='x', padx=5, pady=2, anchor='w')
+            btn.kurzname = kurzname
+            btn.is_selected = False
+            btn.grid(row=i // 5, column=i % 5, padx=5, pady=5, sticky='w')
             
-            # Speichern der Button-Referenz (falls Farbe geändert werden soll)
-            setattr(btn, 'kurzname', kurzname)
-            
-            # NEU: Zustand initial setzen (wird durch load_and_select_last_leistungen aufgerufen)
-            is_selected = kurzname in self.selected_leistungs_kurznamen
-            setattr(btn, 'is_selected', is_selected)
-            if is_selected:
-                btn.config(style='Selected.TButton')
-            else:
-                 btn.config(style='TButton')
-            
-        # Aktualisiere Scrollregion
         self.leistung_button_frame.update_idletasks()
         self.leistung_canvas.config(scrollregion=self.leistung_canvas.bbox("all"))
 
     def load_and_select_last_leistungen(self):
-        """Lädt die zuletzt gespeicherten Kurznamen und wählt die entsprechenden Buttons aus."""
+# ... (Rest der Klasse bleibt unverändert)
+        """Lädt die zuletzt gespeicherte Leistungsauswahl für den Patienten und wählt die Buttons."""
+        if not self.patient_data:
+            return 
+            
+        patient_id = self.patient_data[0]
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
         
-        # 1. Alle aktuellen Auswahlen zurücksetzen
-        self.selected_leistungs_kurznamen.clear()
+        # 1. Letzte Auswahl abrufen (Index 12)
+        cursor.execute("SELECT last_selected_kurznamen FROM patienten WHERE id = ?", (patient_id,))
+        kurznamen_str = cursor.fetchone()[0]
+        conn.close()
         
-        for widget in self.leistung_button_frame.winfo_children():
-            if hasattr(widget, 'is_selected') and widget.is_selected:
-                widget.config(style='TButton')
-                widget.is_selected = False
-                
-        if not self.patient_data or len(self.patient_data) < 13:
-             return
-             
-        # 2. Gespeicherte Kurznamen abrufen (Index 12)
-        # Die Spalte 'last_selected_kurznamen' ist Index 12 im patient_data-Tupel
-        kurznamen_str = self.patient_data[12]
+        # 2. Bestehende Auswahl zurücksetzen
+        self._reset_leistung_selection()
+        
         if not kurznamen_str:
             return
-            
+
         kurznamen_set = set(kurznamen_str.split(','))
         
         # 3. Buttons entsprechend auswählen
@@ -1135,13 +1289,14 @@ class HonorarGeneratorApp:
                     break
 
     def toggle_leistung_selection(self, kurzname):
+# ... (Rest der Klasse bleibt unverändert)
         """Wechselt den Auswahlzustand eines Leistungs-Buttons und passt das Aussehen an."""
         button_ref = None
         for widget in self.leistung_button_frame.winfo_children():
             if hasattr(widget, 'kurzname') and widget.kurzname == kurzname:
                 button_ref = widget
                 break
-                
+        
         if not button_ref:
             return
 
@@ -1149,124 +1304,97 @@ class HonorarGeneratorApp:
             # Abwählen
             self.selected_leistungs_kurznamen.remove(kurzname)
             button_ref.is_selected = False
-            button_ref.config(style='TButton') 
+            button_ref.config(style='TButton')
         else:
             # Auswählen
             self.selected_leistungs_kurznamen.add(kurzname)
-            button_ref.is_selected = True
+            button_ref.is_selected = True 
             # Hervorhebung durch eigenen Style
-            button_ref.config(style='Selected.TButton') 
-
+            # Korrigiert: Verwenden Sie self.ttk_style anstelle von self.master.style
+            self.ttk_style.configure('Selected.TButton', background='light green', foreground='black')
+            button_ref.config(style='Selected.TButton')
 
     def add_leistung_gui(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Fügt neue Leistung(en) in die DB ein, nun mit Uhrzeit und Kilometergeld-Zuschlag."""
         if not self.patient_data:
             messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
             return
-            
-        if not self.selected_leistungs_kurznamen:
-             messagebox.showwarning("Achtung", "Bitte wählen Sie mindestens eine Leistung aus der Liste aus.")
-             return
 
         patient_id = self.patient_data[0]
         datum_str = self.date_entry.get().strip()
         time_from_str = self.time_from_entry.get().strip()
-        time_to_str = self.time_to_entry.get().strip()    
+        time_to_str = self.time_to_entry.get().strip()
         
-        # Manueller Override Betrag
-        manual_betrag_str = self.amount_entry.get().strip().replace(',', '.')
-        
+        manual_betrag, use_manual_override, km_geld = self._get_leistung_insertion_params()
+
         try:
             datetime.datetime.strptime(datum_str, '%d.%m.%Y')
-            datum_db = datetime.datetime.strptime(datum_str, '%d.%m.%Y').strftime('%Y-%m-%d')
-            
             if len(time_from_str) < 5 or len(time_to_str) < 5 or ":" not in time_from_str:
-                 raise ValueError("Uhrzeit muss im Format HH:MM angegeben werden.")
-                 
-            try:
-                 manual_betrag = float(manual_betrag_str)
-                 use_manual_override = manual_betrag > 0.009
-            except ValueError:
-                 use_manual_override = False
-                 manual_betrag = 0.0
-            
+                raise ValueError("Uhrzeit muss im Format HH:MM angegeben werden.")
         except ValueError as e:
-            messagebox.showwarning("Fehler", f"Ungültiges Datum oder Uhrzeit: {e}")
+            messagebox.showerror("Fehler", f"Ungültiges Datums- oder Zeitformat: {e}")
             return
-
-        conn = sqlite3.connect(DATABASE_NAME)
-        cursor = conn.cursor()
-        km_geld = self.get_current_kilometergeld()
+        
         success_count = 0
         
-        for kurzname in self.selected_leistungs_kurznamen:
-            
-            # Beschreibung und Basisbetrag finden
-            full_item = next((item for item in self.stammdaten_betraege if item.startswith(kurzname + ' - ')), None)
-            
-            if full_item:
-                 beschreibung = full_item.split(" - ", 1)[1]
-                 basis_betrag = self.stammdaten_betraege.get(full_item, 0.0) 
-            else:
-                 messagebox.showerror("Fehler", f"Leistung '{kurzname}' nicht in Stammdaten gefunden.")
-                 continue 
-                 
-            # Basisbetrag festlegen (mit Override, falls vorhanden)
-            current_basis_betrag = manual_betrag if use_manual_override else basis_betrag
-            
-            # Endbetrag berechnen
-            end_betrag = current_basis_betrag + km_geld 
-
-            try:
-                 cursor.execute("""
-                 INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
-                 VALUES (?, ?, ?, ?, ?, ?)
-                 """, (patient_id, datum_db, time_from_str, time_to_str, beschreibung, end_betrag))
-                 success_count += 1
-                 
-            except Exception as e:
-                 messagebox.showerror("Fehler", f"Datenbankfehler bei Leistung '{kurzname}': {e}")
-                 break # Stoppe bei erstem Fehler
-            
-        conn.commit()
-        conn.close()
+        if use_manual_override:
+            # Nur eine Leistung (manuelle) hinzufügen
+            kurzname = "Manuell"
+            standard_betrag = manual_betrag
+            if self.add_leistung_to_db(patient_id, datum_str, time_from_str, time_to_str, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld):
+                success_count = 1
         
-        if success_count > 0:
-            # NEU: Speichere die aktuelle Auswahl für diesen Patienten
+        else:
+            # Leistungen basierend auf ausgewählten Buttons hinzufügen
+            if not self.selected_leistungs_kurznamen:
+                messagebox.showwarning("Achtung", "Bitte wählen Sie mindestens eine Leistung aus der Liste aus oder geben Sie einen manuellen Betrag ein.")
+                return
+
+            for kurzname in self.selected_leistungs_kurznamen:
+                # Finde den vollen Stammdaten-Key für den Betrag
+                stammdaten_key = [k for k in self.stammdaten_betraege.keys() if k.startswith(kurzname + ' -')]
+                if not stammdaten_key:
+                    print(f"WARNUNG: Stammdaten für '{kurzname}' nicht gefunden. Überspringe.")
+                    continue
+                
+                standard_betrag = self.stammdaten_betraege[stammdaten_key[0]]
+                
+                if self.add_leistung_to_db(patient_id, datum_str, time_from_str, time_to_str, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld):
+                    success_count += 1
+            
+            # Speichere die aktuelle Auswahl für diesen Patienten
             save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
 
-            messagebox.showinfo("Erfolg", f"{success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
-            
+
+        if success_count > 0:
+            messagebox.showinfo("Erfolg", f"{success_count} Leistung(en) erfolgreich hinzugefügt.")
             self._reset_leistung_selection()
             self.update_leistung_list()
-            
-        elif success_count == 0:
-             # print statt messagebox
-             print("INFO: Es konnten keine neuen Leistungen hinzugefügt werden.")
-
+        elif success_count == 0 and not use_manual_override:
+            messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (Prüfen Sie, ob Stammdaten fehlen).")
 
     def add_multiple_leistungen_from_teamup(self, events_list):
+# ... (Rest der Klasse bleibt unverändert)
         """Fügt mehrere Leistungen (Teamup) hinzu und speichert die Auswahl."""
         if not self.patient_data or not self.selected_leistungs_kurznamen:
             messagebox.showwarning("Fehler", "Kein Patient oder keine Leistung ausgewählt. Vorgang abgebrochen.")
             return
 
         patient_id = self.patient_data[0]
-        
         # Hier wird die Kernlogik aufgerufen
-        total_success_count = self._insert_multiple_leistungen(patient_id, events_list)
-        
+        total_success_count = self._insert_multiple_leistungen(patient_id, events_list) 
+
         if total_success_count > 0:
             # Speichere die aktuelle Auswahl für diesen Patienten
             save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
-
             messagebox.showinfo("Erfolg", f"{total_success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
-            
             self._reset_leistung_selection()
             self.update_leistung_list()
         # Keine MessageBox bei 0, da das System das intern loggen kann.
 
     def replace_all_leistungen_from_teamup(self, events_list):
+# ... (Rest der Klasse bleibt unverändert)
         """Löscht alle bestehenden Leistungen des Patienten und fügt die ausgewählten Teamup-Termine als neue Leistungen ein."""
         if not self.patient_data or not self.selected_leistungs_kurznamen:
             print("FEHLER: Kein Patient oder keine Leistung ausgewählt. Vorgang abgebrochen.")
@@ -1274,7 +1402,7 @@ class HonorarGeneratorApp:
 
         patient_id = self.patient_data[0]
         patient_name = f"{self.patient_data[1]} {self.patient_data[2]}"
-        
+
         # 1. Lösche alle bestehenden Leistungen
         if not self._delete_all_patient_leistungen(patient_id):
             messagebox.showerror("Fehler", f"FEHLER: Fehler beim Löschen bestehender Leistungen für Patient {patient_name}. Neue Termine wurden NICHT eingefügt.")
@@ -1282,96 +1410,91 @@ class HonorarGeneratorApp:
 
         # 2. Füge neue Leistungen ein
         insertion_success_count = self._insert_multiple_leistungen(patient_id, events_list)
-        
+
         if insertion_success_count > 0:
             # Speichere die aktuelle Auswahl für diesen Patienten
             save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
-
-            print(f"INFO: {insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
-            
-            self._reset_leistung_selection() 
+            messagebox.showinfo("Erfolg", f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
+            self._reset_leistung_selection()
             self.update_leistung_list()
         else:
+            messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
             print("INFO: Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
 
-
     def update_leistung_list(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Aktualisiert die Liste der Leistungen im Treeview."""
-        self.update_patient_info() 
-
         if not self.patient_data:
-            for item in self.leistung_tree.get_children():
-                self.leistung_tree.delete(item)
-            self.leistung_tree.insert('', tk.END, values=('---', 'Bitte Patient auswählen', '---', '---'))
+            self.leistung_tree.delete(*self.leistung_tree.get_children())
+            self.summary_label.config(text="Gesamtsumme: €0.00 | Nicht abgerechnete Leistungen: 0")
             return
 
         patient_id = self.patient_data[0]
-        
-        for item in self.leistung_tree.get_children():
-            self.leistung_tree.delete(item)
+        leistungen = get_patient_leistungen(patient_id)
 
-        leistungen = get_patient_leistungen(patient_id) 
-        
-        if not leistungen:
-            self.leistung_tree.insert('', tk.END, values=('---', 'Keine offenen Leistungen gefunden', '---', '---'))
-            return
+        self.leistung_tree.delete(*self.leistung_tree.get_children())
+        total_sum = 0.0
 
-        total_sum = 0
-        for leistung_id, datum_db, uhrzeit_von, uhrzeit_bis, beschreibung, betrag in leistungen: 
+        for leistung in leistungen:
+            leistung_id, datum_db, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag = leistung
             datum_formatiert = datetime.datetime.strptime(datum_db, '%Y-%m-%d').strftime('%d.%m.%Y')
             
-            datum_uhrzeit_anzeige = f"{datum_formatiert} ({uhrzeit_von}-{uhrzeit_bis})" 
-            
-            betrag_formatiert = f"€ {betrag:.2f}"
-            
-            self.leistung_tree.insert('', tk.END, values=(leistung_id, datum_uhrzeit_anzeige, beschreibung, betrag_formatiert), iid=leistung_id)
-            total_sum += betrag
-            
-        self.leistung_tree.insert('', tk.END, values=('', '---', 'Gesamtbetrag (offen) ---', f"€ {total_sum:.2f}"), tags=('total',))
-        self.leistung_tree.tag_configure('total', font=('Helvetica', 10, 'bold'))
+            # Darstellung des Betrags (bereits inkl. KM-Geld)
+            betrag_str = f"€{einzelbetrag:.2f}"
+            total_sum += einzelbetrag
+
+            self.leistung_tree.insert('', tk.END, iid=leistung_id, values=(
+                leistung_id, datum_formatiert, uhrzeit_von, uhrzeit_bis, beschreibung, betrag_str
+            ))
+
+        self.summary_label.config(text=f"Gesamtsumme: €{total_sum:.2f} | Nicht abgerechnete Leistungen: {len(leistungen)}")
 
     def select_leistung_for_edit(self, event):
-        """Speichert die ID der ausgewählten Leistung für die Bearbeitung/Löschung."""
-        # Sicherstellen, dass die Auswahl keine 'total'-Zeile ist
-        focus_id = self.leistung_tree.focus()
-        if focus_id and focus_id != '':
-            item_values = self.leistung_tree.item(focus_id, 'values')
-            if item_values and item_values[0] != '---' and item_values[0] != '':
-                 self.selected_leistung_id = focus_id
+# ... (Rest der Klasse bleibt unverändert)
+        """Speichert die ID der ausgewählten Leistung."""
+        selected_item = self.leistung_tree.focus()
+        if selected_item:
+            self.selected_leistung_id = self.leistung_tree.item(selected_item)['values'][0]
+        else:
+            self.selected_leistung_id = None
         
+        # Setze den Button zurück, falls nichts ausgewählt ist
+        if not self.selected_leistung_id:
+            self.add_leistung_button.config(text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
+
+
     def load_leistung_for_edit(self):
-        """Lädt ausgewählte Leistung in die Eingabefelder zum Bearbeiten."""
+# ... (Rest der Klasse bleibt unverändert)
+        """Lädt die ausgewählte Leistung in die Eingabefelder zum Bearbeiten."""
         if not hasattr(self, 'selected_leistung_id') or not self.selected_leistung_id:
-             messagebox.showwarning("Achtung", "Bitte wählen Sie eine Leistung aus der Liste aus.")
-             return
-             
+            messagebox.showwarning("Achtung", "Bitte wählen Sie eine Leistung aus der Liste aus.")
+            return
+
         leistung_id = self.selected_leistung_id
-        
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
         cursor.execute("""
         SELECT datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag 
         FROM leistungen 
-        WHERE id = ?
+        WHERE id = ? 
         """, (leistung_id,))
         res = cursor.fetchone()
         conn.close()
 
         if not res:
-             messagebox.showerror("Fehler", f"Leistung ID {leistung_id} konnte nicht in der Datenbank gefunden werden.")
-             return
+            messagebox.showerror("Fehler", f"Leistung ID {leistung_id} konnte nicht in der Datenbank gefunden werden.")
+            return
 
         # [0]datum_db, [1]uhrzeit_von, [2]uhrzeit_bis, [3]beschreibung, [4]einzelbetrag (inkl. KM-Geld)
-        
         # Um den Basis-Betrag anzuzeigen, müssen wir das KM-Geld wieder abziehen:
         km_geld = self.get_current_kilometergeld()
         basis_betrag = res[4] - km_geld
-        
+
         datum_formatiert = datetime.datetime.strptime(res[0], '%Y-%m-%d').strftime('%d.%m.%Y')
         uhrzeit_von = res[1]
         uhrzeit_bis = res[2]
-        beschreibung = res[3]
-        
+        # beschreibung = res[3] # Beschreibung wird beim Bearbeiten nicht benötigt, da sie aus den Stammdaten kommt
+
         betrag_str = f"{basis_betrag:.2f}"
 
         self.date_entry.delete(0, tk.END)
@@ -1384,79 +1507,65 @@ class HonorarGeneratorApp:
         self.amount_entry.insert(0, betrag_str)
         
         # NEU: Beim Bearbeiten alle Buttons abwählen, da der Betrag manuell gesetzt wird
-        self._reset_leistung_selection()
-             
+        self._reset_leistung_selection() 
+
         # Button-Funktion auf Update umstellen
         self.add_leistung_button.config(text=f"Leistung Aktualisieren (ID: {leistung_id})", command=lambda: self.update_leistung_gui(leistung_id))
         print(f"INFO: Leistung ID {leistung_id} zum Bearbeiten geladen. Basisbetrag (€{basis_betrag:.2f}) angezeigt.") # messagebox entfernt
 
+
     def update_leistung_gui(self, leistung_id):
+# ... (Rest der Klasse bleibt unverändert)
         """Aktualisiert eine bestehende Leistung, nun mit Uhrzeit und Kilometergeld-Zuschlag."""
         datum_str = self.date_entry.get().strip()
         time_from_str = self.time_from_entry.get().strip()
         time_to_str = self.time_to_entry.get().strip()
-        betrag_str = self.amount_entry.get().strip().replace(',', '.') # Basisbetrag
-        
-        # Wir müssen die Beschreibung des Eintrags mit der ID abrufen:
-        conn_temp = sqlite3.connect(DATABASE_NAME)
-        cursor_temp = conn_temp.cursor()
-        cursor_temp.execute("SELECT beschreibung FROM leistungen WHERE id = ?", (leistung_id,))
-        res = cursor_temp.fetchone()
-        conn_temp.close()
-        
-        if not res:
-            messagebox.showerror("Fehler", "Ursprüngliche Leistungsbeschreibung konnte nicht abgerufen werden.")
-            return
+        betrag_str = self.amount_entry.get().strip().replace(',', '.') 
 
-        beschreibung = res[0] # Behalte die ursprüngliche Beschreibung bei
+        km_geld = self.get_current_kilometergeld()
         
         try:
-            datetime.datetime.strptime(datum_str, '%d.%m.%Y')
             datum_db = datetime.datetime.strptime(datum_str, '%d.%m.%Y').strftime('%Y-%m-%d')
-            basis_betrag = float(betrag_str)
-            
-            # --- Kilometergeld HINZUFÜGEN ---
-            km_geld = self.get_current_kilometergeld()
-            end_betrag = basis_betrag + km_geld
-            
+            betrag_basis = float(betrag_str)
+            end_betrag = betrag_basis + km_geld
+
             if len(time_from_str) < 5 or len(time_to_str) < 5 or ":" not in time_from_str:
-                 raise ValueError("Uhrzeit muss im Format HH:MM angegeben werden.")
-                 
-        except ValueError as e:
-            messagebox.showwarning("Fehler", f"Ungültiges Datum, Betrag oder Uhrzeit: {e}")
-            return
+                raise ValueError("Uhrzeit muss im Format HH:MM angegeben werden.")
 
-        conn = sqlite3.connect(DATABASE_NAME)
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute("""
-            UPDATE leistungen 
-            SET datum = ?, uhrzeit_von = ?, uhrzeit_bis = ?, beschreibung = ?, einzelbetrag = ?
-            WHERE id = ?
-            """, (datum_db, time_from_str, time_to_str, beschreibung, end_betrag, leistung_id))
+            conn = sqlite3.connect(DATABASE_NAME)
+            cursor = conn.cursor()
             
+            # Aktualisiere die Beschreibung, da es sich nun um eine manuelle Bearbeitung handelt
+            beschreibung = f"Manuelle Korrektur (ID {leistung_id})"
+
+            cursor.execute("""
+            UPDATE leistungen
+            SET datum=?, uhrzeit_von=?, uhrzeit_bis=?, beschreibung=?, einzelbetrag=?
+            WHERE id=?
+            """, (datum_db, time_from_str, time_to_str, beschreibung, end_betrag, leistung_id))
             conn.commit()
-            print(f"INFO: Leistung ID {leistung_id} erfolgreich aktualisiert (Gesamt: €{end_betrag:.2f}).") # messagebox entfernt
+
+            messagebox.showinfo("Erfolg", f"Leistung ID {leistung_id} erfolgreich aktualisiert.")
             self.update_leistung_list()
             
-            # Button zurücksetzen und Auswahl zurücksetzen
-            self._reset_leistung_selection()
-            self.add_leistung_button.config(text="Leistung Hinzufügen (Alle Ausgewählten)", command=self.add_leistung_gui) 
+            # Setze den Button zurück auf Hinzufügen-Modus
+            self.add_leistung_button.config(text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
+            self.selected_leistung_id = None
             
+        except ValueError as e:
+            messagebox.showerror("Fehler", f"Ungültiges Datums-, Zeit- oder Betragsformat: {e}")
         except Exception as e:
             messagebox.showerror("Fehler", f"Datenbankfehler beim Aktualisieren: {e}")
-            
-        conn.close()
+            conn.close()
 
     def delete_leistung_gui(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Löscht die aktuell ausgewählte Leistung."""
         if not hasattr(self, 'selected_leistung_id') or not self.selected_leistung_id:
-             messagebox.showwarning("Achtung", "Bitte wählen Sie die zu löschende Leistung aus der Liste aus.")
-             return
+            messagebox.showwarning("Achtung", "Bitte wählen Sie die zu löschende Leistung aus der Liste aus.")
+            return
 
         leistung_id = self.selected_leistung_id
-        
         if messagebox.askyesno("Bestätigen", f"Sind Sie sicher, dass Sie die Leistung ID {leistung_id} löschen möchten?"):
             conn = sqlite3.connect(DATABASE_NAME)
             cursor = conn.cursor()
@@ -1471,6 +1580,7 @@ class HonorarGeneratorApp:
                 conn.close()
 
     def delete_all_leistungen_gui(self):
+# ... (Rest der Klasse bleibt unverändert)
         """Löscht ALLE Leistungen des aktuell ausgewählten Patienten."""
         if not self.patient_data:
             messagebox.showwarning("Achtung", "Kein Patient ausgewählt.")
@@ -1478,89 +1588,81 @@ class HonorarGeneratorApp:
 
         patient_id = self.patient_data[0]
         patient_name = f"{self.patient_data[1]} {self.patient_data[2]}"
-        
         if messagebox.askyesno("WARNUNG", f"Sind Sie sicher, dass Sie ALLE Leistungen für Patient '{patient_name}' (ID: {patient_id}) löschen möchten? Dieser Schritt kann nicht rückgängig gemacht werden."):
             if self._delete_all_patient_leistungen(patient_id):
                 print(f"INFO: Alle Leistungen für Patient '{patient_name}' wurden gelöscht.") # messagebox entfernt
                 self.update_leistung_list()
 
-
     # --- 4. Stammdaten Leistungen Tab ---
     def setup_stammdaten_tab(self, tab):
+# ... (Rest der Klasse bleibt unverändert)
         fields = ["Kurzname (Eindeutig)", "Beschreibung", "Standard Betrag (€)"]
         self.stammdaten_entries = {}
 
         for i, field in enumerate(fields):
             ttk.Label(tab, text=f"{field}:").grid(row=i, column=0, padx=5, pady=5, sticky='w')
-            entry = ttk.Entry(tab, width=40)
-            entry.grid(row=i, column=1, padx=5, pady=5, sticky='we')
+            entry = ttk.Entry(tab, width=60)
+            entry.grid(row=i, column=1, padx=5, pady=5, sticky='ew')
             self.stammdaten_entries[field] = entry
-            
-        ttk.Button(tab, text="Leistung Speichern / Aktualisieren", command=self.add_stammdaten_leistung).grid(row=len(fields), column=0, columnspan=2, pady=10)
 
-        ttk.Label(tab, text="Bestehende Stammdaten (Klicken zum Bearbeiten):").grid(row=len(fields)+1, column=0, columnspan=2, padx=5, pady=5, sticky='w')
+        ttk.Button(tab, text="Speichern/Aktualisieren", command=self.save_stammdaten).grid(row=3, column=0, columnspan=2, pady=10)
         
-        self.stammdaten_tree = ttk.Treeview(tab, columns=('Kurzname', 'Beschreibung', 'Betrag'), show='headings')
-        self.stammdaten_tree.heading('Kurzname', text='Kurzname')
-        self.stammdaten_tree.heading('Beschreibung', text='Beschreibung')
-        self.stammdaten_tree.heading('Betrag', text='Betrag')
-        self.stammdaten_tree.column('Kurzname', width=100)
-        self.stammdaten_tree.column('Betrag', width=100, anchor='e')
-        self.stammdaten_tree.grid(row=len(fields)+2, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
+        ttk.Separator(tab, orient='horizontal').grid(row=4, column=0, columnspan=2, sticky='ew', pady=10)
+
+        self.stammdaten_listbox = tk.Listbox(tab, height=10, width=80)
+        self.stammdaten_listbox.grid(row=5, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
+        self.stammdaten_listbox.bind('<<ListboxSelect>>', self.select_stammdaten_from_list)
+
+        control_frame = ttk.Frame(tab)
+        control_frame.grid(row=6, column=0, columnspan=2, pady=10, sticky='ew')
+        ttk.Button(control_frame, text="Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT, padx=10)
         
-        self.stammdaten_tree.bind('<<TreeviewSelect>>', self.load_stammdaten_for_edit)
-        
-        tab.grid_rowconfigure(len(fields)+2, weight=1)
-        
-        self.update_stammdaten_list()
-        
+        tab.grid_rowconfigure(5, weight=1)
+
     def update_stammdaten_list(self):
-        """Aktualisiert das Treeview mit allen Stammdaten."""
-        for item in self.stammdaten_tree.get_children():
-            self.stammdaten_tree.delete(item)
+# ... (Rest der Klasse bleibt unverändert)
+        """Aktualisiert die Liste der Stammdaten."""
+        self.stammdaten_listbox.delete(0, tk.END)
+        stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
+        for item in stammdaten_list:
+            betrag = stammdaten_dict[item]
+            self.stammdaten_listbox.insert(tk.END, f"{item} (Standard: €{betrag:.2f})")
             
-        conn = sqlite3.connect(DATABASE_NAME)
-        cursor = conn.cursor()
-        cursor.execute("SELECT kurzname, beschreibung, standard_betrag FROM stammdaten_leistungen ORDER BY kurzname")
-        results = cursor.fetchall()
-        conn.close()
+        self.load_leistung_stammdaten_buttons() # Update auch die Buttons
 
-        for kurzname, beschreibung, betrag in results:
-             self.stammdaten_tree.insert('', tk.END, values=(kurzname, beschreibung, f"€ {betrag:.2f}"), iid=kurzname)
-             
-        self.load_leistung_stammdaten_buttons() 
+    def select_stammdaten_from_list(self, event):
+# ... (Rest der Klasse bleibt unverändert)
+        """Lädt die ausgewählte Stammdatenleistung in die Eingabefelder."""
+        selection = self.stammdaten_listbox.curselection()
+        if selection:
+            item_text = self.stammdaten_listbox.get(selection[0])
+            # Extrahiere Kurzname, Beschreibung und Betrag
+            match = item_text.split(' (Standard: ')
+            full_desc = match[0]
+            betrag_str = match[1].replace('€', '').replace(')', '')
+            
+            kurzname = full_desc.split(' - ')[0]
+            beschreibung = full_desc.split(' - ')[1]
+            
+            self.stammdaten_entries["Kurzname (Eindeutig)"].delete(0, tk.END)
+            self.stammdaten_entries["Kurzname (Eindeutig)"].insert(0, kurzname)
+            self.stammdaten_entries["Beschreibung"].delete(0, tk.END)
+            self.stammdaten_entries["Beschreibung"].insert(0, beschreibung)
+            self.stammdaten_entries["Standard Betrag (€)"].delete(0, tk.END)
+            self.stammdaten_entries["Standard Betrag (€)"].insert(0, betrag_str)
 
-    def load_stammdaten_for_edit(self, event):
-        """Lädt ausgewählte Stammdaten in die Eingabefelder zum Bearbeiten."""
-        selected_item = self.stammdaten_tree.focus() 
-        
-        if selected_item:
-            kurzname = selected_item 
-            
-            conn = sqlite3.connect(DATABASE_NAME)
-            cursor = conn.cursor()
-            cursor.execute("SELECT beschreibung, standard_betrag FROM stammdaten_leistungen WHERE kurzname = ?", (kurzname,))
-            res = cursor.fetchone()
-            conn.close()
-            
-            if res:
-                self.stammdaten_entries["Kurzname (Eindeutig)"].delete(0, tk.END)
-                self.stammdaten_entries["Kurzname (Eindeutig)"].insert(0, kurzname)
-                self.stammdaten_entries["Beschreibung"].delete(0, tk.END)
-                self.stammdaten_entries["Beschreibung"].insert(0, res[0])
-                self.stammdaten_entries["Standard Betrag (€)"].delete(0, tk.END)
-                self.stammdaten_entries["Standard Betrag (€)"].insert(0, f"{res[1]:.2f}")
-                
-    def add_stammdaten_leistung(self):
-        """Fügt neue Leistung hinzu oder aktualisiert bestehende."""
+
+    def save_stammdaten(self):
+# ... (Rest der Klasse bleibt unverändert)
+        """Speichert oder aktualisiert Stammdaten."""
         kurzname = self.stammdaten_entries["Kurzname (Eindeutig)"].get().strip()
         beschreibung = self.stammdaten_entries["Beschreibung"].get().strip()
         betrag_str = self.stammdaten_entries["Standard Betrag (€)"].get().strip().replace(',', '.')
-        
+
         if not kurzname or not beschreibung or not betrag_str:
             messagebox.showwarning("Achtung", "Alle Felder müssen ausgefüllt sein.")
             return
-            
+
         try:
             betrag = float(betrag_str)
         except ValueError:
@@ -1600,6 +1702,30 @@ class HonorarGeneratorApp:
             messagebox.showerror("Fehler", f"Datenbankfehler: {e}")
             
         conn.close()
+
+    def delete_stammdaten(self):
+# ... (Rest der Klasse bleibt unverändert)
+        """Löscht die ausgewählte Stammdatenleistung."""
+        selection = self.stammdaten_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Achtung", "Bitte wählen Sie eine Leistung aus der Liste aus.")
+            return
+
+        item_text = self.stammdaten_listbox.get(selection[0])
+        kurzname = item_text.split(' - ')[0]
+
+        if messagebox.askyesno("Bestätigen", f"Sind Sie sicher, dass Sie die Stammdatenleistung '{kurzname}' löschen möchten?"):
+            conn = sqlite3.connect(DATABASE_NAME)
+            cursor = conn.cursor()
+            try:
+                cursor.execute("DELETE FROM stammdaten_leistungen WHERE kurzname = ?", (kurzname,))
+                conn.commit()
+                messagebox.showinfo("Erfolg", f"Stammdatenleistung '{kurzname}' erfolgreich gelöscht.")
+                self.update_stammdaten_list()
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Fehler beim Löschen: {e}")
+            finally:
+                conn.close()
 
 
 # --- START DER ANWENDUNG ---

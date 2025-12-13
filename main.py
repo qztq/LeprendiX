@@ -80,7 +80,8 @@ def check_for_update(splash):
 
 def update_application(release_info, splash):
     """
-    Lädt das Release-Asset herunter und entpackt es (ohne DB-Datei).
+    Lädt das Release-Asset herunter, entpackt es direkt in das aktuelle Verzeichnis
+    und stellt die DB-Datei wieder her (falls sie gesichert werden musste).
     """
     
     assets = release_info.get('assets', [])
@@ -88,35 +89,70 @@ def update_application(release_info, splash):
         messagebox.showerror("Fehler", "Kein Asset im neuestem Release gefunden.")
         return
 
+    # Download URL für das Asset (z.B. latest.zip)
     download_url = assets[0]['browser_download_url'] 
     
     splash.update_label.config(text="Lade Update herunter...")
     splash.update()
 
+    # --- 1. Vorbereitung & Temporäres Speichern der DB ---
+    db_backup_needed = os.path.exists(DB_FILE_TO_EXCLUDE)
+    db_temp_path = DB_FILE_TO_EXCLUDE + ".temp_backup"
+
+    if db_backup_needed:
+        try:
+            # Kopiere die DB, bevor das Update das Original möglicherweise überschreibt/löscht
+            shutil.copy2(DB_FILE_TO_EXCLUDE, db_temp_path)
+            print(f"INFO: {DB_FILE_TO_EXCLUDE} wurde temporär gesichert.")
+        except Exception as e:
+            # Wenn die Sicherung fehlschlägt, ist die Gefahr des Datenverlusts hoch.
+            messagebox.showwarning("Warnung", f"Konnte {DB_FILE_TO_EXCLUDE} nicht sichern. Update wird NICHT durchgeführt: {e}")
+            return # Update abbrechen, um Datenverlust zu verhindern
+        
     try:
-        # Download der ZIP-Datei
+        # --- 2. Download der ZIP-Datei ---
         response = requests.get(download_url, stream=True, timeout=300)
         response.raise_for_status()
         with open(TEMP_ZIP_NAME, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
 
-        # Entpacken des Updates
+        # --- 3. Entpacken des Updates ---
         splash.update_label.config(text="Entpacke Dateien...")
         splash.update()
         
         with zipfile.ZipFile(TEMP_ZIP_NAME, 'r') as zip_ref:
-            for member in zip_ref.namelist():
-                # Ignoriere die Datenbank-Datei beim Entpacken
-                if not member.endswith(DB_FILE_TO_EXCLUDE) and not member.endswith('/'):
-                    target_path = os.path.join(os.getcwd(), member.split('/', 1)[-1] if '/' in member else member)
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    source = zip_ref.open(member)
-                    target = open(target_path, "wb")
-                    with source, target:
-                        shutil.copyfileobj(source, target)
+            
+            members = zip_ref.namelist()
+            
+            for member in members:
+                # 3a. Ignoriere die Datenbank-Datei im ZIP beim Entpacken
+                if member == DB_FILE_TO_EXCLUDE or member.endswith('/'):
+                    print(f"INFO: Ignoriere {member} (DB oder Verzeichnis).")
+                    continue
+                
+                # 3b. Entpacke alle anderen Dateien direkt ins aktuelle Verzeichnis
+                # target_path ist der Dateiname im aktuellen Ordner
+                target_path = os.path.join(os.getcwd(), os.path.basename(member))
+                
+                # Stelle sicher, dass der Zielordner existiert (falls es Unterverzeichnisse gibt)
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                
+                # Extrahiere die Datei
+                source = zip_ref.open(member)
+                target = open(target_path, "wb")
+                with source, target:
+                    shutil.copyfileobj(source, target)
         
+        # --- 4. Aufräumen des Downloads ---
         os.remove(TEMP_ZIP_NAME)
+        
+        # --- 5. Wiederherstellung der DB ---
+        if db_backup_needed and os.path.exists(db_temp_path):
+            # Verschiebe die gesicherte DB zurück, um sie wiederherzustellen (überschreibt evtl. leere DB aus dem Update-Prozess)
+            shutil.move(db_temp_path, DB_FILE_TO_EXCLUDE)
+            print(f"INFO: {DB_FILE_TO_EXCLUDE} wurde erfolgreich wiederhergestellt.")
+
         messagebox.showinfo("Update erfolgreich", "Die Anwendung wurde erfolgreich aktualisiert und wird jetzt neu gestartet.")
         # Beende das aktuelle Programm und starte es neu
         python = sys.executable
@@ -125,8 +161,18 @@ def update_application(release_info, splash):
     except Exception as e:
         messagebox.showerror("Update Fehler", f"Fehler beim Aktualisieren: {e}")
     finally:
+        # cleanup bei Fehlern
         if os.path.exists(TEMP_ZIP_NAME):
             os.remove(TEMP_ZIP_NAME)
+        # Lösche den DB-Backup nur, wenn die Original-DB wiederhergestellt wurde oder der Fehler früh auftrat
+        if 'db_temp_path' in locals() and os.path.exists(db_temp_path):
+             # Falls der Fehler nach der Sicherung, aber vor der Wiederherstellung auftrat, lösche den Backup.
+             # Im Erfolgsfall wurde er bereits nach DB_FILE_TO_EXCLUDE verschoben.
+             if not os.path.exists(DB_FILE_TO_EXCLUDE) or os.stat(db_temp_path).st_mtime == os.stat(DB_FILE_TO_EXCLUDE).st_mtime:
+                 # Nur löschen, wenn der Backup nicht das Original ist oder das Original bereits wiederhergestellt wurde (gleiche Zeitstempel)
+                 pass 
+             else:
+                 os.remove(db_temp_path)
 
 
 # --- DB SETUP FUNKTIONEN (Unverändert) ---

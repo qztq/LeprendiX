@@ -58,6 +58,34 @@ def setup_database():
         standard_betrag REAL NOT NULL
     )
     """)
+
+    # db_setup.py - Ergänzungen in setup_database()
+
+    # 4. Einstellungen-Tabelle erstellen (für Honorarnoten-Folgenummer)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS einstellungen (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """)
+
+    # Optional: Standard-Einstellungen einfügen (nur wenn die Tabelle leer ist)
+    try:
+        cursor.execute("SELECT COUNT(*) FROM einstellungen WHERE key = 'rechnung_folgenummer'")
+        if cursor.fetchone()[0] == 0:
+            import datetime
+            now = datetime.datetime.now()
+            # Fügen Sie die Zeilen nur ein, wenn sie nicht existieren
+            initial_settings = [
+                ('rechnung_jahr', str(now.year)),
+                ('rechnung_monat', str(now.month).zfill(2)), # Monat mit führender Null
+                ('rechnung_folgenummer', '0'), # Start bei 0, da die erste generierte Rechnung 1 sein wird
+            ]
+            cursor.executemany("INSERT OR IGNORE INTO einstellungen (key, value) VALUES (?, ?)", initial_settings)
+            print("Standard-Einstellungen für Rechnungsnummern eingefügt.")
+            
+    except Exception as e:
+         print(f"Fehler beim Einfügen von Standard-Einstellungen: {e}")
     
     # Optional: Spalte zu bestehenden DBs hinzufügen
     try:
