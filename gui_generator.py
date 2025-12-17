@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import sqlite3
 import datetime
+from typing import Self
 from docx import Document
 import os
 import requests 
@@ -15,13 +16,14 @@ import tkinter
 from docx.enum.text import WD_UNDERLINE
 from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
 from docx.shared import Inches, Pt, Twips
+import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 
 # Entfernt: from log_data import log_patient_name 
 
 # --- KONFIGURATION ---
 DATABASE_NAME = 'patienten.db'
 TEMPLATE_FILE = 'honorar_vorlage.docx' 
-OUTPUT_FOLDER = 'Honorarnoten/' # Basisordner
+OUTPUT_FOLDER = 'C:\\Users\\tobia\\Desktop' # Basisordner
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -231,6 +233,8 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
     Sucht Teamup-Kalendereinträge basierend auf dem Titel/Notizen.
     """
     
+
+
     clean_api_key = TEAMUP_API_KEY.strip()
     
     headers = {
@@ -297,7 +301,7 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
 
 # gui_generator.py: Die globale Funktion fill_template (KORRIGIERTE VERSION MIT SEITENUMBRUCH-SCHUTZ)
 
-def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block): 
+def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block, ausstellungs_datum): 
     """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
     
     # Imports müssen am Anfang der Datei sein, aber wir stellen sicher, dass Pt verfügbar ist
@@ -317,7 +321,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     # Annahme: get_patient_leistungen_for_template, TEMPLATE_FILE, OUTPUT_FOLDER sind hier verfügbar
     leistungen_liste = get_patient_leistungen_for_template(patient_id)
     
-    heute = datetime.date.today().strftime("%d.%m.%Y")
+    heute = ausstellungs_datum # Verwendet das übergebene Datum
     
     try:
         document = Document(TEMPLATE_FILE)
@@ -384,35 +388,35 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         del replacements['{{Rechnungsnummer}}']
         
     if add_gemeinde_block:
-        gemeinde_lines = [
-            "Gemeinde Wiener Neudorf",
-            "Europaplatz 2",
-            "2351 Wiener Neudorf"
-        ]
-        
-        target_index = 2
-        
+        # 1. Ziel-Index festlegen (direkt unter der Rechnungsnummer)
+        target_index = 1 
         try:
-            next_paragraph_target = document.paragraphs[target_index] 
+            target_p = document.paragraphs[target_index]
         except IndexError:
-            next_paragraph_target = document.paragraphs[-1]
-            
-        for line in reversed(gemeinde_lines):
-            p_new = next_paragraph_target.insert_paragraph_before(line)
-            
-            p_new.paragraph_format.space_before = Pt(0)
-            p_new.paragraph_format.space_after = Pt(0)
-            p_new.paragraph_format.line_spacing = 1.0
+            target_p = document.paragraphs[-1]
 
-            if p_new.runs:
-                 run = p_new.runs[0]
-                 run.bold = True                    
-                 run.font.size = Pt(12)
-            else:
-                run = p_new.add_run(line)
-                run.bold = True
-                run.font.size = Pt(12)
+        # 2. Einen neuen Absatz genau dort einfügen
+        new_p = target_p.insert_paragraph_before()
+        new_p.paragraph_format.line_spacing = 1.0
+        new_p.paragraph_format.space_before = Pt(0)
+        new_p.paragraph_format.space_after = Pt(0)
 
+        # 3. Den Inhalt zusammenbauen:
+        # Eine Leerzeile oben (\n)
+        # Dann die Adresse
+        # Dann vier Leerzeilen unten (\n\n\n\n)
+        full_text = (
+            "\n\n\n" +
+            "Gemeinde Wiener Neudorf\n" +
+            "Europaplatz 2\n" +
+            "2351 Wiener Neudorf" +
+            "\n\n\n\n\n"
+        )
+
+        # 4. Den Text dem Absatz hinzufügen und fett/12pt machen
+        run = new_p.add_run(full_text)
+        run.bold = True
+        run.font.size = Pt(12)
 
     # --- 2. Dynamische Leistungsblock-Logik und restliche Ersetzung (mit Seitenumbruch-Schutz) ---
     
@@ -681,13 +685,19 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
 class HonorarGeneratorApp:
     def __init__(self, master):
         self.master = master
-        master.title("Honorarnoten-Generator")
-        master.geometry("900x700")
-        
+        self.root = root
+        master.title("LeprendiX")
+        master.geometry("900x720")
+                
         self.patient_data = None  
         self.stammdaten_betraege = {} 
         self.selected_leistung_id = None 
         self.selected_leistungs_kurznamen = set() # Für die Mehrfachauswahl-Buttons
+
+        # In HonorarGeneratorApp.__init__ (nach self.add_gemeinde_block_var = ...)
+        now = datetime.datetime.now()
+        self.selected_invoice_month = tk.StringVar(value=f"{now.month:02d}")
+        self.selected_invoice_year = tk.StringVar(value=str(now.year))
 
         self.notebook = ttk.Notebook(master)
         self.notebook.pack(pady=10, padx=10, expand=True, fill="both")
@@ -725,7 +735,10 @@ class HonorarGeneratorApp:
         self.setup_generate_tab(self.tab_generate)
         
         self.update_patient_info() 
-        self.load_leistung_stammdaten_buttons() 
+        self.load_leistung_stammdaten_buttons()
+
+        self.search_entry.focus_set()
+        self.root.bind('<Return>', self.handle_global_enter)
 
 
    
@@ -842,6 +855,7 @@ class HonorarGeneratorApp:
         
     # --- 1. Generieren Tab ---
     def setup_generate_tab(self, tab):
+        now = datetime.datetime.now()
         ttk.Label(tab, text="Patienten-Suche (Nachname/Vorname):").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.search_entry = ttk.Entry(tab, width=40)
         self.search_entry.grid(row=0, column=1, padx=5, pady=5)
@@ -851,6 +865,10 @@ class HonorarGeneratorApp:
         self.results_listbox = tk.Listbox(tab, height=10, width=60)
         self.results_listbox.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
         self.results_listbox.bind('<<ListboxSelect>>', self.select_patient_from_list)
+
+        self.search_entry.bind('<Return>', lambda e: self.search_patients()) # Enter 1: Suchen
+        self.results_listbox.bind('<Return>', self.handle_enter_on_listbox) # Enter 2: Patient wählen
+
 
         ttk.Label(tab, text="Aktueller Patient:").grid(row=2, column=0, padx=5, pady=5, sticky='w')
         self.current_patient_label = ttk.Label(tab, text="Kein Patient ausgewählt", foreground='blue')
@@ -884,6 +902,25 @@ class HonorarGeneratorApp:
         ttk.Checkbutton(zusatz_frame, 
                         text="Zusätzlichen 'Gemeinde Wiener Neudorf' Block in Dokument einfügen", 
                         variable=self.add_gemeinde_block_var).grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        
+        # In setup_generate_tab hinzufügen (z.B. nach dem folgenummer_frame):
+        date_selection_frame = ttk.LabelFrame(tab, text="Ausstellungsdatum (Letzter Tag des Monats)")
+        date_selection_frame.grid(row=6, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
+
+        ttk.Label(date_selection_frame, text="Monat:").grid(row=0, column=0, padx=5, pady=5)
+        month_combo = ttk.Combobox(date_selection_frame, textvariable=self.selected_invoice_month, 
+                                values=[str(i).zfill(2) for i in range(1, 13)], width=5, state="readonly")
+        month_combo.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(date_selection_frame, text="Jahr:").grid(row=0, column=2, padx=5, pady=5)
+        year_combo = ttk.Combobox(date_selection_frame, textvariable=self.selected_invoice_year, 
+                              values=[str(y) for y in range(now.year-1, now.year+2)], # Hier wird 'now' verwendet!
+                              width=7, state="readonly")
+        year_combo.grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(date_selection_frame, text="Info: Es wird automatisch der letzte Tag des gewählten Monats verwendet.").grid(row=1, column=0, columnspan=4, padx=5, pady=2)
+
+        # Wichtig: Den row-Index des nachfolgenden zusatz_frame auf row=6 anpassen!
 
         tab.grid_rowconfigure(1, weight=1)
 
@@ -892,7 +929,12 @@ class HonorarGeneratorApp:
         if not search_term:
             messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff ein.")
             return
-            
+        
+
+        query = self.search_entry.get().strip()
+        if not query:
+            return
+
         results = get_patient_data(search_term)
         
         self.results_listbox.delete(0, tk.END)
@@ -906,8 +948,139 @@ class HonorarGeneratorApp:
             display_text = f"ID {patient_data_tuple[0]} - {patient_data_tuple[2]} {patient_data_tuple[1]} ({patient_data_tuple[7]})"
             self.results_listbox.insert(tk.END, display_text)
             self.results_listbox.patient_data_list.append(patient_data_tuple)
+        
+        if self.results_listbox.size() > 0:
+            self.results_listbox.selection_clear(0, tk.END)
+            self.results_listbox.selection_set(0)
+            self.results_listbox.activate(0)
+            self.results_listbox.focus_set() # WICHTIG: Fokus springt für das nächste ENTER in die Liste
 
-    def select_patient_from_list(self, event):
+
+    def load_teamup_data(self):
+        """Sucht Teamup-Events für den aktuellen Patienten NUR im gewählten Monat."""
+        if not self.patient_data:
+            messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst einen Patienten aus.")
+            return
+
+        # --- MONATSFILTER BERECHNEN ---
+        try:
+            month = int(self.selected_invoice_month.get())
+            year = int(self.selected_invoice_year.get())
+            
+            # Ersten und letzten Tag des gewählten Monats bestimmen
+            first_day = f"{year}-{month:02d}-01"
+            last_day_num = calendar.monthrange(year, month)[1]
+            last_day = f"{year}-{month:02d}-{last_day_num}"
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Ungültiges Datum ausgewählt: {e}")
+            return
+
+        vorname = self.patient_data[1]
+        nachname = self.patient_data[2]
+        search_term = f"{nachname} {vorname}"
+
+        # API-Suche mit den berechneten Datums-Parametern
+        events = search_teamup_events(search_term, start_date=first_day, end_date=last_day)
+        
+        if not events:
+            messagebox.showinfo("Teamup", f"Keine Einträge für '{search_term}' im {month:02d}/{year} gefunden.")
+            return
+
+        # Teamup Auswahl-Dialog
+        tw = tk.Toplevel(self.root)
+        tw.title(f"Teamup: {search_term} ({month:02d}/{year})")
+        
+        list_frame = ttk.Frame(tw)
+        list_frame.pack(padx=10, pady=10, fill='both', expand=True)
+        
+        columns = ('Titel', 'Datum', 'Von', 'Bis')
+        # selectmode='extended' für Mehrfachauswahl
+        tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10, selectmode='extended')
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=120)
+        tree.pack(side='left', fill='both', expand=True)
+
+        # --- AUTOMATISCHE AUSWAHL BEIM LADEN ---
+        for ev in events:
+            item_id = tree.insert('', tk.END, values=ev)
+            tree.selection_add(item_id) # Markiert den Eintrag sofort als ausgewählt
+
+        # Button-Bereich
+        btn_frame = ttk.Frame(tw)
+        btn_frame.pack(fill='x', padx=10, pady=10)
+
+        # "Ausgewählte Termine übernehmen" Button
+        btn_insert = ttk.Button(
+            btn_frame, 
+            text="Auswahl übernehmen", 
+            command=lambda: self.insert_teamup_data(tw, [tree.item(i)['values'] for i in tree.selection()])
+        )
+        btn_insert.pack(side='left', padx=5)
+        
+        # Enter-Hotkey auch für diesen Dialog
+        tw.bind('<Return>', lambda e: btn_insert.invoke())
+        ttk.Button(btn_frame, text="Abbrechen", command=tw.destroy).pack(side='right', padx=5)
+
+
+    def insert_teamup_data(self, window, events, mode):
+        """Übernimmt die Teamup-Events in die Leistungsliste der DB."""
+        patient_id = self.patient_data[0]
+        
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        
+        try:
+            if mode == "replace":
+                cursor.execute("DELETE FROM leistungen WHERE patient_id = ?", (patient_id,))
+            
+            for title, datum, von, bis in events:
+                # Datum von DD.MM.YYYY zu YYYY-MM-DD konvertieren
+                db_date = datetime.datetime.strptime(datum, '%d.%m.%Y').strftime('%Y-%m-%d')
+                cursor.execute("""
+                    INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (patient_id, db_date, von, bis, title, 0.0))
+            
+            conn.commit()
+            self.update_leistung_list() # GUI Liste aktualisieren
+            
+            window.destroy()
+            # Automatisch zum "Generieren" Tab (Index 2) springen
+            self.root.after(100, lambda: self.update_leistungen_list())
+            
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Fehler beim Speichern: {e}")
+        finally:
+            conn.close()
+
+    def finish_import_transition(self):
+        """Wechselt sicher zum letzten Tab."""
+        self.notebook.select(2) # Zum Drucken-Tab wechseln
+        self.root.focus_set()   # Fokus zurück aufs Hauptfenster
+
+    def handle_global_enter(self, event=None):
+        widget = self.root.focus_get()
+        if widget == self.search_entry:
+            self.search_patients()
+        elif widget == self.results_listbox:
+            self.handle_enter_on_listbox() # Jetzt okay, da event=None Standard ist
+
+    def _get_selected_invoice_date(self):
+        year = int(self.selected_invoice_year.get())
+        month = int(self.selected_invoice_month.get())
+        last_day = calendar.monthrange(year, month)[1]
+        return datetime.date(year, month, last_day).strftime("%d.%m.%Y")
+
+    def handle_enter_on_listbox(self, event=None):
+        """Verarbeitet die Auswahl eines Patienten per Enter-Taste."""
+        selection = self.results_listbox.curselection()
+        if selection:
+            # Hier wird die Methode nun sicher aufgerufen
+            self.select_patient_from_list()
+
+
+    def select_patient_from_list(self, event=None):
         selection = self.results_listbox.curselection()
         if selection:
             index = selection[0]
@@ -920,6 +1093,14 @@ class HonorarGeneratorApp:
             # Automatisch zum Leistungs-Tab wechseln und Liste aktualisieren
             self.notebook.select(self.tab_leistung)
             self.update_leistung_list() 
+
+            if self.results_listbox.size() > 0:
+                self.results_listbox.selection_clear(0, tk.END)
+                self.results_listbox.selection_set(0)
+                self.results_listbox.activate(0)
+                self.results_listbox.focus_set() # Fokus springt in die Liste für das nächste Enter
+            
+        self.notebook.focus_set()
 
     def update_patient_info(self):
         if self.patient_data:
@@ -951,13 +1132,14 @@ class HonorarGeneratorApp:
         template_data = self._prepare_bhag_number() 
         add_gemeinde_block = self.add_gemeinde_block_var.get()
         patient_id = self.patient_data[0]
+        ausstellungs_datum = self._get_selected_invoice_date()
         
         try:
             # NEU: BHAG-Nummer generieren und DB aktualisieren
             data_for_template = self._prepare_bhag_number()
             add_gemeinde_block = self.add_gemeinde_block_var.get() # NEU: Zustand abrufen
             
-            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block)
+            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum)
             
             # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
             _update_invoiced_status(patient_id, 1)
@@ -993,10 +1175,11 @@ class HonorarGeneratorApp:
 
         template_data = self._prepare_bhag_number() 
         add_gemeinde_block = self.add_gemeinde_block_var.get()
+        ausstellungs_datum = self._get_selected_invoice_date()
 
         try:
             # NEU: BHAG-Nummer generieren und DB aktualisieren
-            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block)
+            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum)
             add_gemeinde_block = self.add_gemeinde_block_var.get()
             
             
