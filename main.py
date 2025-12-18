@@ -220,23 +220,32 @@ def create_main():
     t2 = tk.Frame(nb, bg=COLOR_PRIMARY)
     nb.add(t2, text="  DATENBANK  ")
     
-    db_f = tk.Frame(t2, bg=COLOR_PRIMARY)
-    db_f.place(relx=0.5, rely=0.4, anchor="center")
+    # Ein zentrierter Container-Frame mit pack statt place
+    db_container = tk.Frame(t2, bg=COLOR_PRIMARY)
+    db_container.pack(expand=True) # Zentriert den Inhalt vertikal und horizontal
     
-    tk.Label(db_f, text="Datenbank-Initialisierung", font=("Segoe UI", 18, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=20)
-    db_p_ent = tk.Entry(db_f, show="*", width=30, bg=COLOR_SECONDARY, fg="white", font=("Arial", 14), justify="center", relief="flat")
+    tk.Label(db_container, text="Datenbank-Initialisierung", 
+             font=("Segoe UI", 18, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=20)
+    
+    db_p_ent = tk.Entry(db_container, show="*", width=30, bg=COLOR_SECONDARY, 
+                        fg="white", font=("Arial", 14), justify="center", relief="flat")
     db_p_ent.pack(pady=10, ipady=8)
     
     def do_setup():
         if USER_CREDS and db_p_ent.get() == USER_CREDS.get("password"):
             try:
-                subprocess.run([sys.executable, resource_path("db_setup.py")], check=True)
+                # Nutze runpy statt subprocess für die EXE-Kompatibilität
+                setup_script = resource_path("db_setup.py")
+                runpy.run_path(setup_script, run_name="__main__")
                 messagebox.showinfo("Erfolg", "Datenbank bereit.")
-            except: messagebox.showerror("Fehler", "db_setup.py konnte nicht ausgeführt werden.")
-        else: messagebox.showerror("Fehler", "Passwort falsch.")
+            except Exception as e: 
+                messagebox.showerror("Fehler", f"Setup fehlgeschlagen:\n{e}")
+        else: 
+            messagebox.showerror("Fehler", "Passwort falsch.")
             
-    tk.Button(db_f, text="Setup ausführen", bg="#e67e22", fg="white", font=("Segoe UI", 11, "bold"), 
-              relief="flat", padx=30, pady=12, command=do_setup).pack(pady=20)
+    tk.Button(db_container, text="Setup ausführen", bg="#e67e22", fg="white", 
+              font=("Segoe UI", 11, "bold"), relief="flat", padx=30, pady=12, 
+              command=do_setup).pack(pady=20)
 
     # --- TAB 3: DOKUMENTATION ---
     t3 = tk.Frame(nb, bg=COLOR_PRIMARY)
