@@ -1,351 +1,280 @@
-# main.py
-# Startscript mit breitem Splashscreen, Auto-Update, geschütztem DB-Setup
-# und parallelem Start von Haupt-App und Status-Checker.
-
+import subprocess
+import sys
+import os
+import threading
+import runpy
+import pickle
 import tkinter as tk
 from tkinter import messagebox, ttk
-import subprocess
-import os
-import requests
-import zipfile
-import shutil
-import sys
-import getpass 
-import tkinter
+from PIL import Image, ImageTk
 
-# --- PIL (Pillow) für PNG/JPG-Unterstützung ---\r\n
-try:
-    from PIL import Image, ImageTk
-    USE_PIL = True
-except ImportError:
-    USE_PIL = False
+# --- KONFIGURATION & DESIGN ---
+COLOR_PRIMARY = "#2c3e50"
+COLOR_SECONDARY = "#34495e"
+COLOR_ACCENT = "#27ae60"
+COLOR_TEXT = "#ecf0f1"
+COLOR_HIGHLIGHT = "#3498db"
 
-# --- KONFIGURATION FÜR DEN UPDATER ---\r\n
-GITHUB_TOKEN = "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" 
-REPO_OWNER = "qztq"
-REPO_NAME = "LeprendiX"
-RELEASE_API_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-DB_FILE_TO_EXCLUDE = "patienten.db" 
-TEMP_ZIP_NAME = "update_release.zip"
-
-# --- SICHERHEIT: Passwort für DB-Setup ---\r\n
-SETUP_PASSWORD = "Afrika1!" 
-
-# --- BILD-KONFIGURATION ---\r\n
-LOGO_PATH = "logo.png" 
-TARGET_IMAGE_WIDTH = 750 
-TARGET_IMAGE_HEIGHT = 400 
-
-# Globale Variablen für das...\r\n
-global_logo_image = None
-global_logo_photo = None
-
-# --- UPDATE FUNKTIONEN (Unverändert) ---
-
-def check_for_update(splash):
-    """
-    Überprüft die neueste Release auf GitHub und fragt den Nutzer, ob er updaten möchte.
-    """
-    splash.update_label.config(text="Suche nach Updates...")
+def resource_path(relative_path):
     try:
-        headers = {'Authorization': f'token {GITHUB_TOKEN}'}
-        response = requests.get(RELEASE_API_URL, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            splash.update_label.config(text=f"Update-Prüfung fehlgeschlagen: HTTP {response.status_code}")
-            return False
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
-        release_info = response.json()
-        latest_tag = release_info.get('tag_name')
-        
-        if not latest_tag:
-            splash.update_label.config(text="Keine Release gefunden. App ist aktuell.")
-            return False
+LOGO_PATH = resource_path("logo.png")
 
-        if messagebox.askyesno("Update gefunden", 
-                               f"Eine neue Version ({latest_tag}) ist verfügbar. Möchten Sie jetzt aktualisieren?"):
-            update_application(release_info, splash)
-            # Das Programm wird nach dem Update neu gestartet oder beendet
-            return True
-        else:
-            splash.update_label.config(text="Update abgelehnt. App ist aktuell.")
-            return False
-
-    except requests.exceptions.RequestException as e:
-        splash.update_label.config(text=f"Update-Prüfung übersprungen (keine Internetverbindung oder Fehler: {e}).")
-        return False
-    except Exception as e:
-        splash.update_label.config(text=f"Unerwarteter Fehler beim Update-Check: {e}")
-        return False
-
-def update_application(release_info, splash):
-    """
-    Lädt das Release-Asset herunter, entpackt es direkt in das aktuelle Verzeichnis
-    und stellt die DB-Datei wieder her (falls sie gesichert werden musste).
-    """
-    
-    assets = release_info.get('assets', [])
-    if not assets:
-        messagebox.showerror("Fehler", "Kein Asset im neuestem Release gefunden.")
-        return
-
-    # Download URL für das Asset (z.B. latest.zip)
-    download_url = assets[0]['browser_download_url'] 
-    
-    splash.update_label.config(text="Lade Update herunter...")
-    splash.update()
-
-    # --- 1. Vorbereitung & Temporäres Speichern der DB ---
-    db_backup_needed = os.path.exists(DB_FILE_TO_EXCLUDE)
-    db_temp_path = DB_FILE_TO_EXCLUDE + ".temp_backup"
-
-    if db_backup_needed:
+# --- CREDENTIALS LADEN ---
+def load_credentials():
+    cred_path = resource_path("credentials.dat")
+    if os.path.exists(cred_path):
         try:
-            # Kopiere die DB, bevor das Update das Original möglicherweise überschreibt/löscht
-            shutil.copy2(DB_FILE_TO_EXCLUDE, db_temp_path)
-            print(f"INFO: {DB_FILE_TO_EXCLUDE} wurde temporär gesichert.")
-        except Exception as e:
-            # Wenn die Sicherung fehlschlägt, ist die Gefahr des Datenverlusts hoch.
-            messagebox.showwarning("Warnung", f"Konnte {DB_FILE_TO_EXCLUDE} nicht sichern. Update wird NICHT durchgeführt: {e}")
-            return # Update abbrechen, um Datenverlust zu verhindern
-        
-    try:
-        # --- 2. Download der ZIP-Datei ---
-        response = requests.get(download_url, stream=True, timeout=300)
-        response.raise_for_status()
-        with open(TEMP_ZIP_NAME, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+            with open(cred_path, "rb") as f:
+                return pickle.load(f)
+        except:
+            return None
+    return None
 
-        # --- 3. Entpacken des Updates ---
-        splash.update_label.config(text="Entpacke Dateien...")
-        splash.update()
-        
-        with zipfile.ZipFile(TEMP_ZIP_NAME, 'r') as zip_ref:
-            
-            members = zip_ref.namelist()
-            
-            for member in members:
-                # 3a. Ignoriere die Datenbank-Datei im ZIP beim Entpacken
-                if member == DB_FILE_TO_EXCLUDE or member.endswith('/'):
-                    print(f"INFO: Ignoriere {member} (DB oder Verzeichnis).")
-                    continue
-                
-                # 3b. Entpacke alle anderen Dateien direkt ins aktuelle Verzeichnis
-                # target_path ist der Dateiname im aktuellen Ordner
-                target_path = os.path.join(os.getcwd(), os.path.basename(member))
-                
-                # Stelle sicher, dass der Zielordner existiert (falls es Unterverzeichnisse gibt)
-                os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                
-                # Extrahiere die Datei
-                source = zip_ref.open(member)
-                target = open(target_path, "wb")
-                with source, target:
-                    shutil.copyfileobj(source, target)
-        
-        # --- 4. Aufräumen des Downloads ---
-        os.remove(TEMP_ZIP_NAME)
-        
-        # --- 5. Wiederherstellung der DB ---
-        if db_backup_needed and os.path.exists(db_temp_path):
-            # Verschiebe die gesicherte DB zurück, um sie wiederherzustellen (überschreibt evtl. leere DB aus dem Update-Prozess)
-            shutil.move(db_temp_path, DB_FILE_TO_EXCLUDE)
-            print(f"INFO: {DB_FILE_TO_EXCLUDE} wurde erfolgreich wiederhergestellt.")
+USER_CREDS = load_credentials()
 
-        messagebox.showinfo("Update erfolgreich", "Die Anwendung wurde erfolgreich aktualisiert und wird jetzt neu gestartet.")
-        # Beende das aktuelle Programm und starte es neu
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
-        
-    except Exception as e:
-        messagebox.showerror("Update Fehler", f"Fehler beim Aktualisieren: {e}")
-    finally:
-        # cleanup bei Fehlern
-        if os.path.exists(TEMP_ZIP_NAME):
-            os.remove(TEMP_ZIP_NAME)
-        # Lösche den DB-Backup nur, wenn die Original-DB wiederhergestellt wurde oder der Fehler früh auftrat
-        if 'db_temp_path' in locals() and os.path.exists(db_temp_path):
-             # Falls der Fehler nach der Sicherung, aber vor der Wiederherstellung auftrat, lösche den Backup.
-             # Im Erfolgsfall wurde er bereits nach DB_FILE_TO_EXCLUDE verschoben.
-             if not os.path.exists(DB_FILE_TO_EXCLUDE) or os.stat(db_temp_path).st_mtime == os.stat(DB_FILE_TO_EXCLUDE).st_mtime:
-                 # Nur löschen, wenn der Backup nicht das Original ist oder das Original bereits wiederhergestellt wurde (gleiche Zeitstempel)
-                 pass 
-             else:
-                 os.remove(db_temp_path)
+# --- HELFER-FUNKTIONEN ---
+def scroll_to_section(text_widget, section_tag):
+    """Scrollt den Dokumentationstext zur gewählten Sektion."""
+    idx = text_widget.search(section_tag, "1.0", tk.END)
+    if idx:
+        text_widget.see(idx)
+        text_widget.tag_add("highlight", idx, f"{idx} lineend")
+        text_widget.after(500, lambda: text_widget.tag_remove("highlight", "1.0", tk.END))
 
-
-# --- DB SETUP FUNKTIONEN (Unverändert) ---
-
-def run_db_setup():
-    """Startet das db_setup.py Skript."""
-    try:
-        subprocess.run([sys.executable, "db_setup.py"], check=True)
-        messagebox.showinfo("DB Setup", "Datenbank-Setup erfolgreich abgeschlossen.")
-    except FileNotFoundError:
-        messagebox.showerror("Fehler", "Das Skript 'db_setup.py' wurde nicht gefunden.")
-    except subprocess.CalledProcessError as e:
-        messagebox.showerror("Fehler", f"Fehler beim Ausführen von 'db_setup.py': {e}")
-    except Exception as e:
-        messagebox.showerror("Fehler", f"Ein unerwarteter Fehler ist aufgetreten: {e}")
-
-def run_db_setup_protected():
-    """Fragt nach dem Passwort, bevor das DB-Setup gestartet wird."""
+# --- LADEBILDSCHIRM (SPLASH) ---
+# --- LADEBILDSCHIRM (SPLASH) VERBESSERT ---
+def show_loading_screen(root):
+    loading_win = tk.Toplevel(root)
+    loading_win.title("Lade LeprendiX...")
+    loading_win.geometry("450x220")
+    loading_win.configure(bg=COLOR_SECONDARY)
+    loading_win.overrideredirect(True)
     
-    pwd_window = tk.Toplevel()
-    pwd_window.title("Admin-Passwort")
-    pwd_window.geometry("300x100")
-    pwd_window.resizable(False, False)
+    # Zwingt das Fenster in den Vordergrund
+    loading_win.attributes("-topmost", True)
     
-    ttk.Label(pwd_window, text="Bitte Admin-Passwort eingeben:").pack(pady=5)
+    # Zentrierung
+    root.update_idletasks()
+    x = root.winfo_x() + (root.winfo_width() // 2) - 225
+    y = root.winfo_y() + (root.winfo_height() // 2) - 110
+    loading_win.geometry(f"+{int(x)}+{int(y)}")
+
+    tk.Label(loading_win, text="LeprendiX", font=("Segoe UI", 24, "bold"), 
+             fg=COLOR_ACCENT, bg=COLOR_SECONDARY).pack(pady=(40, 5))
+    tk.Label(loading_win, text="System wird gestartet...", 
+             font=("Segoe UI", 10), fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack()
+
+    progress = ttk.Progressbar(loading_win, mode="indeterminate", length=350)
+    progress.pack(pady=30)
+    progress.start(15) 
     
-    password_entry = ttk.Entry(pwd_window, show="*")
-    password_entry.pack(pady=5)
-    password_entry.focus()
+    # Wichtig: Fenster heben und Zeichnen erzwingen
+    loading_win.lift()
+    loading_win.update()
     
-    def check_password():
-        if password_entry.get() == SETUP_PASSWORD:
-            pwd_window.destroy()
-            run_db_setup()
-        else:
-            messagebox.showerror("Fehler", "Falsches Passwort.")
-            password_entry.delete(0, tk.END)
+    return loading_win
 
-    pwd_window.bind('<Return>', lambda event=None: check_password())
-    
-    ttk.Button(pwd_window, text="OK", command=check_password).pack(pady=5)
-    pwd_window.transient(tk.Tk.root) 
-
-
-# --- START FUNKTIONEN (Angepasst: Start-Button) ---
-
-def start_gui(splash):
-    """
-    Startet die Haupt-GUI (gui_generator.py) und den Status-Checker im parallelen Prozess.
-    """
-    splash.destroy()
-    
-    # 1. Start des Hauptprogramms (gui_generator.py)
-    try:
-        subprocess.Popen([sys.executable, "gui_generator.py"], start_new_session=True)
-        print("INFO: 'gui_generator.py' gestartet.")
-    except FileNotFoundError:
-        messagebox.showerror("Fehler", "Das Skript 'gui_generator.py' wurde nicht gefunden.")
-        return
-    except Exception as e:
-        messagebox.showerror("Fehler", f"Hauptprogramm konnte nicht gestartet werden: {e}")
-        return
-        
-    # 2. Start des Status-Checkers (patient_status_checker.py) im parallelen Prozess
-    try:
-        subprocess.Popen([sys.executable, "patient_status_checker.py"], start_new_session=True)
-        print("INFO: 'patient_status_checker.py' gestartet.")
-        
-    except FileNotFoundError:
-        messagebox.showwarning("Warnung", "Das Skript 'patient_status_checker.py' wurde nicht gefunden. Hauptprogramm läuft weiter.")
-        
-    except Exception as e:
-        messagebox.showerror("Fehler", f"Status-Checker konnte nicht gestartet werden: {e}")
-        
-    # main.py beendet sich, die gestarteten Prozesse laufen weiter.
-    sys.exit()
-
-
-# --- SPLASHSCREEN (Angepasst: Layout und Start-Button) ---
-
-def create_splash_screen():
-    """Erstellt den Splashscreen."""
-    
-    root = tk.Tk()
+def launch_application(root):
+    # 1. Splash Screen erstellen
+    splash = show_loading_screen(root)
     root.withdraw() 
     
-    splash = tk.Toplevel(root)
-    splash.title("LeprendiX: Honorarnoten-Generator")
-    splash.overrideredirect(True) 
-    
-    SPLASH_WIDTH = 800
-    SPLASH_HEIGHT = 550 
-    screen_width = splash.winfo_screenwidth()
-    screen_height = splash.winfo_screenheight()
-    
-    x_pos = (screen_width - SPLASH_WIDTH) // 2
-    y_pos = (screen_height - SPLASH_HEIGHT) // 2
-    splash.geometry(f"{SPLASH_WIDTH}x{SPLASH_HEIGHT}+{x_pos}+{y_pos}")
-
-    # --- Container Frame für Bild und Info ---
-    main_frame = ttk.Frame(splash)
-    main_frame.pack(padx=10, pady=10, fill="both", expand=True)
-
-    # --- 1. Bild/Logo ---
-    global global_logo_image, global_logo_photo
-    
-    if USE_PIL and os.path.exists(LOGO_PATH):
+    def run_tasks():
         try:
-            img = Image.open(LOGO_PATH)
-            img = img.resize((TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT), Image.Resampling.LANCZOS)
-            global_logo_image = img 
-            global_logo_photo = ImageTk.PhotoImage(global_logo_image)
+            gui_script = resource_path("gui_generator.py")
+            checker_script = resource_path("patient_status_checker.py")
             
-            logo_label = tk.Label(main_frame, image=global_logo_photo, borderwidth=0)
-            logo_label.pack(pady=(0, 10)) 
-
+            # Hintergrund-Checker starten
+            threading.Thread(target=lambda: runpy.run_path(checker_script, run_name="__main__"), daemon=True).start()
+            
+            # Timer zum Schließen des Splash-Screens im Haupt-Thread registrieren
+            # Wir nutzen root.after, damit das Zerstören sicher im GUI-Thread passiert
+            root.after(3000, lambda: splash.destroy() if splash.winfo_exists() else None)
+            
+            # Hauptanwendung starten (Dies blockiert diesen Thread)
+            runpy.run_path(gui_script, run_name="__main__")
+            
+            # Sobald die GUI-Anwendung geschlossen wird, das Control Center beenden
+            root.destroy()
+            
         except Exception as e:
-            tk.Label(main_frame, text=f"LOGO FEHLER: {e}", fg="red").pack(pady=10)
-    else:
-        # Fallback ohne PIL oder wenn das Bild fehlt
-        tk.Label(main_frame, text="LeprendiX: Honorarnoten-Generator", 
-                 font=("Helvetica", 18, "bold"), fg="blue").pack(pady=10)
-    
-    # --- 2. Update-Status Label ---
-    splash.update_label = ttk.Label(main_frame, 
-                                    text="Initialisiere...", 
-                                    font=("Arial", 10))
-    splash.update_label.pack(pady=(0, 5)) 
+            # Im Fehlerfall Splash weg und Login wieder her
+            root.after(0, lambda: splash.destroy() if splash.winfo_exists() else None)
+            messagebox.showerror("Fehler", f"Start fehlgeschlagen:\n{e}")
+            root.deiconify()
 
-    # --- 3. Progressbar ---
+    # Den Lade-Thread starten
+    threading.Thread(target=run_tasks, daemon=True).start()
+
+# --- PROGRAMMSTART LOGIK ---
+def launch_application(root):
+    # 1. Splash Screen erstellen (mit Topmost-Fix)
+    splash = tk.Toplevel(root)
+    splash.title("Lade LeprendiX...")
+    splash.geometry("450x220")
+    splash.configure(bg=COLOR_SECONDARY)
+    splash.overrideredirect(True)
+    splash.attributes("-topmost", True)
+    
+    # Zentrieren
+    root.update_idletasks()
+    x = root.winfo_x() + (root.winfo_width() // 2) - 225
+    y = root.winfo_y() + (root.winfo_height() // 2) - 110
+    splash.geometry(f"+{int(x)}+{int(y)}")
+
+    tk.Label(splash, text="LeprendiX", font=("Segoe UI", 24, "bold"), fg=COLOR_ACCENT, bg=COLOR_SECONDARY).pack(pady=(40, 5))
+    progress = ttk.Progressbar(splash, mode="indeterminate", length=350)
+    progress.pack(pady=30)
+    progress.start(15)
+
+    # 2. DAS IST DER ENTSCHEIDENDE TEIL:
+    # Wir sagen dem Hauptfenster JETZT, dass es in 3 Sekunden den Splash löschen soll.
+    # Dieser Befehl wartet nicht auf den Thread!
+    root.after(3000, lambda: splash.destroy() if splash.winfo_exists() else None)
+
+    # 3. Haupt-Control-Center ausblenden
+    root.withdraw() 
+    
+    def run_tasks():
+        try:
+            gui_script = resource_path("gui_generator.py")
+            checker_script = resource_path("patient_status_checker.py")
+            
+            # Hintergrund-Checker
+            threading.Thread(target=lambda: runpy.run_path(checker_script, run_name="__main__"), daemon=True).start()
+            
+            # Startet die GUI (blockiert diesen Thread)
+            runpy.run_path(gui_script, run_name="__main__")
+            
+            # Beendet das Control Center endgültig beim Schließen der GUI
+            root.quit() 
+        except Exception as e:
+            root.after(0, lambda: splash.destroy() if splash.winfo_exists() else None)
+            messagebox.showerror("Fehler", f"Start fehlgeschlagen:\n{e}")
+            root.deiconify()
+
+    # Threading starten
+    threading.Thread(target=run_tasks, daemon=True).start()
+
+# --- HAUPTFENSTER ---
+def create_main():
+    root = tk.Tk()
+    root.title("LeprendiX - Control Center")
+    root.geometry("1150x850")
+    root.configure(bg=COLOR_PRIMARY)
+
+    # Styles
     style = ttk.Style()
     style.theme_use('default')
-    style.configure("TProgressbar", thickness=10)
+    style.configure("TNotebook", background=COLOR_PRIMARY, borderwidth=0)
+    style.configure("TNotebook.Tab", background=COLOR_SECONDARY, foreground=COLOR_TEXT, 
+                    padding=[25, 10], font=("Segoe UI", 10, "bold"))
+    style.map("TNotebook.Tab", background=[("selected", COLOR_PRIMARY)], foreground=[("selected", COLOR_ACCENT)])
 
-    progress = ttk.Progressbar(main_frame, orient="horizontal", length=SPLASH_WIDTH - 40, mode="indeterminate")
-    progress.pack(pady=(0, 15), fill='x', padx=50) 
-    progress.start(10) 
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True, padx=20, pady=20)
+
+    # --- TAB 1: ÜBERSICHT ---
+    t1 = tk.Frame(nb, bg=COLOR_PRIMARY)
+    nb.add(t1, text="  ÜBERSICHT  ")
+
+    if os.path.exists(LOGO_PATH):
+        img = Image.open(LOGO_PATH).resize((350, 150), Image.Resampling.LANCZOS)
+        img_tk = ImageTk.PhotoImage(img)
+        tk.Label(t1, image=img_tk, bg=COLOR_PRIMARY).pack(pady=20)
+
+    # Login Bereich
+    login_f = tk.Frame(t1, bg=COLOR_SECONDARY, padx=40, pady=30, highlightbackground=COLOR_ACCENT, highlightthickness=1)
+    login_f.pack(pady=10)
+
+    tk.Label(login_f, text="SYSTEM-LOGIN", font=("Segoe UI", 14, "bold"), fg=COLOR_ACCENT, bg=COLOR_SECONDARY).pack(pady=(0, 20))
     
-    # --- 4. Start Button ---
-    # *KORRIGIERT*: Feste, großzügige Breite und vertikales Padding (ipady) für die Höhe
-    splash.start_button = ttk.Button(main_frame, 
-                                     text="▶️ Anwendung starten", 
-                                     command=lambda: start_gui(splash), 
-                                     state=tk.DISABLED,
-                                     width=35) # Breite auf 35 Zeichen setzen
-                                     
-    # Packen: Button zentrieren und vertikalen Innenabstand (ipady) hinzufügen
-    # ipady erhöht die Höhe des Buttons
-    splash.start_button.pack(pady=(0, 15), ipady=10) 
+    tk.Label(login_f, text="Benutzername:", fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack(anchor="w")
+    u_ent = tk.Entry(login_f, width=30, bg=COLOR_PRIMARY, fg="white", relief="flat", insertbackground="white")
+    u_ent.pack(pady=(5, 15), ipady=5)
+    u_ent.insert(0, "bhag")
 
-    # --- 5. DB-Setup Button (Admin) in der Ecke ---
-    db_setup_btn = ttk.Button(splash, 
-                              text="DB-Setup (Admin)", 
-                              command=run_db_setup_protected)
-                              
-    db_setup_btn.place(relx=0.03, rely=0.97, anchor='sw')
+    tk.Label(login_f, text="Passwort:", fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack(anchor="w")
+    p_ent = tk.Entry(login_f, show="*", width=30, bg=COLOR_PRIMARY, fg="white", relief="flat", insertbackground="white")
+    p_ent.pack(pady=(5, 20), ipady=5)
 
-    return root, splash, progress
+    def do_login(event=None):
+        if not USER_CREDS:
+            messagebox.showerror("Fehler", "Datei 'credentials.dat' fehlt!")
+            return
+        if u_ent.get() == USER_CREDS.get("user") and p_ent.get() == USER_CREDS.get("password"):
+            launch_application(root)
+        else:
+            messagebox.showerror("Fehler", "Logindaten inkorrekt.")
 
-# --- HAUPTPROGRAMM ---
+    tk.Button(login_f, text="ANMELDEN & STARTEN", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 11, "bold"),
+              relief="flat", cursor="hand2", padx=20, pady=10, command=do_login).pack(fill="x")
+    root.bind('<Return>', do_login)
+
+    # --- TAB 2: DATENBANK ---
+    t2 = tk.Frame(nb, bg=COLOR_PRIMARY)
+    nb.add(t2, text="  DATENBANK  ")
+    
+    db_f = tk.Frame(t2, bg=COLOR_PRIMARY)
+    db_f.place(relx=0.5, rely=0.4, anchor="center")
+    
+    tk.Label(db_f, text="Datenbank-Initialisierung", font=("Segoe UI", 18, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=20)
+    db_p_ent = tk.Entry(db_f, show="*", width=30, bg=COLOR_SECONDARY, fg="white", font=("Arial", 14), justify="center", relief="flat")
+    db_p_ent.pack(pady=10, ipady=8)
+    
+    def do_setup():
+        if USER_CREDS and db_p_ent.get() == USER_CREDS.get("password"):
+            try:
+                subprocess.run([sys.executable, resource_path("db_setup.py")], check=True)
+                messagebox.showinfo("Erfolg", "Datenbank bereit.")
+            except: messagebox.showerror("Fehler", "db_setup.py konnte nicht ausgeführt werden.")
+        else: messagebox.showerror("Fehler", "Passwort falsch.")
+            
+    tk.Button(db_f, text="Setup ausführen", bg="#e67e22", fg="white", font=("Segoe UI", 11, "bold"), 
+              relief="flat", padx=30, pady=12, command=do_setup).pack(pady=20)
+
+    # --- TAB 3: DOKUMENTATION ---
+    t3 = tk.Frame(nb, bg=COLOR_PRIMARY)
+    nb.add(t3, text="  DOKUMENTATION  ")
+
+    sidebar = tk.Frame(t3, bg=COLOR_SECONDARY, width=250)
+    sidebar.pack(side="left", fill="y", padx=(10, 0), pady=10)
+    sidebar.pack_propagate(False)
+
+    content_f = tk.Frame(t3, bg=COLOR_PRIMARY)
+    content_f.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+    scroll = tk.Scrollbar(content_f)
+    scroll.pack(side="right", fill="y")
+
+    doc_t = tk.Text(content_f, wrap="word", padx=30, pady=30, font=("Segoe UI", 11), 
+                    bg=COLOR_SECONDARY, fg=COLOR_TEXT, relief="flat", yscrollcommand=scroll.set)
+    doc_t.pack(fill="both", expand=True)
+    scroll.config(command=doc_t.yview)
+
+    sections = [
+        ("🛠️ 1. Einleitung", "SEC_INTRO", "Systemdokumentation für LeprendiX...\n\n"),
+        ("⚙️ 2. Installation", "SEC_INST", "Initialisieren Sie zuerst die Datenbank...\n\n"),
+        ("👤 3. Patienten", "SEC_PAT", "Verwaltung über das Hauptfenster...\n\n")
+    ]
+
+    for title, tag, content in sections:
+        btn = tk.Button(sidebar, text=title, font=("Segoe UI", 10), bg=COLOR_SECONDARY, fg=COLOR_TEXT,
+                        relief="flat", anchor="w", cursor="hand2", activebackground=COLOR_PRIMARY,
+                        command=lambda t=tag: scroll_to_section(doc_t, t))
+        btn.pack(fill="x", padx=10, pady=2)
+        doc_t.insert(tk.END, title + "\n", tag)
+        doc_t.insert(tk.END, content)
+
+    doc_t.tag_configure("highlight", background=COLOR_HIGHLIGHT, foreground="white")
+    doc_t.config(state="disabled")
+
+    root.mainloop()
 
 if __name__ == "__main__":
-    
-    root, splash, progress = create_splash_screen()
-    
-    splash.update()
-    
-    # Führe den Update-Check aus
-    if not check_for_update(splash):
-        # Wenn kein Update gestartet wurde, stoppe den Progressbar und aktiviere den Start-Button
-        progress.stop()
-        progress.config(mode="determinate", value=100) 
-        splash.update_label.config(text="Bereit zum Start.")
-        splash.start_button.config(state=tk.NORMAL)
-        
-    root.mainloop()
+    create_main()

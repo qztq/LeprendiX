@@ -17,6 +17,8 @@ from docx.enum.text import WD_UNDERLINE
 from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
 from docx.shared import Inches, Pt, Twips
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
+import runpy     
+import traceback
 
 # Entfernt: from log_data import log_patient_name 
 
@@ -727,7 +729,6 @@ class HonorarGeneratorApp:
         # NEU: Initialisierung der Folgenummer (BHAG-Logik)
         self.invoice_seq_var = tk.StringVar() 
         self.invoice_sequence_data = self._get_invoice_sequence_data()
-        # Zeigt die gespeicherte Folgenummer mit führenden Nullen (z.B. '001') an
         self.invoice_seq_var.set(str(self.invoice_sequence_data.get('rechnung_folgenummer', '0')).zfill(3))
         
         self.add_gemeinde_block_var = tk.BooleanVar(value=False) # Standardmäßig AUS
@@ -841,6 +842,8 @@ class HonorarGeneratorApp:
 
         # 2. Folgenummer formatieren und BHAG-Nummer generieren
         folgenummer_str = str(new_folgenummer).zfill(3) # z.B. '001', '010'
+        self.invoice_seq_var.set(folgenummer_str)
+        self.invoice_sequence_data['rechnung_folgenummer'] = folgenummer_str
         bhag_nummer = f"BHAG{current_year}{current_month}{folgenummer_str}"
 
         # 3. Datenbank und GUI aktualisieren
@@ -2009,6 +2012,7 @@ class HonorarGeneratorApp:
             messagebox.showinfo("Erfolg", f"{total_success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
             self._reset_leistung_selection()
             self.update_leistung_list()
+            self.master.focus_force()
         # Keine MessageBox bei 0, da das System das intern loggen kann.
 
     def replace_all_leistungen_from_teamup(self, events_list):
@@ -2035,6 +2039,7 @@ class HonorarGeneratorApp:
             messagebox.showinfo("Erfolg", f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
             self._reset_leistung_selection()
             self.update_leistung_list()
+            self.master.focus_force()
         else:
             messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
             print("INFO: Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
