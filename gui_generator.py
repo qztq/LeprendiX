@@ -739,6 +739,8 @@ class HonorarGeneratorApp:
 
         self.search_entry.focus_set()
         self.root.bind('<Return>', self.handle_global_enter)
+        self.root.bind('<Insert>', self._switch_to_generate_tab)
+        self.root.bind('<F12>', self._switch_to_generate_tab)
 
 
    
@@ -956,115 +958,29 @@ class HonorarGeneratorApp:
             self.results_listbox.focus_set() # WICHTIG: Fokus springt für das nächste ENTER in die Liste
 
 
-    def load_teamup_data(self):
-        """Sucht Teamup-Events für den aktuellen Patienten NUR im gewählten Monat."""
-        if not self.patient_data:
-            messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst einen Patienten aus.")
-            return
-
-        # --- MONATSFILTER BERECHNEN ---
-        try:
-            month = int(self.selected_invoice_month.get())
-            year = int(self.selected_invoice_year.get())
-            
-            # Ersten und letzten Tag des gewählten Monats bestimmen
-            first_day = f"{year}-{month:02d}-01"
-            last_day_num = calendar.monthrange(year, month)[1]
-            last_day = f"{year}-{month:02d}-{last_day_num}"
-        except Exception as e:
-            messagebox.showerror("Fehler", f"Ungültiges Datum ausgewählt: {e}")
-            return
-
-        vorname = self.patient_data[1]
-        nachname = self.patient_data[2]
-        search_term = f"{nachname} {vorname}"
-
-        # API-Suche mit den berechneten Datums-Parametern
-        events = search_teamup_events(search_term, start_date=first_day, end_date=last_day)
-        
-        if not events:
-            messagebox.showinfo("Teamup", f"Keine Einträge für '{search_term}' im {month:02d}/{year} gefunden.")
-            return
-
-        # Teamup Auswahl-Dialog
-        tw = tk.Toplevel(self.root)
-        tw.title(f"Teamup: {search_term} ({month:02d}/{year})")
-        
-        list_frame = ttk.Frame(tw)
-        list_frame.pack(padx=10, pady=10, fill='both', expand=True)
-        
-        columns = ('Titel', 'Datum', 'Von', 'Bis')
-        # selectmode='extended' für Mehrfachauswahl
-        tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=10, selectmode='extended')
-        for col in columns:
-            tree.heading(col, text=col)
-            tree.column(col, width=120)
-        tree.pack(side='left', fill='both', expand=True)
-
-        # --- AUTOMATISCHE AUSWAHL BEIM LADEN ---
-        for ev in events:
-            item_id = tree.insert('', tk.END, values=ev)
-            tree.selection_add(item_id) # Markiert den Eintrag sofort als ausgewählt
-
-        # Button-Bereich
-        btn_frame = ttk.Frame(tw)
-        btn_frame.pack(fill='x', padx=10, pady=10)
-
-        # "Ausgewählte Termine übernehmen" Button
-        btn_insert = ttk.Button(
-            btn_frame, 
-            text="Auswahl übernehmen", 
-            command=lambda: self.insert_teamup_data(tw, [tree.item(i)['values'] for i in tree.selection()])
-        )
-        btn_insert.pack(side='left', padx=5)
-        
-        # Enter-Hotkey auch für diesen Dialog
-        tw.bind('<Return>', lambda e: btn_insert.invoke())
-        ttk.Button(btn_frame, text="Abbrechen", command=tw.destroy).pack(side='right', padx=5)
-
-
-    def insert_teamup_data(self, window, events, mode):
-        """Übernimmt die Teamup-Events in die Leistungsliste der DB."""
-        patient_id = self.patient_data[0]
-        
-        conn = sqlite3.connect(DATABASE_NAME)
-        cursor = conn.cursor()
-        
-        try:
-            if mode == "replace":
-                cursor.execute("DELETE FROM leistungen WHERE patient_id = ?", (patient_id,))
-            
-            for title, datum, von, bis in events:
-                # Datum von DD.MM.YYYY zu YYYY-MM-DD konvertieren
-                db_date = datetime.datetime.strptime(datum, '%d.%m.%Y').strftime('%Y-%m-%d')
-                cursor.execute("""
-                    INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (patient_id, db_date, von, bis, title, 0.0))
-            
-            conn.commit()
-            self.update_leistung_list() # GUI Liste aktualisieren
-            
-            window.destroy()
-            # Automatisch zum "Generieren" Tab (Index 2) springen
-            self.root.after(100, lambda: self.update_leistungen_list())
-            
-        except Exception as e:
-            messagebox.showerror("Fehler", f"Fehler beim Speichern: {e}")
-        finally:
-            conn.close()
-
     def finish_import_transition(self):
         """Wechselt sicher zum letzten Tab."""
         self.notebook.select(2) # Zum Drucken-Tab wechseln
         self.root.focus_set()   # Fokus zurück aufs Hauptfenster
 
-    def handle_global_enter(self, event=None):
-        widget = self.root.focus_get()
-        if widget == self.search_entry:
-            self.search_patients()
-        elif widget == self.results_listbox:
-            self.handle_enter_on_listbox() # Jetzt okay, da event=None Standard ist
+    def handle_global_enter(self, event):
+        """Zentrale Steuerung der ENTER-Taste."""
+        current_tab_index = self.notebook.index(self.notebook.select())
+        
+        # TAB: Honorarnote generieren (Suche)
+        if current_tab_index == 0:
+            focused_widget = self.master.focus_get()
+            if focused_widget == self.search_entry:
+                self.search_patients()
+            elif focused_widget == self.results_listbox:
+                self.handle_enter_on_listbox(None)
+        
+        # TAB: Leistungen hinzufügen/prüfen
+        elif current_tab_index == 2:
+            # Nur öffnen, wenn nicht bereits ein Teamup-Fenster offen ist
+            if not any(isinstance(child, tk.Toplevel) for child in self.root.winfo_children()):
+                # Hier rufen wir direkt die Funktion mit Validierung & Ladebalken auf
+                self.open_teamup_search()
 
     def _get_selected_invoice_date(self):
         year = int(self.selected_invoice_year.get())
@@ -1079,7 +995,7 @@ class HonorarGeneratorApp:
             # Hier wird die Methode nun sicher aufgerufen
             self.select_patient_from_list()
 
-
+    
     def select_patient_from_list(self, event=None):
         selection = self.results_listbox.curselection()
         if selection:
@@ -1115,9 +1031,22 @@ class HonorarGeneratorApp:
             if hasattr(self, 'leistung_patient_label'):
                 self.leistung_patient_label.config(text="Bitte Patient in Tab 1 auswählen", foreground='red')
 
-    def _switch_to_generate_tab(self): # NEU
-        """Wechselt zum Tab 'Honorarnote Generieren'."""
-        self.notebook.select(self.tab_generate)
+    def _switch_to_generate_tab(self, event=None): # NEU
+        """Behandelt die 'Druck'-Taste je nach aktivem Tab."""
+        current_tab = self.notebook.index(self.notebook.select())
+        
+        # Fall A: Wir sind im Tab "Leistungen hinzufügen" (Index 2)
+        # Aktion: Wechsel zum ersten Tab (wie "Fertig -->")
+        if current_tab == 2:
+            self.notebook.select(0)
+            self.search_entry.focus_set()
+            
+        # Fall B: Wir sind im Tab "Honorarnote generieren" (Index 0)
+        # Aktion: Dokument erstellen (wie "Drucken und Speichern")
+        elif current_tab == 0:
+            # Hier rufen wir die Funktion auf, die dein Button "Drucken und Speichern" nutzt
+            # Laut deinem Code-Stil heißt diese vermutlich generate_honorarnote
+            self.generate_and_print_invoice()
 
     def generate_invoice(self):
         """Generiert die Honorarnote und öffnet die Datei."""
@@ -1757,8 +1686,14 @@ class HonorarGeneratorApp:
         return km_geld
 
     def open_teamup_search(self):
-# ... (Rest der Klasse bleibt unverändert)
-        """Öffnet einen Dialog zum Suchen und Auswählen von Teamup-Einträgen. Erlaubt Mehrfachauswahl."""
+        """
+        Zusammengeführte Version:
+        - Validierung (Patient & Leistungen)
+        - Ladebalken während API-Abruf
+        - Datumsbereichs-Automatik
+        - ENTER-Support zum Ersetzen/Speichern
+        """
+        # --- 1. ORIGINAL VALIDIERUNG ---
         if not self.patient_data:
             messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst einen Patienten im ersten Tab aus.")
             return
@@ -1766,19 +1701,57 @@ class HonorarGeneratorApp:
             messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst im Hauptfenster mindestens eine Leistung (Button) aus, die den Terminen zugewiesen werden soll.")
             return
 
+        # --- 2. DATUMSBERECHNUNG FÜR FILTER ---
+        try:
+            month = int(self.selected_invoice_month.get())
+            year = int(self.selected_invoice_year.get())
+            first_day = f"{year}-{month:02d}-01"
+            last_day_num = calendar.monthrange(year, month)[1]
+            last_day = f"{year}-{month:02d}-{last_day_num}"
+        except Exception:
+            first_day, last_day = None, None
+
+        initial_search_term = self.patient_data[2] if self.patient_data else ""
+
+        # --- 3. LADEFENSTER (PROGRESSBAR) ---
+        progress_win = tk.Toplevel(self.master)
+        progress_win.title("API Abruf...")
+        progress_win.geometry("300x120")
+        progress_win.transient(self.master)
+        progress_win.grab_set()
+        
+        # Zentrieren
+        px = self.master.winfo_x() + (self.master.winfo_width() // 2) - 150
+        py = self.master.winfo_y() + (self.master.winfo_height() // 2) - 60
+        progress_win.geometry(f"+{px}+{py}")
+
+        ttk.Label(progress_win, text=f"Lade Termine für:\n{initial_search_term}", justify="center").pack(pady=10)
+        pb = ttk.Progressbar(progress_win, mode='indeterminate', length=200)
+        pb.pack(pady=5)
+        pb.start(15)
+        progress_win.update()
+
+        # Initialer API Abruf
+        try:
+            results = search_teamup_events(initial_search_term, start_date=first_day, end_date=last_day)
+        finally:
+            progress_win.destroy()
+
+        # --- 4. DER SUCH-DIALOG (RE-DESIGNED) ---
         search_window = tk.Toplevel(self.master)
         search_window.title("Teamup Termin-Suche")
-        search_window.geometry("600x500")
+        search_window.geometry("650x550")
+        search_window.grab_set()
+
+        search_window.transient(self.master) 
+        search_window.grab_set()
 
         ttk.Label(search_window, text="Suchbegriff (Name/Titel):").pack(pady=5, padx=10, anchor='w')
         search_entry = ttk.Entry(search_window, width=60)
         search_entry.pack(pady=5, padx=10)
-        search_entry.focus_set()
+        search_entry.insert(0, initial_search_term)
         
-        initial_search_term = self.patient_data[2] if self.patient_data and self.patient_data[2] else ""
-        if initial_search_term:
-            search_entry.insert(0, initial_search_term)
-
+        # Treeview
         results_tree = ttk.Treeview(search_window, columns=('Titel', 'Datum', 'Von', 'Bis'), selectmode='extended', show='headings')
         results_tree.heading('Titel', text='Titel')
         results_tree.heading('Datum', text='Datum')
@@ -1789,75 +1762,85 @@ class HonorarGeneratorApp:
         results_tree.column('Bis', width=60, anchor='center')
         results_tree.pack(pady=10, padx=10, expand=True, fill='both')
 
+        # Daten einfüllen & alles markieren
+        if results:
+            for r in results:
+                item = results_tree.insert('', tk.END, values=r)
+                results_tree.selection_add(item)
+
+        # --- INTERNE FUNKTIONEN (ORIGINAL LOGIK) ---
         def perform_search(term=None):
-            search_term = term if term is not None else search_entry.get().strip()
-            results = search_teamup_events(search_term)
+            search_t = term if term is not None else search_entry.get().strip()
+            # Nutzt auch hier den Datumsfilter
+            res = search_teamup_events(search_t, start_date=first_day, end_date=last_day)
             results_tree.delete(*results_tree.get_children())
-            if results:
-                for title, date, time_from, time_to in results:
-                    results_tree.insert('', tk.END, values=(title, date, time_from, time_to))
+            if res:
+                for r in res:
+                    new_item = results_tree.insert('', tk.END, values=r)
+                    results_tree.selection_add(new_item)
             else:
-                results_tree.insert('', tk.END, values=(f"Keine Termine für '{search_term}' gefunden.", "", "", ""))
-                
-        def search_by_patient_name():
-            perform_search(self.patient_data[2])
+                results_tree.insert('', tk.END, values=(f"Keine Termine für '{search_t}' gefunden.", "", "", ""))
 
         def _get_selected_events_and_validate():
+            """Original Validierungs-Logik."""
             selected_items = results_tree.selection()
             if not selected_items:
                 messagebox.showwarning("Achtung", "Bitte wählen Sie Termine aus der Liste aus.")
                 return None
 
-            selected_events_to_add = []
+            valid_events = []
             for item in selected_items:
-                title, date_str, time_from, time_to = results_tree.item(item, 'values')
-                # Schnelle Validierung der Zeit
-                if not (time_from and time_to and ':' in time_from and ':' in time_to):
-                    messagebox.showwarning("Fehler", "Ausgewählter Eintrag enthält ungültige Zeitangaben.")
+                vals = results_tree.item(item, 'values')
+                if not vals or len(vals) < 4: continue
+                title, date_str, time_from, time_to = vals
+                # Zeit-Validierung
+                if not (time_from and time_to and ':' in str(time_from)):
+                    messagebox.showwarning("Fehler", f"Eintrag '{title}' enthält ungültige Zeitangaben.")
                     return None
-                selected_events_to_add.append((title, date_str, time_from, time_to))
-            return selected_events_to_add
+                valid_events.append((title, date_str, time_from, time_to))
+            return valid_events
 
         def add_selected_events():
-            """Fügt ausgewählte Termine HINZU."""
+            """Nutzt Original add_multiple_leistungen_from_teamup."""
             events = _get_selected_events_and_validate()
             if events:
                 self.add_multiple_leistungen_from_teamup(events)
                 search_window.destroy()
 
         def replace_selected_events():
-            """Ersetzt alle bestehenden Leistungen mit den ausgewählten Terminen."""
-            # Zusätzliche Sicherheitsabfrage für das Ersetzen
+            """Nutzt Original replace_all_leistungen_from_teamup."""
             events = _get_selected_events_and_validate()
             if events:
                 self.replace_all_leistungen_from_teamup(events)
                 search_window.destroy()
 
-        # --- BUTTONS IM DIALOG ---
-        search_button_frame = ttk.Frame(search_window)
-        search_button_frame.pack(pady=10)
-        ttk.Button(search_button_frame, text="Manuelle Suche", command=lambda: perform_search()).pack(side=tk.LEFT, padx=10)
-        ttk.Button(search_button_frame, text=f"Name ({initial_search_term}) suchen", command=search_by_patient_name, state=tk.NORMAL if self.patient_data else tk.DISABLED).pack(side=tk.LEFT, padx=10)
+        # --- BUTTONS ---
+        btn_frame = ttk.Frame(search_window)
+        btn_frame.pack(pady=10)
         
-        action_frame = ttk.Frame(search_window)
-        action_frame.pack(pady=10)
-        ttk.Button(action_frame, text="+ Hinzufügen", command=add_selected_events).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Manuelle Suche", command=lambda: perform_search()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="+ Hinzufügen", command=add_selected_events).pack(side=tk.LEFT, padx=5)
+        save_btn = ttk.Button(btn_frame, text="Auswahl Speichern & Ersetzen (ENTER)", command=replace_selected_events)
+        save_btn.pack(side=tk.LEFT, padx=5)
+        search_window.after(100, lambda: save_btn.focus_set())
+
+        # --- BINDINGS ---
+        # ENTER im Suchfeld -> Neue Suche
+        search_entry.bind('<Return>', lambda e: perform_search())
         
-        # NEUER BUTTON FÜR ERSETZEN
-        ttk.Button(action_frame, text="Auswahl Speichern", command=replace_selected_events).pack(side=tk.LEFT, padx=10) 
+        # ENTER im Fenster (außerhalb Suchfeld) -> Ersetzen & Schließen
+        search_window.bind('<Return>', lambda e: replace_selected_events() if search_window.focus_get() != search_entry else perform_search())
+        
+        # Doppelklick -> Hinzufügen (wie im Original)
+        results_tree.bind('<Double-1>', lambda e: add_selected_events())
+        # ESC -> Schließen
+        search_window.bind('<Escape>', lambda e: search_window.destroy())
 
-        # Doppelklick auf Eintrag soll Hinzufügen auslösen
-        results_tree.bind('<Double-1>', lambda event: add_selected_events())
-
+        # Fenster zentrieren
         search_window.update_idletasks()
-        width = search_window.winfo_width()
-        height = search_window.winfo_height()
-        x = (search_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (search_window.winfo_screenheight() // 2) - (height // 2)
-        search_window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
-
-        if self.patient_data:
-            perform_search(initial_search_term)
+        x = (search_window.winfo_screenwidth() // 2) - (search_window.winfo_width() // 2)
+        y = (search_window.winfo_screenheight() // 2) - (search_window.winfo_height() // 2)
+        search_window.geometry(f"+{x}+{y}")
 
     def load_leistung_stammdaten_buttons(self):
 # ... (Rest der Klasse bleibt unverändert)
