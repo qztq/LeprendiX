@@ -5,8 +5,10 @@ import threading
 import runpy
 import pickle
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog
 from PIL import Image, ImageTk
+import json
+from config_loader import CONFIG
 
 # --- KONFIGURATION & DESIGN ---
 COLOR_PRIMARY = "#2c3e50"
@@ -142,23 +144,35 @@ def launch_application(root):
     
     def run_tasks():
         try:
+            # Pfade auflösen
             gui_script = resource_path("gui_generator.py")
             checker_script = resource_path("patient_status_checker.py")
             
-            # Hintergrund-Checker
-            threading.Thread(target=lambda: runpy.run_path(checker_script, run_name="__main__"), daemon=True).start()
+            # Arbeitsverzeichnis setzen (falls die Skripte lokale Dateien laden)
+            script_dir = os.path.dirname(gui_script)
+            if script_dir:
+                os.chdir(script_dir)
+
+            # 1. Startet den Checker (im Hintergrund)
+            # Wir speichern die Referenz in 'p1', damit der Prozess nicht sofort stirbt
+            p1 = subprocess.Popen([sys.executable, checker_script])
             
-            # Startet die GUI (blockiert diesen Thread)
-            runpy.run_path(gui_script, run_name="__main__")
+            # 2. Startet die GUI
+            # 'p2' blockiert hier nicht den Thread auf die gleiche Weise wie .run()
+            p2 = subprocess.Popen([sys.executable, gui_script])
             
-            # Beendet das Control Center endgültig beim Schließen der GUI
-            root.quit() 
+            # Falls das Control Center (main.py) warten soll, bis die GUI (p2) geschlossen wird:
+            p2.wait() 
+            
+            # Wenn die Haupt-GUI geschlossen wurde, beenden wir das Control Center
+            root.after(0, root.quit)
+            
         except Exception as e:
             root.after(0, lambda: splash.destroy() if splash.winfo_exists() else None)
             messagebox.showerror("Fehler", f"Start fehlgeschlagen:\n{e}")
             root.deiconify()
 
-    # Threading starten
+    # Der Aufruf im Thread bleibt gleich
     threading.Thread(target=run_tasks, daemon=True).start()
 
 # --- HAUPTFENSTER ---
@@ -184,9 +198,23 @@ def create_main():
     nb.add(t1, text="  ÜBERSICHT  ")
 
     if os.path.exists(LOGO_PATH):
-        img = Image.open(LOGO_PATH).resize((350, 150), Image.Resampling.LANCZOS)
+        # 1. Bild öffnen
+        img = Image.open(LOGO_PATH)
+        
+        # 2. Proportionale Skalierung berechnen (z.B. maximale Breite 500px)
+        max_width = 500
+        w_percent = (max_width / float(img.size[0]))
+        h_size = int((float(img.size[1]) * float(w_percent)))
+        
+        # 3. Resize mit berechneten Werten (Beibehaltung des Seitenverhältnisses)
+        img = img.resize((max_width, h_size), Image.Resampling.LANCZOS)
         img_tk = ImageTk.PhotoImage(img)
-        tk.Label(t1, image=img_tk, bg=COLOR_PRIMARY).pack(pady=20)
+        
+        # 4. Label zentrieren
+        # Durch pack(expand=True) wird das Label im verfügbaren Raum zentriert
+        logo_label = tk.Label(t1, image=img_tk, bg=COLOR_PRIMARY)
+        logo_label.image = img_tk  # Referenz behalten (Garbage Collection Schutz)
+        logo_label.pack(pady=40, expand=False) # expand=False, falls es oben kleben soll, True für echte Mitte
 
     # Login Bereich
     login_f = tk.Frame(t1, bg=COLOR_SECONDARY, padx=40, pady=30, highlightbackground=COLOR_ACCENT, highlightthickness=1)
@@ -216,25 +244,28 @@ def create_main():
               relief="flat", cursor="hand2", padx=20, pady=10, command=do_login).pack(fill="x")
     root.bind('<Return>', do_login)
 
-    # --- TAB 2: DATENBANK ---
+
+
+
+    # --- TAB 2: DATENBANK & EINSTELLUNGEN ---
     t2 = tk.Frame(nb, bg=COLOR_PRIMARY)
-    nb.add(t2, text="  DATENBANK  ")
-    
-    # Ein zentrierter Container-Frame mit pack statt place
+    nb.add(t2, text="   EINSTELLUNGEN   ")
+
+    # Ein zentrierter Container-Frame
     db_container = tk.Frame(t2, bg=COLOR_PRIMARY)
-    db_container.pack(expand=True) # Zentriert den Inhalt vertikal und horizontal
-    
+    db_container.pack(expand=True, fill="both", padx=20)
+
+    # --- Teil 1: Datenbank-Initialisierung ---
     tk.Label(db_container, text="Datenbank-Initialisierung", 
-             font=("Segoe UI", 18, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=20)
-    
+            font=("Segoe UI", 16, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=(20, 10))
+
     db_p_ent = tk.Entry(db_container, show="*", width=30, bg=COLOR_SECONDARY, 
-                        fg="white", font=("Arial", 14), justify="center", relief="flat")
-    db_p_ent.pack(pady=10, ipady=8)
-    
+                        fg="white", font=("Arial", 12), justify="center", relief="flat")
+    db_p_ent.pack(pady=5, ipady=5)
+
     def do_setup():
         if USER_CREDS and db_p_ent.get() == USER_CREDS.get("password"):
             try:
-                # Nutze runpy statt subprocess für die EXE-Kompatibilität
                 setup_script = resource_path("db_setup.py")
                 runpy.run_path(setup_script, run_name="__main__")
                 messagebox.showinfo("Erfolg", "Datenbank bereit.")
@@ -243,9 +274,50 @@ def create_main():
         else: 
             messagebox.showerror("Fehler", "Passwort falsch.")
             
-    tk.Button(db_container, text="Setup ausführen", bg="#e67e22", fg="white", 
-              font=("Segoe UI", 11, "bold"), relief="flat", padx=30, pady=12, 
-              command=do_setup).pack(pady=20)
+    tk.Button(db_container, text="Datenbank Setup", bg="#e67e22", fg="white", 
+            font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=8, 
+            command=do_setup).pack(pady=10)
+
+    # Trennlinie
+    tk.Frame(db_container, height=2, bg=COLOR_SECONDARY, bd=0).pack(fill="x", pady=20)
+
+    # --- Teil 2: Pfad-Einstellungen (JSON) ---
+    tk.Label(db_container, text="Pfad-Konfiguration", 
+            font=("Segoe UI", 16, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=10)
+
+    # Frames für die Pfadanzeige
+    def create_path_row(label_text, config_key):
+        row = tk.Frame(db_container, bg=COLOR_PRIMARY)
+        row.pack(fill="x", pady=5)
+        
+        tk.Label(row, text=label_text, fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"), width=15, anchor="w").pack(side="left")
+        
+        # Label zur Anzeige des aktuellen Pfads
+        path_var = tk.StringVar(value=CONFIG.get(config_key, "Nicht gesetzt"))
+        lbl = tk.Label(row, textvariable=path_var, fg="#bdc3c7", bg=COLOR_SECONDARY, font=("Consolas", 9), anchor="w", padx=10)
+        lbl.pack(side="left", fill="x", expand=True, padx=10, ipady=3)
+        
+        def change_path():
+            new_path = filedialog.askdirectory(initialdir=path_var.get())
+            if new_path:
+                new_path = new_path.replace("/", "\\") # Windows-Format
+                # 1. Variable im Programm aktualisieren
+                CONFIG[config_key] = new_path
+                path_var.set(new_path)
+                # 2. In JSON speichern
+                try:
+                    with open("config.json", "w", encoding="utf-8") as f:
+                        json.dump(CONFIG, f, indent=4)
+                    messagebox.showinfo("Gespeichert", f"{label_text} wurde aktualisiert.")
+                except Exception as e:
+                    messagebox.showerror("Fehler", f"Speichern fehlgeschlagen: {e}")
+
+        tk.Button(row, text="Ändern", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 8), 
+                relief="flat", command=change_path, padx=10).pack(side="right")
+
+    # Erzeuge die Zeilen für die beiden Hauptpfade
+    create_path_row("Patienten-Ordner:", "PATIENT_BASE_DIR")
+    create_path_row("Archiv-Ordner:", "ARCHIVE_DIR")
 
     # --- TAB 3: DOKUMENTATION ---
     t3 = tk.Frame(nb, bg=COLOR_PRIMARY)

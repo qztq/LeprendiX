@@ -1,6 +1,3 @@
-# gui_generator.py
-# Grafische Benutzeroberfläche (GUI) für den Honorarnoten-Generator mit voller Verwaltung und Teamup API-Integration
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 import sqlite3
@@ -9,23 +6,19 @@ from typing import Self
 from docx import Document
 import os
 import requests 
-import json     
 import subprocess 
 import sys
-import tkinter
 from docx.enum.text import WD_UNDERLINE
 from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
 from docx.shared import Inches, Pt, Twips
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
-import runpy     
-import traceback
+from config_loader import PATIENT_BASE_DIR
 
-# Entfernt: from log_data import log_patient_name 
 
 # --- KONFIGURATION ---
 DATABASE_NAME = 'patienten.db'
 TEMPLATE_FILE = 'honorar_vorlage.docx' 
-OUTPUT_FOLDER = 'C:\\Users\\tobia\\Desktop' # Basisordner
+OUTPUT_FOLDER = PATIENT_BASE_DIR
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -674,7 +667,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         
 
     # --- Speichern des Dokuments ---
-    patient_folder_name = f"{nachname}+" "+{vorname}"
+    patient_folder_name = f"{nachname} {vorname}"
     patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
     
@@ -718,6 +711,7 @@ class HonorarGeneratorApp:
         self.tab_leistung = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_leistung, text='➕ Leistungen Hinzufügen/Prüfen')
         self.setup_leistung_tab(self.tab_leistung)
+        self.update_leistung_list()
         
         self.tab_stammdaten = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_stammdaten, text='⚙️ Stammdaten Leistungen')
@@ -740,7 +734,7 @@ class HonorarGeneratorApp:
 
         self.search_entry.focus_set()
         self.root.bind('<Return>', self.handle_global_enter)
-        self.root.bind('<Insert>', self._switch_to_generate_tab)
+        self.root.bind('<Delete>', self._switch_to_generate_tab)
         self.root.bind('<F12>', self._switch_to_generate_tab)
 
 
@@ -1152,7 +1146,7 @@ class HonorarGeneratorApp:
         ttk.Label(search_frame, text="Patient suchen/laden:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.patient_search_entry = ttk.Entry(search_frame, width=30)
         self.patient_search_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
-        ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
+        ttk.Button(search_frame, text="Laden - Felder zurücksetzen", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
         
         self.patient_id_to_edit = None
 
@@ -1851,6 +1845,19 @@ class HonorarGeneratorApp:
         stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
         self.stammdaten_betraege = stammdaten_dict 
 
+        if 'Selected.TButton' not in self.ttk_style.theme_names():
+            # Wir nutzen 'clam' als Basis für diesen Style, da es Farben zulässt
+            self.ttk_style.configure('Selected.TButton', 
+                             background='#90EE90', # Hellgrün
+                             foreground='black', 
+                             font=('Helvetica', 9, 'bold'))
+    
+            # WICHTIG: Map sorgt dafür, dass die Farbe auch beim Drücken bleibt
+            self.ttk_style.map('Selected.TButton',
+                background=[('active', '#7ccd7c'), ('pressed', '#66bb66')],
+        )
+
+
         # Lösche vorhandene Buttons
         for widget in self.leistung_button_frame.winfo_children():
             widget.destroy()
@@ -1877,7 +1884,7 @@ class HonorarGeneratorApp:
         self.leistung_canvas.config(scrollregion=self.leistung_canvas.bbox("all"))
 
     def load_and_select_last_leistungen(self):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Lädt die zuletzt gespeicherte Leistungsauswahl für den Patienten und wählt die Buttons."""
         if not self.patient_data:
             return 
@@ -1910,33 +1917,23 @@ class HonorarGeneratorApp:
                     break
 
     def toggle_leistung_selection(self, kurzname):
-# ... (Rest der Klasse bleibt unverändert)
-        """Wechselt den Auswahlzustand eines Leistungs-Buttons und passt das Aussehen an."""
         button_ref = None
         for widget in self.leistung_button_frame.winfo_children():
             if hasattr(widget, 'kurzname') and widget.kurzname == kurzname:
                 button_ref = widget
                 break
         
-        if not button_ref:
-            return
+        if not button_ref: return
 
         if kurzname in self.selected_leistungs_kurznamen:
-            # Abwählen
             self.selected_leistungs_kurznamen.remove(kurzname)
-            button_ref.is_selected = False
-            button_ref.config(style='TButton')
+            button_ref.config(style='TButton') # Zurück zum Standard
         else:
-            # Auswählen
             self.selected_leistungs_kurznamen.add(kurzname)
-            button_ref.is_selected = True 
-            # Hervorhebung durch eigenen Style
-            # Korrigiert: Verwenden Sie self.ttk_style anstelle von self.master.style
-            self.ttk_style.configure('Selected.TButton', background='light green', foreground='black')
-            button_ref.config(style='Selected.TButton')
+            button_ref.config(style='Selected.TButton') # Grün markieren
 
     def add_leistung_gui(self):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Fügt neue Leistung(en) in die DB ein, nun mit Uhrzeit und Kilometergeld-Zuschlag."""
         if not self.patient_data:
             messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
@@ -2045,7 +2042,7 @@ class HonorarGeneratorApp:
             print("INFO: Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
 
     def update_leistung_list(self):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Aktualisiert die Liste der Leistungen im Treeview."""
         if not self.patient_data:
             self.leistung_tree.delete(*self.leistung_tree.get_children())
@@ -2073,7 +2070,7 @@ class HonorarGeneratorApp:
         self.summary_label.config(text=f"Gesamtsumme: €{total_sum:.2f} | Nicht abgerechnete Leistungen: {len(leistungen)}")
 
     def select_leistung_for_edit(self, event):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Speichert die ID der ausgewählten Leistung."""
         selected_item = self.leistung_tree.focus()
         if selected_item:
@@ -2087,7 +2084,7 @@ class HonorarGeneratorApp:
 
 
     def load_leistung_for_edit(self):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Lädt die ausgewählte Leistung in die Eingabefelder zum Bearbeiten."""
         if not hasattr(self, 'selected_leistung_id') or not self.selected_leistung_id:
             messagebox.showwarning("Achtung", "Bitte wählen Sie eine Leistung aus der Liste aus.")
@@ -2138,7 +2135,7 @@ class HonorarGeneratorApp:
 
 
     def update_leistung_gui(self, leistung_id):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Aktualisiert eine bestehende Leistung, nun mit Uhrzeit und Kilometergeld-Zuschlag."""
         datum_str = self.date_entry.get().strip()
         time_from_str = self.time_from_entry.get().strip()
@@ -2218,7 +2215,7 @@ class HonorarGeneratorApp:
 
     # --- 4. Stammdaten Leistungen Tab ---
     def setup_stammdaten_tab(self, tab):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         fields = ["Kurzname (Eindeutig)", "Beschreibung", "Standard Betrag (€)"]
         self.stammdaten_entries = {}
 
@@ -2241,9 +2238,10 @@ class HonorarGeneratorApp:
         ttk.Button(control_frame, text="Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT, padx=10)
         
         tab.grid_rowconfigure(5, weight=1)
+        self.update_stammdaten_list()
 
     def update_stammdaten_list(self):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Aktualisiert die Liste der Stammdaten."""
         self.stammdaten_listbox.delete(0, tk.END)
         stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
@@ -2254,7 +2252,7 @@ class HonorarGeneratorApp:
         self.load_leistung_stammdaten_buttons() # Update auch die Buttons
 
     def select_stammdaten_from_list(self, event):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Lädt die ausgewählte Stammdatenleistung in die Eingabefelder."""
         selection = self.stammdaten_listbox.curselection()
         if selection:
@@ -2276,7 +2274,7 @@ class HonorarGeneratorApp:
 
 
     def save_stammdaten(self):
-# ... (Rest der Klasse bleibt unverändert)
+        # ... (Rest der Klasse bleibt unverändert)
         """Speichert oder aktualisiert Stammdaten."""
         kurzname = self.stammdaten_entries["Kurzname (Eindeutig)"].get().strip()
         beschreibung = self.stammdaten_entries["Beschreibung"].get().strip()
