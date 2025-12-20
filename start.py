@@ -31,10 +31,12 @@ class CustomMsgBox(tk.Toplevel):
         self.result = False
         self.overrideredirect(True)
         self.configure(bg='#1a1a1a', highlightbackground="#00f2ff", highlightthickness=2)
-        w, h = 400, 200
+        w, h = 400, 250
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{int(sw/2-w/2)}+{int(sh/2-h/2)}")
-        self.transient(parent)
+        self.attributes("-topmost", True)
+        self.lift()
+        self.focus_force()
         self.grab_set()
         tk.Label(self, text=title, font=("Segoe UI", 14, "bold"), fg="#00f2ff", bg='#1a1a1a', pady=10).pack()
         tk.Label(self, text=message, font=("Segoe UI", 11), fg="white", bg='#1a1a1a', wraplength=350, pady=20).pack()
@@ -117,7 +119,10 @@ class NeonTraceSplash:
                         self.root.attributes('-topmost', False)
                         msg = CustomMsgBox(self.root, "Update verfügbar", f"Neu: {latest_tag}\nLokal: {local_v}\nJetzt updaten?")
                         self.root.wait_window(msg)
-                        if msg.result: webbrowser.open(RELEASE_PAGE)
+                        if msg.result: 
+                            webbrowser.open(RELEASE_PAGE)
+                            self.root.destroy()
+                            sys.exit()
                     else:
                         print("[DEBUG] Kein Update nötig (Lokal >= GitHub).")
         except Exception as e:

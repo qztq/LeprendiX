@@ -8,6 +8,29 @@ import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 from PIL import Image, ImageTk
 import json
+import datetime
+
+def get_base_path():
+    """ Ermittelt den Pfad zum Ordner, in dem die EXE oder das Skript liegt """
+    if getattr(sys, 'frozen', False):
+        # Pfad der EXE im "One Directory" Modus
+        return os.path.dirname(sys.executable)
+    else:
+        # Pfad im Editor
+        return os.path.dirname(os.path.abspath(__file__))
+
+BASE_DIR = get_base_path()
+os.chdir(BASE_DIR)
+
+def resource_path(relative_path):
+    """ Hilfsfunktion für interne Ressourcen (wie Logos im _MEIPASS) """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = BASE_DIR
+    return os.path.join(base_path, relative_path)
+
+
 from config_loader import CONFIG
 import gui_generator
 import patient_status_checker
@@ -18,19 +41,11 @@ COLOR_SECONDARY = "#34495e"
 COLOR_ACCENT = "#27ae60"
 COLOR_TEXT = "#ecf0f1"
 COLOR_HIGHLIGHT = "#3498db"
-
-def resource_path(relative_path):
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    return os.path.join(base_path, relative_path)
-
 LOGO_PATH = resource_path("logo.png")
 
 # --- CREDENTIALS LADEN ---
 def load_credentials():
-    cred_path = resource_path("credentials.dat")
+    cred_path = os.path.join(BASE_DIR, "credentials.dat")
     if os.path.exists(cred_path):
         try:
             with open(cred_path, "rb") as f:
@@ -41,28 +56,15 @@ def load_credentials():
 
 USER_CREDS = load_credentials()
 
-# --- HELFER-FUNKTIONEN ---
-def scroll_to_section(text_widget, section_tag):
-    """Scrollt den Dokumentationstext zur gewählten Sektion."""
-    idx = text_widget.search(section_tag, "1.0", tk.END)
-    if idx:
-        text_widget.see(idx)
-        text_widget.tag_add("highlight", idx, f"{idx} lineend")
-        text_widget.after(500, lambda: text_widget.tag_remove("highlight", "1.0", tk.END))
 
-# --- LADEBILDSCHIRM (SPLASH) ---
-# --- LADEBILDSCHIRM (SPLASH) VERBESSERT ---
 def show_loading_screen(root):
     loading_win = tk.Toplevel(root)
     loading_win.title("Lade LeprendiX...")
     loading_win.geometry("450x220")
     loading_win.configure(bg=COLOR_SECONDARY)
     loading_win.overrideredirect(True)
-    
-    # Zwingt das Fenster in den Vordergrund
     loading_win.attributes("-topmost", True)
     
-    # Zentrierung
     root.update_idletasks()
     x = root.winfo_x() + (root.winfo_width() // 2) - 225
     y = root.winfo_y() + (root.winfo_height() // 2) - 110
@@ -70,101 +72,45 @@ def show_loading_screen(root):
 
     tk.Label(loading_win, text="LeprendiX", font=("Segoe UI", 24, "bold"), 
              fg=COLOR_ACCENT, bg=COLOR_SECONDARY).pack(pady=(40, 5))
-    tk.Label(loading_win, text="System wird gestartet...", 
-             font=("Segoe UI", 10), fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack()
-
+    
     progress = ttk.Progressbar(loading_win, mode="indeterminate", length=350)
     progress.pack(pady=30)
     progress.start(15) 
-    
-    # Wichtig: Fenster heben und Zeichnen erzwingen
     loading_win.lift()
-    loading_win.update()
-    
     return loading_win
 
+# In main.py
 def launch_application(root):
-    splash = show_loading_screen(root)
-    root.withdraw() 
-
-    # 1. Den Hintergrund-Checker können wir im Thread lassen, 
-    #    da er im Hintergrund arbeiten soll.
-    def run_checker():
-        try:
-            patient_status_checker.start_checker()
-        except Exception as e:
-            print(f"Checker Fehler: {e}")
-
-    checker_thread = threading.Thread(target=run_checker, daemon=True)
-    checker_thread.start()
-
-    # 2. Den Splash-Screen nach Zeitplan schließen
-    root.after(3000, lambda: splash.destroy() if splash.winfo_exists() else None)
-
-    # 3. JETZT DER TRICK: Wir rufen die Haupt-GUI NICHT im Thread auf,
-    #    sondern direkt hier im Haupt-Ablauf.
-    try:
-        print("Starte Haupt-GUI...")
-        # Dieser Aufruf blockiert hier, bis das Fenster geschlossen wird
-        gui_generator.start_gui() 
-    except Exception as e:
-        messagebox.showerror("Fehler", f"GUI konnte nicht geladen werden: {e}")
-    finally:
-        # Wenn die Haupt-GUI zugeht, beende alles
-        root.destroy()
-
-def exe_path(name):
-    """
-    Liefert den korrekten Pfad zu einer mitgelieferten EXE
-    (funktioniert für --onefile und --onedir)
-    """
-    if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-
-    return os.path.join(base_path, name)
-
-# --- PROGRAMMSTART LOGIK ---
-def launch_application(root):
-    # 1. Splash Screen erstellen
     splash = show_loading_screen(root)
     root.withdraw() 
     
-    def run_tasks():
-        try:
-            gui_script = resource_path("gui_generator.py")
-            checker_script = resource_path("patient_status_checker.py")
-            
-            # Hintergrund-Checker starten
-            threading.Thread(target=lambda: runpy.run_path(checker_script, run_name="__main__"), daemon=True).start()
-            
-            # Timer zum Schließen des Splash-Screens im Haupt-Thread registrieren
-            # Wir nutzen root.after, damit das Zerstören sicher im GUI-Thread passiert
-            root.after(3000, lambda: splash.destroy() if splash.winfo_exists() else None)
-            
-            # Hauptanwendung starten (Dies blockiert diesen Thread)
-            runpy.run_path(gui_script, run_name="__main__")
-            
-            # Sobald die GUI-Anwendung geschlossen wird, das Control Center beenden
-            root.destroy()
-            
-        except Exception as e:
-            # Im Fehlerfall Splash weg und Login wieder her
-            root.after(0, lambda: splash.destroy() if splash.winfo_exists() else None)
-            messagebox.showerror("Fehler", f"Start fehlgeschlagen:\n{e}")
-            root.deiconify()
+    def finalize_start():
+        # 1. Splash zerstören
+        if splash.winfo_exists():
+            splash.destroy()
+        
+        # Hauptanwendung (Generator) starten
+        gen_root = tk.Tk()
+        app_gen = gui_generator.HonorarGeneratorApp(gen_root)
+        
+        # Status-Checker parallel starten (als Toplevel Fenster)
+        checker_win = tk.Toplevel(gen_root)
+        app_checker = patient_status_checker.PatientStatusApp(checker_win)
+        
+        gen_root.mainloop()
+        
+        
+        
+        # Sobald das Hauptfenster geschlossen wird, beenden wir auch den unsichtbaren root
+        root.destroy()
 
-    # Den Lade-Thread starten
-    threading.Thread(target=run_tasks, daemon=True).start()
+    # Wir warten 2 Sekunden mit dem Splash und rufen dann finalize_start im Main-Thread auf
+    root.after(2000, finalize_start)
+    root.mainloop()
 
 # --- HAUPTFENSTER ---
 def create_main():
-
-    try:
-        root = tk.Tk()
-    except:
-        root = tk.Toplevel()
+    root = tk.Tk()
     root.title("LeprendiX - Control Center")
     root.geometry("1150x850")
     root.configure(bg=COLOR_PRIMARY)
@@ -333,8 +279,7 @@ def create_main():
 
     for title, tag, content in sections:
         btn = tk.Button(sidebar, text=title, font=("Segoe UI", 10), bg=COLOR_SECONDARY, fg=COLOR_TEXT,
-                        relief="flat", anchor="w", cursor="hand2", activebackground=COLOR_PRIMARY,
-                        command=lambda t=tag: scroll_to_section(doc_t, t))
+                        relief="flat", anchor="w", cursor="hand2", activebackground=COLOR_PRIMARY)
         btn.pack(fill="x", padx=10, pady=2)
         doc_t.insert(tk.END, title + "\n", tag)
         doc_t.insert(tk.END, content)

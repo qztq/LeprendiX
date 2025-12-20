@@ -1,9 +1,17 @@
 import os
 import json
+import sys
 
 
 def get_config():
-    config_file = 'config.json'
+    # Ermittle den Basispfad (Exe-Verzeichnis oder Skript-Verzeichnis)
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        
+    config_file = os.path.join(base_path, 'config.json')
+    
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     defaults = {
         "DATABASE_NAME": "patienten.db",

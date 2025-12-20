@@ -15,9 +15,28 @@ import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 from config_loader import PATIENT_BASE_DIR
 
 
+# --- HELPER FUNCTIONS FOR PATH RESOLUTION ---
+def resolve_data_path(relative_path):
+    """Resolves path for writable data (next to exe or source dir)."""
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+def resolve_resource_path(relative_path):
+    """Resolves path for read-only resources (bundled in exe or source dir)."""
+    # 1. Try bundled path (PyInstaller)
+    if hasattr(sys, '_MEIPASS'):
+        bundled_path = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(bundled_path):
+            return bundled_path
+    # 2. Fallback to data path
+    return resolve_data_path(relative_path)
+
 # --- KONFIGURATION ---
-DATABASE_NAME = 'patienten.db'
-TEMPLATE_FILE = 'honorar_vorlage.docx' 
+DATABASE_NAME = resolve_data_path('patienten.db')
+TEMPLATE_FILE = resolve_resource_path('honorar_vorlage.docx') 
 OUTPUT_FOLDER = PATIENT_BASE_DIR
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -31,14 +50,10 @@ TEAMUP_BASE_URL = f"https://api.teamup.com/{TEAMUP_CALENDAR_ID}/events"
 # Platzhalter für die Überprüfung, falls der Nutzer den Key nicht eingetragen hat
 TEAMUP_API_KEY_PLACEHOLDER = 'YOUR_TEAMUP_API_KEY_HERE'
 
-
-# --- NEUE FUNKTIONEN FÜR DEN STATUS-CHECK (WICHTIG!) ---
-
 def start_gui():
     root = tk.Tk()
     app = HonorarGeneratorApp(root)
     root.mainloop()
-    
 
 def _ensure_status_column():
     """
@@ -73,58 +88,6 @@ def _update_invoiced_status(patient_id, status=1):
         
 # Sicherstellen, dass die Spalte beim Start existiert
 _ensure_status_column()
-
-# HINZUFÜGEN in gui_generator.py (nach den anderen DB-Helfern, aber vor der Klasse HonorarGeneratorApp)
-def _set_search_patient_id(patient_id):
-    """Setzt die ID eines Patienten, der im Status-Checker zur Suche im Hauptfenster ausgewählt wurde. 
-       Wird nur vom Status-Checker aufgerufen."""
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    key = 'last_selected_patient_id_for_search'
-    try:
-        # Führt ein INSERT OR REPLACE aus (fügt ein, oder überschreibt, wenn der Key existiert)
-        cursor.execute("INSERT OR REPLACE INTO einstellungen (key, value) VALUES (?, ?)", (key, str(patient_id)))
-        conn.commit()
-    except Exception as e:
-        # Die Tabelle 'einstellungen' muss existieren. Wenn nicht, wird hier ein Fehler ausgegeben.
-        print(f"FEHLER beim Setzen der Search-Target-ID: {e}")
-    finally:
-        conn.close()
-
-# KORRIGIERT: gui_generator.py (Funktion außerhalb der Klasse)
-
-def _get_and_clear_search_patient_id():
-    """
-    Holt die ID des zur Suche markierten Patienten, löscht den Eintrag 
-    und gibt die ID zurück.
-    """
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    key = 'last_selected_patient_id_for_search'
-    patient_id = None # Initialisiere patient_id
-
-    try:
-        # 1. Hole die ID
-        cursor.execute("SELECT value FROM einstellungen WHERE key = ?", (key,))
-        result = cursor.fetchone()
-        
-        if result:
-            patient_id = int(result[0])
-            # 2. Lösche den Eintrag, damit er nur einmal verwendet wird
-            cursor.execute("DELETE FROM einstellungen WHERE key = ?", (key,))
-            conn.commit()
-            
-    except Exception as e:
-        print(f"FEHLER beim Lesen/Löschen der Search-Target-ID: {e}")
-        patient_id = None # Sicherstellen, dass bei Fehler keine ID zurückkommt
-        
-    finally:
-        # Nur Aufräumarbeiten im finally-Block
-        conn.close() 
-        
-    # Der Rückgabewert erfolgt nun außerhalb des finally-Blocks
-    return patient_id
-# --- HILFSFUNKTIONEN FÜR DRUCK, DB und API ---
 
 def print_document_silently(file_path):
     """
@@ -186,7 +149,6 @@ def save_last_selected_leistungen(patient_id, kurznamen_set):
     finally:
         conn.close()
 
-
 def get_patient_leistungen(patient_id):
     """Holt alle NICHT ABGERECHNETEN Leistungen für die GUI-Anzeige."""
     # TODO: Muss später um 'WHERE abgerechnet_am IS NULL' erweitert werden
@@ -201,7 +163,6 @@ def get_patient_leistungen(patient_id):
     leistungen = cursor.fetchall()
     conn.close()
     return leistungen
-
 
 def get_patient_leistungen_for_template(patient_id):
     """Holt NICHT ABGERECHNETE Leistungen (ohne ID) für die Word-Generierung."""
@@ -296,11 +257,6 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
     except Exception as e:
         messagebox.showerror("Fehler", f"Teamup API-Fehler: {e}")
         return []
-
-
-
-
-# gui_generator.py: Die globale Funktion fill_template (KORRIGIERTE VERSION MIT SEITENUMBRUCH-SCHUTZ)
 
 def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block, ausstellungs_datum): 
     """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
@@ -688,17 +644,25 @@ class HonorarGeneratorApp:
         self.root = root
         self.root = root
         self.root.title("LeprendiX")
-        self.root.geometry("900x720")
+        self.root.geometry("900x750")
                 
         self.patient_data = None  
         self.stammdaten_betraege = {} 
         self.selected_leistung_id = None 
         self.selected_leistungs_kurznamen = set() # Für die Mehrfachauswahl-Buttons
+        self.ttk_style = ttk.Style() 
+        
+        # NEU: Initialisierung der Folgenummer (BHAG-Logik)
+        self.invoice_seq_var = tk.StringVar(master=root) 
+        self.invoice_sequence_data = self._get_invoice_sequence_data()
+        self.invoice_seq_var.set(str(self.invoice_sequence_data.get('rechnung_folgenummer', '0')).zfill(3))
+        
+        self.add_gemeinde_block_var = tk.BooleanVar(master=root, value=0) # Standardmäßig AUS
 
         # In HonorarGeneratorApp.__init__ (nach self.add_gemeinde_block_var = ...)
         now = datetime.datetime.now()
-        self.selected_invoice_month = tk.StringVar(value=f"{now.month:02d}")
-        self.selected_invoice_year = tk.StringVar(value=str(now.year))
+        self.selected_invoice_month = tk.StringVar(master=root, value=f"{now.month:02d}")
+        self.selected_invoice_year = tk.StringVar(master=root, value=str(now.year))
 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(pady=10, padx=10, expand=True, fill="both")
@@ -709,6 +673,7 @@ class HonorarGeneratorApp:
 
         self.tab_generate = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_generate, text='📝 Honorarnote Generieren')
+        self.setup_generate_tab(self.tab_generate)
         
         self.tab_patient = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_patient, text='👤 Patienten Verwalten')
@@ -723,18 +688,10 @@ class HonorarGeneratorApp:
         self.notebook.add(self.tab_stammdaten, text='⚙️ Stammdaten Leistungen')
         self.setup_stammdaten_tab(self.tab_stammdaten)
         
-        # NEU: Initialisierung des TK-Stil-Objekts (FIX für AttributeError)
-        self.ttk_style = ttk.Style() 
-        
-        # NEU: Initialisierung der Folgenummer (BHAG-Logik)
-        self.invoice_seq_var = tk.StringVar() 
-        self.invoice_sequence_data = self._get_invoice_sequence_data()
-        self.invoice_seq_var.set(str(self.invoice_sequence_data.get('rechnung_folgenummer', '0')).zfill(3))
-        
-        self.add_gemeinde_block_var = tk.BooleanVar(value=False) # Standardmäßig AUS
 
-        self.setup_generate_tab(self.tab_generate)
-        
+        self.add_gemeinde_block_var.set(0)
+
+              
         self.update_patient_info() 
         self.load_leistung_stammdaten_buttons()
 
@@ -819,6 +776,9 @@ class HonorarGeneratorApp:
 
     def _prepare_bhag_number(self):
         """Generiert die nächste BHAG-Nummer, aktualisiert die DB und die GUI."""
+        print(f"[DEBUG] Sequenz-Daten aktuell: {self.invoice_sequence_data}")
+
+
         now = datetime.datetime.now()
         current_year = str(now.year)
         current_month = str(now.month).zfill(2) 
@@ -850,6 +810,7 @@ class HonorarGeneratorApp:
         self.invoice_sequence_data['rechnung_folgenummer'] = str(new_folgenummer)
         self._update_invoice_sequence_data('rechnung_folgenummer', str(new_folgenummer))
         self.invoice_seq_var.set(folgenummer_str) # Aktualisiere das Feld im GUI
+        print(f"[DEBUG] Generierte Nummer: {bhag_nummer}")
         
         # Stelle sicher, dass die Monatsangabe immer aktuell ist (falls sie sich innerhalb des Jahres ändert)
         if stored_month != current_month:
@@ -904,9 +865,7 @@ class HonorarGeneratorApp:
 
         zusatz_frame = ttk.LabelFrame(tab, text="Zusätzliche Optionen für Word-Generierung")
         zusatz_frame.grid(row=5, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
-        ttk.Checkbutton(zusatz_frame, 
-                        text="Zusätzlichen 'Gemeinde Wiener Neudorf' Block in Dokument einfügen", 
-                        variable=self.add_gemeinde_block_var).grid(row=0, column=0, padx=5, pady=5, sticky='w')
+        ttk.Checkbutton(zusatz_frame, text="Zusätzlichen 'Gemeinde Wiener Neudorf' Block in Dokument einfügen", variable=self.add_gemeinde_block_var).grid(row=0, column=0, padx=5, pady=5, sticky='w')
         
         # In setup_generate_tab hinzufügen (z.B. nach dem folgenummer_frame):
         date_selection_frame = ttk.LabelFrame(tab, text="Ausstellungsdatum (Letzter Tag des Monats)")
@@ -972,7 +931,7 @@ class HonorarGeneratorApp:
         
         # TAB: Honorarnote generieren (Suche)
         if current_tab_index == 0:
-            focused_widget = self.master.focus_get()
+            focused_widget = self.root.focus_get()
             if focused_widget == self.search_entry:
                 self.search_patients()
             elif focused_widget == self.results_listbox:
@@ -1212,7 +1171,7 @@ class HonorarGeneratorApp:
 
     def _show_patient_selection_dialog(self, results):
         # ... (Funktion bleibt unverändert)
-        selection_window = tk.Toplevel(self.master)
+        selection_window = tk.Toplevel(self.root)
         selection_window.title("Patienten Auswahl")
         
         ttk.Label(selection_window, text="Mehrere Patienten gefunden. Bitte wählen Sie einen aus:").pack(pady=10)
@@ -1717,15 +1676,15 @@ class HonorarGeneratorApp:
         initial_search_term = self.patient_data[2] if self.patient_data else ""
 
         # --- 3. LADEFENSTER (PROGRESSBAR) ---
-        progress_win = tk.Toplevel(self.master)
+        progress_win = tk.Toplevel(self.root)
         progress_win.title("API Abruf...")
         progress_win.geometry("300x120")
-        progress_win.transient(self.master)
+        progress_win.transient(self.root)
         progress_win.grab_set()
         
         # Zentrieren
-        px = self.master.winfo_x() + (self.master.winfo_width() // 2) - 150
-        py = self.master.winfo_y() + (self.master.winfo_height() // 2) - 60
+        px = self.root.winfo_x() + (self.root.winfo_width() // 2) - 150
+        py = self.root.winfo_y() + (self.root.winfo_height() // 2) - 60
         progress_win.geometry(f"+{px}+{py}")
 
         ttk.Label(progress_win, text=f"Lade Termine für:\n{initial_search_term}", justify="center").pack(pady=10)
@@ -1741,12 +1700,12 @@ class HonorarGeneratorApp:
             progress_win.destroy()
 
         # --- 4. DER SUCH-DIALOG (RE-DESIGNED) ---
-        search_window = tk.Toplevel(self.master)
+        search_window = tk.Toplevel(self.root)
         search_window.title("Teamup Termin-Suche")
         search_window.geometry("650x550")
         search_window.grab_set()
 
-        search_window.transient(self.master) 
+        search_window.transient(self.root) 
         search_window.grab_set()
 
         ttk.Label(search_window, text="Suchbegriff (Name/Titel):").pack(pady=5, padx=10, anchor='w')
@@ -1851,16 +1810,19 @@ class HonorarGeneratorApp:
         stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
         self.stammdaten_betraege = stammdaten_dict 
 
-        if 'Selected.TButton' not in self.ttk_style.theme_names():
-            # Wir nutzen 'clam' als Basis für diesen Style, da es Farben zulässt
-            self.ttk_style.configure('Selected.TButton', 
-                             background='#90EE90', # Hellgrün
-                             foreground='black', 
-                             font=('Helvetica', 9, 'bold'))
-    
-            # WICHTIG: Map sorgt dafür, dass die Farbe auch beim Drücken bleibt
-            self.ttk_style.map('Selected.TButton',
-                background=[('active', '#7ccd7c'), ('pressed', '#66bb66')],
+        # FIX: Theme auf 'clam' setzen, damit Hintergrundfarben unterstützt werden
+        # Windows-Standard-Themes (vista/xpnative) ignorieren oft background-Farben
+        if self.ttk_style.theme_use() != 'clam':
+            self.ttk_style.theme_use('clam')
+
+        # Style definieren (Grüner Hintergrund, fetter Text)
+        self.ttk_style.configure('Selected.TButton', 
+                            background='#90EE90', # Hellgrün
+                            foreground='black', 
+                            font=('Helvetica', 9, 'bold'))
+        
+        self.ttk_style.map('Selected.TButton',
+            background=[('active', '#7ccd7c'), ('pressed', '#66bb66')],
         )
 
 
@@ -1873,11 +1835,6 @@ class HonorarGeneratorApp:
             kurzname = item.split(' - ')[0]
             betrag = stammdaten_dict[item]
             
-            # Korrigiert: Verwenden Sie self.ttk_style anstelle von self.master.style
-            if 'Selected.TButton' not in self.ttk_style.theme_names(): 
-                # Definiert den Stil (wird nur einmal ausgeführt)
-                self.ttk_style.configure('Selected.TButton', background='light green', foreground='black')
-
             btn = ttk.Button(self.leistung_button_frame, 
                              text=f"{kurzname} (€{betrag:.2f})", 
                              command=lambda k=kurzname: self.toggle_leistung_selection(k))
@@ -2015,7 +1972,7 @@ class HonorarGeneratorApp:
             messagebox.showinfo("Erfolg", f"{total_success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
             self._reset_leistung_selection()
             self.update_leistung_list()
-            self.master.focus_force()
+            self.root.focus_force()
         # Keine MessageBox bei 0, da das System das intern loggen kann.
 
     def replace_all_leistungen_from_teamup(self, events_list):
@@ -2042,7 +1999,7 @@ class HonorarGeneratorApp:
             messagebox.showinfo("Erfolg", f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
             self._reset_leistung_selection()
             self.update_leistung_list()
-            self.master.focus_force()
+            self.root.focus_force()
         else:
             messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
             print("INFO: Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
@@ -2353,9 +2310,6 @@ class HonorarGeneratorApp:
                 messagebox.showerror("Fehler", f"Fehler beim Löschen: {e}")
             finally:
                 conn.close()
-
-
-
 
 # --- START DER ANWENDUNG ---
 if __name__ == "__main__":
