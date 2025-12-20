@@ -7,7 +7,7 @@
   },
   {
    "optionDest": "filenames",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/main.py"
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/start.py"
   },
   {
    "optionDest": "onefile",
@@ -166,6 +166,22 @@
    "value": "traceback"
   },
   {
+   "optionDest": "hiddenimports",
+   "value": "pickle"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "pickle"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/config.json;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/config_loader.py;."
+  },
+  {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/credentials.dat;."
   },
@@ -202,12 +218,24 @@
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/patient_status_checker.py;."
   },
   {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/version.txt;."
+  },
+  {
    "optionDest": "hiddenimports",
-   "value": "pickle"
+   "value": "shutil"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "json"
   },
   {
    "optionDest": "collect_submodules",
-   "value": "pickle"
+   "value": "shutil"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "json"
   }
  ],
  "nonPyinstallerOptions": {

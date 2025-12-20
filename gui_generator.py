@@ -34,6 +34,12 @@ TEAMUP_API_KEY_PLACEHOLDER = 'YOUR_TEAMUP_API_KEY_HERE'
 
 # --- NEUE FUNKTIONEN FÜR DEN STATUS-CHECK (WICHTIG!) ---
 
+def start_gui():
+    root = tk.Tk()
+    app = HonorarGeneratorApp(root)
+    root.mainloop()
+    
+
 def _ensure_status_column():
     """
     Stellt sicher, dass die Spalte 'invoiced_since_reset' in der patienten-Tabelle existiert.
@@ -678,11 +684,11 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     return output_path
 
 class HonorarGeneratorApp:
-    def __init__(self, master):
-        self.master = master
+    def __init__(self, root):
         self.root = root
-        master.title("LeprendiX")
-        master.geometry("900x720")
+        self.root = root
+        self.root.title("LeprendiX")
+        self.root.geometry("900x720")
                 
         self.patient_data = None  
         self.stammdaten_betraege = {} 
@@ -694,7 +700,7 @@ class HonorarGeneratorApp:
         self.selected_invoice_month = tk.StringVar(value=f"{now.month:02d}")
         self.selected_invoice_year = tk.StringVar(value=str(now.year))
 
-        self.notebook = ttk.Notebook(master)
+        self.notebook = ttk.Notebook(root)
         self.notebook.pack(pady=10, padx=10, expand=True, fill="both")
 
         self.ttk_style = ttk.Style() 
@@ -737,7 +743,7 @@ class HonorarGeneratorApp:
         self.root.bind('<Delete>', self._switch_to_generate_tab)
         self.root.bind('<F12>', self._switch_to_generate_tab)
 
-
+        
    
     def _get_invoice_sequence_data(self):
         """Holt die aktuelle Folgenummer, Jahr und Monat aus der Einstellungen-Tabelle."""
@@ -2349,8 +2355,8 @@ class HonorarGeneratorApp:
                 conn.close()
 
 
+
+
 # --- START DER ANWENDUNG ---
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = HonorarGeneratorApp(root)
-    root.mainloop()
+    start_gui()

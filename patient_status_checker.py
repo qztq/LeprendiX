@@ -7,8 +7,6 @@ import json
 from config_loader import DATABASE_NAME, PATIENT_BASE_DIR, ARCHIVE_DIR
 
 
-
-
 DATABASE_NAME = DATABASE_NAME
 PATIENT_BASE_DIR = PATIENT_BASE_DIR
 ARCHIVE_DIR = ARCHIVE_DIR
@@ -178,7 +176,14 @@ class PatientStatusApp:
         conn.close()
         self.load_patient_statuses()
 
-if __name__ == '__main__':
+
+def start_checker():
+    """Diese Funktion wird von main.py aufgerufen."""
     root = tk.Tk()
+    # Wir erstellen eine Instanz deiner App-Klasse
     app = PatientStatusApp(root)
     root.mainloop()
+
+    
+if __name__ == '__main__':
+    start_checker()

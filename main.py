@@ -9,6 +9,8 @@ from tkinter import messagebox, ttk, filedialog
 from PIL import Image, ImageTk
 import json
 from config_loader import CONFIG
+import gui_generator
+import patient_status_checker
 
 # --- KONFIGURATION & DESIGN ---
 COLOR_PRIMARY = "#2c3e50"
@@ -82,6 +84,49 @@ def show_loading_screen(root):
     return loading_win
 
 def launch_application(root):
+    splash = show_loading_screen(root)
+    root.withdraw() 
+
+    # 1. Den Hintergrund-Checker können wir im Thread lassen, 
+    #    da er im Hintergrund arbeiten soll.
+    def run_checker():
+        try:
+            patient_status_checker.start_checker()
+        except Exception as e:
+            print(f"Checker Fehler: {e}")
+
+    checker_thread = threading.Thread(target=run_checker, daemon=True)
+    checker_thread.start()
+
+    # 2. Den Splash-Screen nach Zeitplan schließen
+    root.after(3000, lambda: splash.destroy() if splash.winfo_exists() else None)
+
+    # 3. JETZT DER TRICK: Wir rufen die Haupt-GUI NICHT im Thread auf,
+    #    sondern direkt hier im Haupt-Ablauf.
+    try:
+        print("Starte Haupt-GUI...")
+        # Dieser Aufruf blockiert hier, bis das Fenster geschlossen wird
+        gui_generator.start_gui() 
+    except Exception as e:
+        messagebox.showerror("Fehler", f"GUI konnte nicht geladen werden: {e}")
+    finally:
+        # Wenn die Haupt-GUI zugeht, beende alles
+        root.destroy()
+
+def exe_path(name):
+    """
+    Liefert den korrekten Pfad zu einer mitgelieferten EXE
+    (funktioniert für --onefile und --onedir)
+    """
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    return os.path.join(base_path, name)
+
+# --- PROGRAMMSTART LOGIK ---
+def launch_application(root):
     # 1. Splash Screen erstellen
     splash = show_loading_screen(root)
     root.withdraw() 
@@ -113,71 +158,13 @@ def launch_application(root):
     # Den Lade-Thread starten
     threading.Thread(target=run_tasks, daemon=True).start()
 
-# --- PROGRAMMSTART LOGIK ---
-def launch_application(root):
-    # 1. Splash Screen erstellen (mit Topmost-Fix)
-    splash = tk.Toplevel(root)
-    splash.title("Lade LeprendiX...")
-    splash.geometry("450x220")
-    splash.configure(bg=COLOR_SECONDARY)
-    splash.overrideredirect(True)
-    splash.attributes("-topmost", True)
-    
-    # Zentrieren
-    root.update_idletasks()
-    x = root.winfo_x() + (root.winfo_width() // 2) - 225
-    y = root.winfo_y() + (root.winfo_height() // 2) - 110
-    splash.geometry(f"+{int(x)}+{int(y)}")
-
-    tk.Label(splash, text="LeprendiX", font=("Segoe UI", 24, "bold"), fg=COLOR_ACCENT, bg=COLOR_SECONDARY).pack(pady=(40, 5))
-    progress = ttk.Progressbar(splash, mode="indeterminate", length=350)
-    progress.pack(pady=30)
-    progress.start(15)
-
-    # 2. DAS IST DER ENTSCHEIDENDE TEIL:
-    # Wir sagen dem Hauptfenster JETZT, dass es in 3 Sekunden den Splash löschen soll.
-    # Dieser Befehl wartet nicht auf den Thread!
-    root.after(3000, lambda: splash.destroy() if splash.winfo_exists() else None)
-
-    # 3. Haupt-Control-Center ausblenden
-    root.withdraw() 
-    
-    def run_tasks():
-        try:
-            # Pfade auflösen
-            gui_script = resource_path("gui_generator.py")
-            checker_script = resource_path("patient_status_checker.py")
-            
-            # Arbeitsverzeichnis setzen (falls die Skripte lokale Dateien laden)
-            script_dir = os.path.dirname(gui_script)
-            if script_dir:
-                os.chdir(script_dir)
-
-            # 1. Startet den Checker (im Hintergrund)
-            # Wir speichern die Referenz in 'p1', damit der Prozess nicht sofort stirbt
-            p1 = subprocess.Popen([sys.executable, checker_script])
-            
-            # 2. Startet die GUI
-            # 'p2' blockiert hier nicht den Thread auf die gleiche Weise wie .run()
-            p2 = subprocess.Popen([sys.executable, gui_script])
-            
-            # Falls das Control Center (main.py) warten soll, bis die GUI (p2) geschlossen wird:
-            p2.wait() 
-            
-            # Wenn die Haupt-GUI geschlossen wurde, beenden wir das Control Center
-            root.after(0, root.quit)
-            
-        except Exception as e:
-            root.after(0, lambda: splash.destroy() if splash.winfo_exists() else None)
-            messagebox.showerror("Fehler", f"Start fehlgeschlagen:\n{e}")
-            root.deiconify()
-
-    # Der Aufruf im Thread bleibt gleich
-    threading.Thread(target=run_tasks, daemon=True).start()
-
 # --- HAUPTFENSTER ---
 def create_main():
-    root = tk.Tk()
+
+    try:
+        root = tk.Tk()
+    except:
+        root = tk.Toplevel()
     root.title("LeprendiX - Control Center")
     root.geometry("1150x850")
     root.configure(bg=COLOR_PRIMARY)

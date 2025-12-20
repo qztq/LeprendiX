@@ -6,6 +6,7 @@ import webbrowser
 import os
 import subprocess
 import sys
+import main
 
 # --- KONFIGURATION ---
 GITHUB_USER = "qztq"
@@ -13,6 +14,15 @@ REPO_NAME = "LeprendiX"
 GITHUB_TOKEN = "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" # BITTE NEUEN TOKEN ERSTELLEN (SICHERHEIT!)
 RELEASE_PAGE = f"https://github.com/{GITHUB_USER}/{REPO_NAME}/releases"
 API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/tags"
+
+
+def get_resource_path(relative_path):
+    """ Ermittelt den Pfad zur Datei, egal ob Skript oder EXE """
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller temporärer Ordner
+        return os.path.join(sys._MEIPASS, relative_path)
+    # Normaler Ordner (Entwicklung)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class CustomMsgBox(tk.Toplevel):
     """Eigene Neon-Style Yes/No Box."""
@@ -41,6 +51,7 @@ class CustomMsgBox(tk.Toplevel):
 class NeonTraceSplash:
     def __init__(self):
         self.root = tk.Tk()
+        self.running = True
         self.root.overrideredirect(True)
         self.root.configure(bg='#0a0a0a')
 
@@ -73,6 +84,9 @@ class NeonTraceSplash:
         self.start_time = time.time()
         self.animate()
         self.root.mainloop()
+        
+
+    
 
     def get_local_version(self):
         try:
@@ -112,67 +126,81 @@ class NeonTraceSplash:
 
     def final_action(self):
         """Wird 1 Sekunde vor dem Ende ausgeführt."""
-        print("[DEBUG] Führe finale Aktion aus: Starte main.py...")
-        self.canvas.itemconfig(self.wait_text, text="Starte Hauptprogramm...", fill="#00f2ff")
+        print("[DEBUG] Bereite Start vor...")
+        self.running = False  # Animation stoppen
+        
+        # Wir speichern uns die Referenz auf das Root-Objekt
+        root_ref = self.root
         
         try:
-            # Pfad zur main.py auflösen (im selben Ordner)
-            # Falls du später eine .exe baust, hilft os.path.abspath
-            main_script = os.path.join(os.path.dirname(__file__), "main.py")
-            
-            # Startet main.py mit dem aktuellen Python-Interpreter
-            # Popen sorgt dafür, dass das Splash-Skript nicht auf main.py warten muss
-            subprocess.Popen([sys.executable, main_script])
-            
-            print("[DEBUG] main.py erfolgreich im Hintergrund gestartet.")
+            # 1. Das Splash-Fenster komplett zerstören
+            # .destroy() beendet die mainloop von start.py
+            root_ref.destroy()
+            print("[DEBUG] Splash-Screen geschlossen.")
+
+            # 2. JETZT erst main importieren und starten
+            # Da root_ref.destroy() die aktuelle mainloop beendet,
+            # rufen wir die neue mainloop von main.py direkt danach auf.
+            import main
+            print("[DEBUG] Starte Hauptprogramm...")
+            main.create_main()
             
         except Exception as e:
-            print(f"[DEBUG] Fehler beim Starten von main.py: {e}")
-            # Optional: Fehlermeldung via Tkinter anzeigen 
+            print(f"[DEBUG] Fehler beim Übergang: {e}")
 
     def animate(self):
-        elapsed = time.time() - self.start_time
-        
-        # 1. Update Check nach 3 Sekunden
-        if not self.update_checked and elapsed > 3.0:
-            self.update_checked = True
-            self.canvas.itemconfig(self.wait_text, text="Prüfe auf Updates...")
-            self.check_for_updates()
-            self.canvas.itemconfig(self.wait_text, text="Bitte warten...")
-
-        # 2. Finale Aktion genau 1 Sekunde vor dem Ende (bei 8.5s)
-        if not self.final_action_done and elapsed > 8.5:
-            self.final_action_done = True
-            self.final_action()
-
-        # 3. Programm beenden nach 9.5s
-        if elapsed > 9.5: 
-            print("[DEBUG] Splash beendet.")
-            self.root.destroy()
+        if not self.running or not self.canvas.winfo_exists():
             return
+        
+        try:
+            elapsed = time.time() - self.start_time
 
-        # Animation (Langsam)
-        speed = (math.sin(elapsed * 0.7) + 1.1) * 0.5
-        t = (elapsed * speed) % 2.0
-        p1, p2 = (self.points[0], self.points[1]) if t < 1.0 else (self.points[2], self.points[3])
-        pos_t = t if t < 1.0 else t - 1.0
+            # 1. Update Check nach 3 Sekunden
+            if not self.update_checked and elapsed > 3.0:
+                self.update_checked = True
+                self.canvas.itemconfig(self.wait_text, text="Prüfe auf Updates...")
+                self.check_for_updates()
+                self.canvas.itemconfig(self.wait_text, text="Bitte warten...")
 
-        cur_x = p1[0] + (p2[0] - p1[0]) * pos_t
-        cur_y = p1[1] + (p2[1] - p1[1]) * pos_t
+            # 2. Finale Aktion genau 1 Sekunde vor dem Ende (bei 8.5s)
+            if not self.final_action_done and elapsed > 8.5:
+                self.final_action_done = True
+                self.final_action()
+                return
 
-        self.history.insert(0, (cur_x, cur_y))
-        if len(self.history) > self.trail_length + 1: self.history.pop()
+            # 3. Programm beenden nach 9.5s
+            if elapsed > 9.5: 
+                print("[DEBUG] Splash beendet.")
+                self.root.destroy()
+                return
 
-        for i, dot_id in enumerate(self.trail_dots):
-            if i < len(self.history):
-                hx, hy = self.history[i]
-                r = (self.trail_length - i) * 0.6 
-                self.canvas.coords(dot_id, hx-r, hy-r, hx+r, hy+r)
+            # Animation (Langsam)
+            speed = (math.sin(elapsed * 0.7) + 1.1) * 0.5
+            t = (elapsed * speed) % 2.0
+            p1, p2 = (self.points[0], self.points[1]) if t < 1.0 else (self.points[2], self.points[3])
+            pos_t = t if t < 1.0 else t - 1.0
 
-        r_main = 5 + math.sin(elapsed * 5) * 1.2
-        self.canvas.coords(self.dot, cur_x-r_main, cur_y-r_main, cur_x+r_main, cur_y+r_main)
+            cur_x = p1[0] + (p2[0] - p1[0]) * pos_t
+            cur_y = p1[1] + (p2[1] - p1[1]) * pos_t
 
-        self.root.after(30, self.animate)
+            self.history.insert(0, (cur_x, cur_y))
+            if len(self.history) > self.trail_length + 1: self.history.pop()
+
+            for i, dot_id in enumerate(self.trail_dots):
+                if i < len(self.history):
+                    hx, hy = self.history[i]
+                    r = (self.trail_length - i) * 0.6 
+                    self.canvas.coords(dot_id, hx-r, hy-r, hx+r, hy+r)
+
+            r_main = 5 + math.sin(elapsed * 5) * 1.2
+            self.canvas.coords(self.dot, cur_x-r_main, cur_y-r_main, cur_x+r_main, cur_y+r_main)
+
+            if self.running and self.root.winfo_exists():
+                self.root.after(30, self.animate)
+        
+        except (tk.TclError, AttributeError):
+            # Falls während der Berechnung das Fenster geschlossen wurde
+            self.running = False
 
 if __name__ == "__main__":
     NeonTraceSplash()
