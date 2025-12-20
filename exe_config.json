@@ -238,12 +238,8 @@
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/patienten.db;."
   },
   {
-   "optionDest": "hiddenimports",
-   "value": "babel.numbers"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "babel.numbers"
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/version.txt;."
   }
  ],
  "nonPyinstallerOptions": {

@@ -37,7 +37,7 @@ def resolve_resource_path(relative_path):
 # --- KONFIGURATION ---
 DATABASE_NAME = resolve_data_path('patienten.db')
 TEMPLATE_FILE = resolve_resource_path('honorar_vorlage.docx') 
-OUTPUT_FOLDER = PATIENT_BASE_DIR
+OUTPUT_FOLDER = os.path.expanduser(PATIENT_BASE_DIR)
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -972,13 +972,9 @@ class HonorarGeneratorApp:
             self.notebook.select(self.tab_leistung)
             self.update_leistung_list() 
 
-            if self.results_listbox.size() > 0:
-                self.results_listbox.selection_clear(0, tk.END)
-                self.results_listbox.selection_set(0)
-                self.results_listbox.activate(0)
-                self.results_listbox.focus_set() # Fokus springt in die Liste für das nächste Enter
-            
-        self.notebook.focus_set()
+            # Focus auf den Teamup-Button setzen
+            if hasattr(self, 'teamup_button'):
+                self.teamup_button.focus_set()
 
     def update_patient_info(self):
         if self.patient_data:
@@ -1567,7 +1563,8 @@ class HonorarGeneratorApp:
         self.time_to_entry.insert(0, "11:50")
 
         # NEU: Button zum Starten der Kalender-Suche
-        ttk.Button(date_time_frame, text="📅 Teamup-Termine Importieren/Ersetzen", command=self.open_teamup_search).pack(side=tk.LEFT, padx=10)
+        self.teamup_button = ttk.Button(date_time_frame, text="📅 Teamup-Termine Importieren/Ersetzen", command=self.open_teamup_search)
+        self.teamup_button.pack(side=tk.LEFT, padx=10)
 
         # Leistungsbuttons Frame (Scrollable)
         leistung_scroll_frame = ttk.Frame(tab)
