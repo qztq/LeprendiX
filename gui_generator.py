@@ -54,6 +54,7 @@ def start_gui():
     root = tk.Tk()
     app = HonorarGeneratorApp(root)
     root.mainloop()
+    
 
 def _ensure_status_column():
     """
@@ -122,11 +123,19 @@ def get_patient_data(search_name):
     search_term = f'%{search_name}%'
     # Wichtig: last_selected_kurznamen ist Spalte 13 (Index 12)
     # Wichtig: invoiced_since_reset ist Spalte 14 (Index 13), wird hier nicht benötigt, aber später
-    cursor.execute("""
+    
+    query = """
     SELECT id, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, last_selected_kurznamen
     FROM patienten 
     WHERE nachname LIKE ? OR vorname LIKE ?
-    """, (search_term, search_term))
+    """
+    params = [search_term, search_term]
+    
+    if search_name.isdigit():
+        query += " OR id = ?"
+        params.append(search_name)
+        
+    cursor.execute(query, params)
     results = cursor.fetchall()
     conn.close()
     return results
@@ -694,6 +703,7 @@ class HonorarGeneratorApp:
               
         self.update_patient_info() 
         self.load_leistung_stammdaten_buttons()
+        self.open_status_checker()
 
         self.search_entry.focus_set()
         self.root.bind('<Return>', self.handle_global_enter)
@@ -827,6 +837,8 @@ class HonorarGeneratorApp:
         self.search_entry.grid(row=0, column=1, padx=5, pady=5)
         
         ttk.Button(tab, text="Suchen", command=self.search_patients).grid(row=0, column=2, padx=5, pady=5)
+        # NEU: Button zum Öffnen des Status-Checkers
+        ttk.Button(tab, text="Status-Checker", command=self.open_status_checker).grid(row=0, column=3, padx=5, pady=5)
         
         self.results_listbox = tk.Listbox(tab, height=10, width=60)
         self.results_listbox.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
@@ -888,6 +900,27 @@ class HonorarGeneratorApp:
 
         tab.grid_rowconfigure(1, weight=1)
 
+    def open_status_checker(self):
+        from patient_status_checker import PatientStatusApp
+        checker_window = tk.Toplevel(self.root)
+        app = PatientStatusApp(checker_window, selection_callback=self.load_patient_from_checker)
+        
+    def load_patient_from_checker(self, patient_id):
+        # Setze ID in Suchfeld
+        self.search_entry.delete(0, tk.END)
+        self.search_entry.insert(0, patient_id)
+        # Führe Suche aus
+        self.search_patients()
+        # Wähle automatisch das erste Ergebnis (sollte der Patient sein)
+        if self.results_listbox.size() > 0:
+            self.results_listbox.selection_clear(0, tk.END)
+            self.results_listbox.selection_set(0)
+            self.select_patient_from_list()
+
+        # Fokus auf das Hauptfenster setzen
+        self.root.lift()
+        self.root.focus_force()
+
     def search_patients(self):
         search_term = self.search_entry.get().strip()
         if not search_term:
@@ -940,9 +973,21 @@ class HonorarGeneratorApp:
         # TAB: Leistungen hinzufügen/prüfen
         elif current_tab_index == 2:
             # Nur öffnen, wenn nicht bereits ein Teamup-Fenster offen ist
-            if not any(isinstance(child, tk.Toplevel) for child in self.root.winfo_children()):
+            # Wir prüfen spezifisch auf Teamup-Fenster, da andere Toplevels (z.B. Status Checker) existieren können
+            teamup_open = False
+            for child in self.root.winfo_children():
+                if isinstance(child, tk.Toplevel) and child.winfo_exists():
+                    try:
+                        if "Teamup" in child.title() or "API Abruf" in child.title():
+                            teamup_open = True
+                            break
+                    except Exception:
+                        pass
+            
+            if not teamup_open:
                 # Hier rufen wir direkt die Funktion mit Validierung & Ladebalken auf
-                self.open_teamup_search()
+                if hasattr(self, 'teamup_button'):
+                    self.teamup_button.invoke()
 
     def _get_selected_invoice_date(self):
         year = int(self.selected_invoice_year.get())
@@ -1670,6 +1715,14 @@ class HonorarGeneratorApp:
         except Exception:
             first_day, last_day = None, None
 
+        # NEU: Berechne UI-Defaults für die Anzeige (falls None, Standard +/- 30 Tage)
+        ui_start_date = first_day
+        ui_end_date = last_day
+        if ui_start_date is None:
+            ui_start_date = (datetime.date.today() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+        if ui_end_date is None:
+            ui_end_date = (datetime.date.today() + datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+
         initial_search_term = self.patient_data[2] if self.patient_data else ""
 
         # --- 3. LADEFENSTER (PROGRESSBAR) ---
@@ -1699,7 +1752,7 @@ class HonorarGeneratorApp:
         # --- 4. DER SUCH-DIALOG (RE-DESIGNED) ---
         search_window = tk.Toplevel(self.root)
         search_window.title("Teamup Termin-Suche")
-        search_window.geometry("650x550")
+        search_window.geometry("650x600")
         search_window.grab_set()
 
         search_window.transient(self.root) 
@@ -1709,6 +1762,22 @@ class HonorarGeneratorApp:
         search_entry = ttk.Entry(search_window, width=60)
         search_entry.pack(pady=5, padx=10)
         search_entry.insert(0, initial_search_term)
+        
+        # NEU: Datumsbereich Auswahl
+        date_frame = ttk.Frame(search_window)
+        date_frame.pack(pady=5, padx=10, anchor='w')
+        
+        ttk.Label(date_frame, text="Zeitraum von:").pack(side=tk.LEFT)
+        start_date_entry = ttk.Entry(date_frame, width=12)
+        start_date_entry.pack(side=tk.LEFT, padx=5)
+        start_date_entry.insert(0, ui_start_date)
+        
+        ttk.Label(date_frame, text="bis:").pack(side=tk.LEFT)
+        end_date_entry = ttk.Entry(date_frame, width=12)
+        end_date_entry.pack(side=tk.LEFT, padx=5)
+        end_date_entry.insert(0, ui_end_date)
+        
+        ttk.Label(date_frame, text="(YYYY-MM-DD)").pack(side=tk.LEFT, padx=5)
         
         # Treeview
         results_tree = ttk.Treeview(search_window, columns=('Titel', 'Datum', 'Von', 'Bis'), selectmode='extended', show='headings')
@@ -1730,8 +1799,13 @@ class HonorarGeneratorApp:
         # --- INTERNE FUNKTIONEN (ORIGINAL LOGIK) ---
         def perform_search(term=None):
             search_t = term if term is not None else search_entry.get().strip()
+            
+            # NEU: Datum aus GUI lesen
+            s_date = start_date_entry.get().strip()
+            e_date = end_date_entry.get().strip()
+
             # Nutzt auch hier den Datumsfilter
-            res = search_teamup_events(search_t, start_date=first_day, end_date=last_day)
+            res = search_teamup_events(search_t, start_date=s_date, end_date=e_date)
             results_tree.delete(*results_tree.get_children())
             if res:
                 for r in res:

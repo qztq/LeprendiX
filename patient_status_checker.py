@@ -12,8 +12,9 @@ PATIENT_BASE_DIR = PATIENT_BASE_DIR
 ARCHIVE_DIR = ARCHIVE_DIR
 
 class PatientStatusApp:
-    def __init__(self, master):
+    def __init__(self, master, selection_callback=None):
         self.master = master
+        self.selection_callback = selection_callback
         master.title("Patienten Status & Archivierung")
         master.geometry("600x750") 
         
@@ -42,6 +43,8 @@ class PatientStatusApp:
         self.tree.tag_configure('red', foreground='red', font=('Courier New', 11))
         self.tree.tag_configure('green', foreground='green', font=('Courier New', 11))
         
+        self.tree.bind("<Double-1>", self.on_double_click)
+        
         # --- BUTTONS ---
         button_frame = ttk.Frame(master)
         button_frame.pack(pady=10, fill='x', padx=10)
@@ -58,6 +61,13 @@ class PatientStatusApp:
         self.load_patient_statuses() 
         self.master.after(5000, self._periodic_refresh) 
 
+    def on_double_click(self, event):
+        if self.selection_callback:
+            selection = self.tree.selection()
+            if selection:
+                # selection[0] ist die patient_id (iid)
+                patient_id = selection[0]
+                self.selection_callback(str(patient_id))
     
     def _ensure_archive_dir(self):
         """Stellt sicher, dass der Archiv-Ordner existiert."""

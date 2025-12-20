@@ -93,10 +93,7 @@ def launch_application(root):
         gen_root = tk.Tk()
         app_gen = gui_generator.HonorarGeneratorApp(gen_root)
         
-        # Status-Checker parallel starten (als Toplevel Fenster)
-        checker_win = tk.Toplevel(gen_root)
-        app_checker = patient_status_checker.PatientStatusApp(checker_win)
-        
+       
         gen_root.mainloop()
         
         
