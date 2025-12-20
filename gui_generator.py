@@ -650,7 +650,7 @@ class HonorarGeneratorApp:
         self.stammdaten_betraege = {} 
         self.selected_leistung_id = None 
         self.selected_leistungs_kurznamen = set() # Für die Mehrfachauswahl-Buttons
-        self.ttk_style = ttk.Style() 
+        self.ttk_style = ttk.Style(master=root) 
         
         # NEU: Initialisierung der Folgenummer (BHAG-Logik)
         self.invoice_seq_var = tk.StringVar(master=root) 
@@ -667,7 +667,7 @@ class HonorarGeneratorApp:
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(pady=10, padx=10, expand=True, fill="both")
 
-        self.ttk_style = ttk.Style() 
+        self.ttk_style = ttk.Style(master=root) 
         # NEU: Der Stil MUSS ebenfalls HIER gesetzt werden, da er in setup_patient_tab verwendet wird.
         self.ttk_style.configure('Danger.TButton', foreground='red')
 
@@ -1819,10 +1819,15 @@ class HonorarGeneratorApp:
         self.ttk_style.configure('Selected.TButton', 
                             background='#90EE90', # Hellgrün
                             foreground='black', 
+                            bordercolor='#006400', # Dunkelgrüner Rand (Highlight)
+                            lightcolor='#90EE90',
+                            darkcolor='#90EE90',
+                            borderwidth=2,
                             font=('Helvetica', 9, 'bold'))
         
         self.ttk_style.map('Selected.TButton',
             background=[('active', '#7ccd7c'), ('pressed', '#66bb66')],
+            bordercolor=[('active', '#004d00'), ('pressed', '#004d00')],
         )
 
 
