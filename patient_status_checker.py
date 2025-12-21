@@ -17,6 +17,7 @@ class PatientStatusApp:
         self.selection_callback = selection_callback
         master.title("Patienten Status & Archivierung")
         master.geometry("600x750") 
+        self.after_id = None
         
         self._ensure_status_column()
         self._ensure_archive_dir()
@@ -59,7 +60,8 @@ class PatientStatusApp:
                    command=self.reset_all_statuses).pack(side=tk.LEFT, expand=True, fill='x', padx=5)
 
         self.load_patient_statuses() 
-        self.master.after(5000, self._periodic_refresh) 
+        self._schedule_refresh()
+        self.master.bind("<Destroy>", self._on_destroy)
 
     def on_double_click(self, event):
         if self.selection_callback:
@@ -68,6 +70,8 @@ class PatientStatusApp:
                 # selection[0] ist die patient_id (iid)
                 patient_id = selection[0]
                 self.selection_callback(str(patient_id))
+                # Auswahl nach Doppelklick aufheben
+                self.tree.selection_remove(*selection)
     
     def _ensure_archive_dir(self):
         """Stellt sicher, dass der Archiv-Ordner existiert."""
@@ -85,11 +89,28 @@ class PatientStatusApp:
         finally:
             conn.close()
 
+    def _schedule_refresh(self):
+        self.after_id = self.master.after(5000, self._periodic_refresh)
+
+    def _on_destroy(self, event):
+        if event.widget == self.master:
+            if self.after_id:
+                try:
+                    self.master.after_cancel(self.after_id)
+                except Exception:
+                    pass
+            self.after_id = None
+
     def _periodic_refresh(self):
+        try:
+            if not self.master.winfo_exists():
+                return
+        except Exception:
+            return
         # Nur aktualisieren, wenn der User gerade nichts ausgewählt hat (verhindert Flackern)
         if not self.tree.selection():
             self.load_patient_statuses()
-        self.master.after(5000, self._periodic_refresh) 
+        self._schedule_refresh()
     
     def load_patient_statuses(self):
         # Selektion merken

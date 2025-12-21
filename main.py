@@ -9,6 +9,10 @@ from tkinter import messagebox, ttk, filedialog
 from PIL import Image, ImageTk
 import json
 import datetime
+import webbrowser
+import time
+import math
+import shutil
 
 def get_base_path():
     """ Ermittelt den Pfad zum Ordner, in dem die EXE oder das Skript liegt """
@@ -56,54 +60,130 @@ def load_credentials():
 
 USER_CREDS = load_credentials()
 
+class LoginSplash(tk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.running = True
+        self.overrideredirect(True)
+        self.configure(bg='#0a0a0a')
 
-def show_loading_screen(root):
-    loading_win = tk.Toplevel(root)
-    loading_win.title("Lade LeprendiX...")
-    loading_win.geometry("450x220")
-    loading_win.configure(bg=COLOR_SECONDARY)
-    loading_win.overrideredirect(True)
-    loading_win.attributes("-topmost", True)
-    
-    root.update_idletasks()
-    x = root.winfo_x() + (root.winfo_width() // 2) - 225
-    y = root.winfo_y() + (root.winfo_height() // 2) - 110
-    loading_win.geometry(f"+{int(x)}+{int(y)}")
+        w, h = 550, 400 
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x = (sw // 2) - (w // 2)
+        y = (sh // 2) - (h // 2)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.attributes("-topmost", True)
 
-    tk.Label(loading_win, text="LeprendiX", font=("Segoe UI", 24, "bold"), 
-             fg=COLOR_ACCENT, bg=COLOR_SECONDARY).pack(pady=(40, 5))
-    
-    progress = ttk.Progressbar(loading_win, mode="indeterminate", length=350)
-    progress.pack(pady=30)
-    progress.start(15) 
-    loading_win.lift()
-    return loading_win
+        self.canvas = tk.Canvas(self, width=w, height=h, bg='#0a0a0a', highlightthickness=0)
+        self.canvas.pack()
+
+        # UI Elemente from start.py
+        self.canvas.create_text(w/2 - 30, h/2 - 20, text="Leprendi", font=("Segoe UI", 45, "bold"), fill="#f8f9fa")
+        self.wait_text = self.canvas.create_text(w/2, h - 40, text="Anwendung wird gestartet...", font=("Segoe UI", 12, "italic"), fill="#555555")
+
+        cx, cy = w/2 + 130, h/2 - 20
+        s = 35  
+
+        self.canvas.create_line(cx-s, cy-s, cx+s, cy+s, fill="#1a1a1a", width=15, capstyle="round")
+        self.canvas.create_line(cx+s, cy-s, cx-s, cy+s, fill="#1a1a1a", width=15, capstyle="round")
+
+        self.points = [(cx-s, cy-s), (cx+s, cy+s), (cx+s, cy-s), (cx-s, cy+s)]
+        self.dot = self.canvas.create_oval(0,0,0,0, fill="#00f2ff", outline="#70f3ff", width=2)
+        
+        self.trail_length = 12 
+        self.trail_dots = [self.canvas.create_oval(0,0,0,0, fill="#004d4d", outline="") for _ in range(self.trail_length)]
+        self.history = []
+        
+        self.start_time = time.time()
+        self.animate()
+
+    def animate(self):
+        if not self.running or not self.winfo_exists():
+            return
+        
+        try:
+            elapsed = time.time() - self.start_time
+
+            speed = (math.sin(elapsed * 0.7) + 1.1) * 0.5
+            t = (elapsed * speed) % 2.0
+            p1, p2 = (self.points[0], self.points[1]) if t < 1.0 else (self.points[2], self.points[3])
+            pos_t = t if t < 1.0 else t - 1.0
+
+            cur_x = p1[0] + (p2[0] - p1[0]) * pos_t
+            cur_y = p1[1] + (p2[1] - p1[1]) * pos_t
+
+            self.history.insert(0, (cur_x, cur_y))
+            if len(self.history) > self.trail_length + 1: self.history.pop()
+
+            for i, dot_id in enumerate(self.trail_dots):
+                if i < len(self.history):
+                    hx, hy = self.history[i]
+                    r = (self.trail_length - i) * 0.6 
+                    self.canvas.coords(dot_id, hx-r, hy-r, hx+r, hy+r)
+
+            r_main = 5 + math.sin(elapsed * 5) * 1.2
+            self.canvas.coords(self.dot, cur_x-r_main, cur_y-r_main, cur_x+r_main, cur_y+r_main)
+
+            if self.running and self.winfo_exists():
+                self.after(30, self.animate)
+        
+        except (tk.TclError, AttributeError):
+            self.running = False
+
+    def stop(self):
+        self.running = False
+        self.destroy()
 
 # In main.py
 def launch_application(root):
-    splash = show_loading_screen(root)
     root.withdraw() 
+    splash = LoginSplash(root)
     
     def finalize_start():
         # 1. Splash zerstören
-        if splash.winfo_exists():
-            splash.destroy()
+        splash.stop()
         
         # Hauptanwendung (Generator) starten
         gen_root = tk.Tk()
         app_gen = gui_generator.HonorarGeneratorApp(gen_root)
         
-       
         gen_root.mainloop()
-        
-        
-        
+
         # Sobald das Hauptfenster geschlossen wird, beenden wir auch den unsichtbaren root
         root.destroy()
 
     # Wir warten 2 Sekunden mit dem Splash und rufen dann finalize_start im Main-Thread auf
     root.after(2000, finalize_start)
     root.mainloop()
+
+class CollapsiblePane(tk.Frame):
+    """Eine aufklappbare Frame-Komponente für Einstellungen."""
+    def __init__(self, parent, title, expanded=False, bg_color=COLOR_PRIMARY):
+        super().__init__(parent, bg=bg_color)
+        self.columnconfigure(0, weight=1)
+        self._variable = tk.BooleanVar(value=expanded)
+        self._title = title
+        self._bg = bg_color
+        
+        self._button = tk.Button(self, text=f"{'▼' if expanded else '▶'} {title}", 
+                                 command=self._toggle, relief="flat", 
+                                 bg=COLOR_SECONDARY, fg="white", 
+                                 font=("Segoe UI", 12, "bold"), anchor="w", padx=10, pady=5)
+        self._button.grid(row=0, column=0, sticky="ew", pady=(5,0))
+        
+        self.frame = tk.Frame(self, bg=self._bg)
+        if expanded:
+            self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+            
+    def _toggle(self):
+        if self._variable.get():
+            self.frame.grid_remove()
+            self._variable.set(False)
+            self._button.configure(text=f"▶ {self._title}")
+        else:
+            self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+            self._variable.set(True)
+            self._button.configure(text=f"▼ {self._title}")
 
 # --- HAUPTFENSTER ---
 def create_main():
@@ -181,15 +261,50 @@ def create_main():
     t2 = tk.Frame(nb, bg=COLOR_PRIMARY)
     nb.add(t2, text="   EINSTELLUNGEN   ")
 
-    # Ein zentrierter Container-Frame
-    db_container = tk.Frame(t2, bg=COLOR_PRIMARY)
-    db_container.pack(expand=True, fill="both", padx=20)
+    # Scroll-Container Setup
+    canvas = tk.Canvas(t2, bg=COLOR_PRIMARY, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(t2, orient="vertical", command=canvas.yview)
+    db_container = tk.Frame(canvas, bg=COLOR_PRIMARY)
 
-    # --- Teil 1: Datenbank-Initialisierung ---
-    tk.Label(db_container, text="Datenbank-Initialisierung", 
-            font=("Segoe UI", 16, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=(20, 10))
+    db_container.bind(
+        "<Configure>",
+        lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")
+        )
+    )
 
-    db_p_ent = tk.Entry(db_container, show="*", width=30, bg=COLOR_SECONDARY, 
+    canvas_window = canvas.create_window((0, 0), window=db_container, anchor="nw")
+
+    def _configure_canvas(event):
+        canvas.itemconfig(canvas_window, width=event.width)
+    
+    canvas.bind("<Configure>", _configure_canvas)
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+
+    def _on_mousewheel(event):
+        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    
+    def _bind_mousewheel(event):
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    
+    def _unbind_mousewheel(event):
+        canvas.unbind_all("<MouseWheel>")
+
+    # Bindings für Scrolling wenn Maus über dem Bereich ist
+    db_container.bind("<Enter>", _bind_mousewheel)
+    db_container.bind("<Leave>", _unbind_mousewheel)
+
+    # --- KATEGORIE 1: DATENBANK & PFADE ---
+    cat1 = CollapsiblePane(db_container, "Datenbank & Pfade", expanded=True)
+    cat1.pack(fill="x", pady=5, padx=5)
+    
+    # Datenbank Init
+    tk.Label(cat1.frame, text="Datenbank-Initialisierung", font=("Segoe UI", 10, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=(10, 5), anchor="w")
+
+    db_p_ent = tk.Entry(cat1.frame, show="*", width=30, bg=COLOR_SECONDARY, 
                         fg="white", font=("Arial", 12), justify="center", relief="flat")
     db_p_ent.pack(pady=5, ipady=5)
 
@@ -204,20 +319,16 @@ def create_main():
         else: 
             messagebox.showerror("Fehler", "Passwort falsch.")
             
-    tk.Button(db_container, text="Datenbank Setup", bg="#e67e22", fg="white", 
+    tk.Button(cat1.frame, text="Datenbank Setup ausführen", bg="#e67e22", fg="white", 
             font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=8, 
             command=do_setup).pack(pady=10)
 
-    # Trennlinie
-    tk.Frame(db_container, height=2, bg=COLOR_SECONDARY, bd=0).pack(fill="x", pady=20)
-
-    # --- Teil 2: Pfad-Einstellungen (JSON) ---
-    tk.Label(db_container, text="Pfad-Konfiguration", 
-            font=("Segoe UI", 16, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=10)
+    # Pfad Konfiguration
+    tk.Label(cat1.frame, text="Speicherorte", font=("Segoe UI", 10, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=(15, 5), anchor="w")
 
     # Frames für die Pfadanzeige
-    def create_path_row(label_text, config_key):
-        row = tk.Frame(db_container, bg=COLOR_PRIMARY)
+    def create_path_row(parent, label_text, config_key):
+        row = tk.Frame(parent, bg=COLOR_PRIMARY)
         row.pack(fill="x", pady=5)
         
         tk.Label(row, text=label_text, fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"), width=15, anchor="w").pack(side="left")
@@ -246,8 +357,147 @@ def create_main():
                 relief="flat", command=change_path, padx=10).pack(side="right")
 
     # Erzeuge die Zeilen für die beiden Hauptpfade
-    create_path_row("Patienten-Ordner:", "PATIENT_BASE_DIR")
-    create_path_row("Archiv-Ordner:", "ARCHIVE_DIR")
+    create_path_row(cat1.frame, "Patienten-Ordner:", "PATIENT_BASE_DIR")
+    create_path_row(cat1.frame, "Archiv-Ordner:", "ARCHIVE_DIR")
+
+    # --- KATEGORIE 2: INTEGRATIONEN (API) ---
+    cat2 = CollapsiblePane(db_container, "Integrationen (API)", expanded=False)
+    cat2.pack(fill="x", pady=5, padx=5)
+            
+    def create_config_entry(parent, label_text, config_key, show_char=None):
+        row = tk.Frame(parent, bg=COLOR_PRIMARY)
+        row.pack(fill="x", pady=5)
+        tk.Label(row, text=label_text, fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"), width=25, anchor="w").pack(side="left")
+        
+        var = tk.StringVar(value=CONFIG.get(config_key, ""))
+        entry = tk.Entry(row, textvariable=var, bg=COLOR_SECONDARY, fg="white", relief="flat", show=show_char)
+        entry.pack(side="left", fill="x", expand=True, padx=10, ipady=3)
+        
+        def save_val():
+            CONFIG[config_key] = var.get().strip()
+            try:
+                with open("config.json", "w", encoding="utf-8") as f:
+                    json.dump(CONFIG, f, indent=4)
+                messagebox.showinfo("Gespeichert", f"{label_text} gespeichert.")
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Speichern fehlgeschlagen: {e}")
+                
+        tk.Button(row, text="Speichern", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 8), 
+                relief="flat", command=save_val, padx=10).pack(side="right")
+
+    create_config_entry(cat2.frame, "Teamup API Key:", "TEAMUP_API_KEY", show_char="*")
+    create_config_entry(cat2.frame, "Teamup Calendar ID:", "TEAMUP_CALENDAR_ID")
+    create_config_entry(cat2.frame, "GitHub Token (Updates):", "GITHUB_TOKEN", show_char="*")
+
+    # --- KATEGORIE 3: STANDARDWERTE ---
+    cat3 = CollapsiblePane(db_container, "Standardwerte (Neue Patienten)", expanded=False)
+    cat3.pack(fill="x", pady=5, padx=5)
+
+    create_config_entry(cat3.frame, "Standard Diagnose:", "DEFAULT_DIAGNOSE")
+    create_config_entry(cat3.frame, "Standard Anrede:", "DEFAULT_ANREDE")
+
+    # --- KATEGORIE 4: WARTUNG & BACKUPS ---
+    cat4 = CollapsiblePane(db_container, "Wartung & Backups", expanded=False)
+    cat4.pack(fill="x", pady=5, padx=5)
+            
+    # Reminder
+    tk.Label(cat4.frame, text="⚠️ WICHTIG: Bitte erstellen Sie regelmäßig Backups!", 
+             font=("Segoe UI", 10, "bold"), fg="#e74c3c", bg=COLOR_PRIMARY).pack(pady=(0, 10), anchor="w")
+
+    # Backup Liste
+    backup_list_frame = tk.LabelFrame(cat4.frame, text="Verfügbare Backups", bg=COLOR_PRIMARY, fg=COLOR_TEXT)
+    backup_list_frame.pack(fill="x", pady=5, padx=10)
+    
+    backup_listbox = tk.Listbox(backup_list_frame, height=5, bg=COLOR_SECONDARY, fg="white", relief="flat")
+    backup_listbox.pack(side="left", fill="x", expand=True, padx=5, pady=5)
+    
+    backup_scroll = tk.Scrollbar(backup_list_frame, command=backup_listbox.yview)
+    backup_scroll.pack(side="right", fill="y", pady=5)
+    backup_listbox.config(yscrollcommand=backup_scroll.set)
+
+    def refresh_backups():
+        backup_listbox.delete(0, tk.END)
+        backup_dir = os.path.join(BASE_DIR, "backups")
+        if os.path.exists(backup_dir):
+            try:
+                files = sorted([f for f in os.listdir(backup_dir) if f.endswith(".db")], reverse=True)
+                for f in files:
+                    backup_listbox.insert(tk.END, f)
+            except Exception as e:
+                print(f"Fehler beim Listen der Backups: {e}")
+
+    def create_backup():
+        db_path = os.path.join(BASE_DIR, "patienten.db")
+        if not os.path.exists(db_path):
+            messagebox.showerror("Fehler", "Datenbank nicht gefunden.")
+            return
+        
+        backup_dir = os.path.join(BASE_DIR, "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"patienten_backup_{timestamp}.db")
+        
+        try:
+            shutil.copy2(db_path, backup_path)
+            messagebox.showinfo("Backup", f"Backup erfolgreich erstellt:\n{backup_path}")
+            refresh_backups()
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Backup fehlgeschlagen: {e}")
+
+    def restore_backup():
+        selection = backup_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Auswahl", "Bitte wählen Sie ein Backup aus der Liste.")
+            return
+        
+        filename = backup_listbox.get(selection[0])
+        backup_path = os.path.join(BASE_DIR, "backups", filename)
+        db_path = os.path.join(BASE_DIR, "patienten.db")
+        
+        if messagebox.askyesno("Wiederherstellen", f"ACHTUNG: Möchten Sie die Datenbank wirklich auf den Stand von '{filename}' zurücksetzen?\n\nAlle Änderungen seit diesem Backup gehen verloren!"):
+            try:
+                shutil.copy2(backup_path, db_path)
+                messagebox.showinfo("Erfolg", "Datenbank wurde erfolgreich wiederhergestellt.")
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Wiederherstellung fehlgeschlagen: {e}")
+
+    def open_app_dir():
+        try:
+            os.startfile(BASE_DIR) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', BASE_DIR])
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Konnte Ordner nicht öffnen: {e}")
+
+    btn_frame = tk.Frame(cat4.frame, bg=COLOR_PRIMARY)
+    btn_frame.pack(pady=5)
+    tk.Button(btn_frame, text="Backup erstellen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=create_backup, padx=15, pady=5).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Backup wiederherstellen", bg="#e67e22", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=restore_backup, padx=15, pady=5).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Ordner öffnen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_app_dir, padx=15, pady=5).pack(side="left", padx=5)
+
+    refresh_backups()
+
+    # --- KATEGORIE 5: INFO & SUPPORT ---
+    cat5 = CollapsiblePane(db_container, "Informationen & Support", expanded=False)
+    cat5.pack(fill="x", pady=5, padx=5)
+    
+    try:
+        with open("version.txt", "r") as f:
+            ver = f.read().strip()
+    except:
+        ver = "Unbekannt (Dev)"
+        
+    tk.Label(cat5.frame, text=f"Version: {ver}", fg="#bdc3c7", bg=COLOR_PRIMARY, font=("Segoe UI", 10)).pack(pady=5)
+    
+    def open_support():
+        webbrowser.open("https://github.com/qztq/LeprendiX/issues")
+
+    def open_releases():
+        webbrowser.open("https://github.com/qztq/LeprendiX/releases")
+        
+    support_frame = tk.Frame(cat5.frame, bg=COLOR_PRIMARY)
+    support_frame.pack(pady=10)
+    tk.Button(support_frame, text="Support / Fehler melden", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=open_support, padx=20, pady=5).pack(side="left", padx=5)
+    tk.Button(support_frame, text="Auf Updates prüfen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_releases, padx=20, pady=5).pack(side="left", padx=5)
 
     # --- TAB 3: DOKUMENTATION ---
     t3 = tk.Frame(nb, bg=COLOR_PRIMARY)
@@ -293,14 +543,60 @@ def create_main():
 
     # --- Dokumentations-Inhalt ---
     sections = [
-        ("1. Einleitung", "SEC_1", "Willkommen bei LeprendiX.\nDiese Software dient zur Verwaltung von Patienten und zur Erstellung von Honorarnoten.\n\n"),
-        ("2. Installation & Setup", "SEC_2", "Vor der ersten Nutzung muss die Datenbank initialisiert werden.\nGehen Sie dazu in den Tab 'Einstellungen' und nutzen Sie das Datenbank-Passwort.\n\n"),
-        ("3. Patientenverwaltung", "SEC_3", "Im Tab 'Patienten Verwalten' können Sie neue Patienten anlegen, bearbeiten oder löschen.\nNutzen Sie die Suche, um bestehende Datensätze zu laden.\n\n"),
-        ("4. Honorarnoten", "SEC_4", "Im Tab 'Honorarnote Generieren' wählen Sie einen Patienten aus und erstellen das Dokument.\nEs wird automatisch eine Word-Datei erzeugt und (optional) gedruckt.\n\n"),
-        ("5. Leistungen & Teamup", "SEC_5", "Leistungen können manuell oder via Teamup-Kalender importiert werden.\nStellen Sie sicher, dass der API-Key in der Konfiguration hinterlegt ist.\n\n"),
-        ("6. Archivierung", "SEC_6", "Über den 'Status-Checker' können abgerechnete Patienten ins Archiv verschoben werden.\nDies hält die aktive Datenbank sauber.\n\n"),
-        ("7. Einstellungen", "SEC_7", "Hier können Pfade für Speicherorte und Backups angepasst werden.\n\n"),
-        ("8. Troubleshooting", "SEC_8", "Bei Fehlern prüfen Sie bitte die Log-Dateien oder kontaktieren Sie den Support.\n\n")
+        ("1. Einleitung", "SEC_1", 
+         "Willkommen bei LeprendiX – Ihrer Lösung für Patientenverwaltung und Honorarnotenerstellung.\n"
+         "Diese Software wurde entwickelt, um den administrativen Aufwand zu minimieren, indem sie Patientenstammdaten, "
+         "Leistungserfassung (inkl. Teamup-Kalender-Import) und Rechnungslegung in einer Oberfläche vereint.\n\n"),
+        
+        ("2. Installation & Setup", "SEC_2", 
+         "Nach der Installation muss die Anwendung einmalig eingerichtet werden:\n"
+         "1. Starten Sie das Programm und melden Sie sich im 'Control Center' an.\n"
+         "2. Wechseln Sie in den Tab 'EINSTELLUNGEN'.\n"
+         "3. Führen Sie das 'Datenbank Setup' aus (Passwort erforderlich).\n"
+         "4. Konfigurieren Sie die Pfade für 'Patienten-Ordner' (Speicherort der Honorarnoten) und 'Archiv-Ordner'.\n\n"),
+        
+        ("3. Patientenverwaltung", "SEC_3", 
+         "Im Tab 'Patienten Verwalten' pflegen Sie Ihre Datenbank:\n"
+         "- Neuer Patient: Füllen Sie alle Felder aus und klicken Sie auf 'Patient Hinzufügen'.\n"
+         "- Bearbeiten: Suchen Sie einen Patienten, laden Sie ihn, ändern Sie Daten und klicken Sie auf 'Patient Aktualisieren'.\n"
+         "- Löschen: Ein geladener Patient kann inkl. aller Leistungen unwiderruflich gelöscht werden.\n"
+         "Hinweis: Das System prüft auf Duplikate basierend auf Vorname, Nachname und PLZ.\n\n"),
+        
+        ("4. Leistungen & Teamup-Import", "SEC_4", 
+         "Leistungen werden im Tab 'Leistungen Hinzufügen/Prüfen' erfasst:\n"
+         "- Manuell: Datum, Uhrzeit und Betrag eingeben.\n"
+         "- Stammdaten: Nutzen Sie die Schnellwahl-Buttons für häufige Leistungen (konfigurierbar in Tab 4).\n"
+         "- Teamup-Import: Klicken Sie auf 'Teamup-Termine Importieren'. Das System sucht nach Terminen basierend auf dem Patientennamen.\n"
+         "  Wichtig: Wählen Sie vorher die gewünschten Leistungsarten (Buttons) aus, die den importierten Terminen zugewiesen werden sollen.\n"
+         "  Kilometergeld wird automatisch basierend auf den Patientendaten addiert.\n\n"),
+        
+        ("5. Honorarnote Generieren", "SEC_5", 
+         "Der Prozess der Rechnungslegung:\n"
+         "1. Suchen und wählen Sie den Patienten im Tab 'Honorarnote Generieren'.\n"
+         "2. Prüfen Sie die angezeigten Daten.\n"
+         "3. Wählen Sie das Rechnungsdatum (Monat/Jahr).\n"
+         "4. BHAG-Nummer: Die fortlaufende Nummer wird automatisch generiert, kann aber manuell korrigiert werden.\n"
+         "5. Klicken Sie auf 'Speichern & Öffnen' (Word) oder 'Speichern & Drucken'.\n"
+         "Nach erfolgreichem Druck wird der Status des Patienten im System auf 'Abgerechnet' (Grün) gesetzt.\n\n"),
+        
+        ("6. Status-Checker & Archivierung", "SEC_6", 
+         "Der 'Status-Checker' (aufrufbar über Tab 1) bietet eine Übersicht:\n"
+         "- Rot: Offene Leistungen / Noch nicht abgerechnet.\n"
+         "- Grün: Honorarnote wurde erstellt.\n"
+         "Funktionen:\n"
+         "- Archivieren: Verschiebt den Ordner des Patienten in das Archiv-Verzeichnis und entfernt ihn aus der aktiven Datenbank.\n"
+         "- Reset: Setzt alle Statusanzeigen zurück auf Rot (z.B. für einen neuen Abrechnungszeitraum).\n\n"),
+        
+        ("7. Stammdatenverwaltung", "SEC_7", 
+         "Im Tab 'Stammdaten Leistungen' definieren Sie Ihre Standard-Leistungen.\n"
+         "Diese erscheinen als Buttons im Leistungs-Tab. Ein Kurzname, eine Beschreibung (für die Rechnung) und ein Standardbetrag sind erforderlich.\n\n"),
+        
+        ("8. Technische Hinweise", "SEC_8", 
+         "Konfigurationsdateien:\n"
+         "- config.json: Speichert Pfade.\n"
+         "- credentials.dat: Verschlüsselte Login-Daten.\n"
+         "- patienten.db: SQLite Datenbank.\n"
+         "Updates: Beim Start prüft der Launcher automatisch auf neue Versionen via GitHub.\n\n")
     ]
 
     title_to_tag = {}
@@ -332,7 +628,7 @@ def create_main():
             if search_term in title.lower():
                 nav_list.insert(tk.END, title)
 
-    search_var.trace("w", filter_list)
+    search_var.trace_add("write", filter_list)
 
     root.mainloop()
 

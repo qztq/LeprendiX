@@ -12,7 +12,7 @@ from docx.enum.text import WD_UNDERLINE
 from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
 from docx.shared import Inches, Pt, Twips
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
-from config_loader import PATIENT_BASE_DIR
+from config_loader import PATIENT_BASE_DIR, CONFIG
 
 
 # --- HELPER FUNCTIONS FOR PATH RESOLUTION ---
@@ -41,14 +41,6 @@ OUTPUT_FOLDER = os.path.expanduser(PATIENT_BASE_DIR)
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# --- KONFIGURATION (Teamup API) ---
-# HINWEIS: Hier muss IHR Teamup Key und die Kalender ID stehen.
-TEAMUP_API_KEY = 'c307ae48dc5f918fd9dada7b9e922a00e30c27a8939d8a31eb02dac60efe566a'
-TEAMUP_CALENDAR_ID = 'ks63f68d2f870c62a1'
-TEAMUP_BASE_URL = f"https://api.teamup.com/{TEAMUP_CALENDAR_ID}/events"
-
-# Platzhalter für die Überprüfung, falls der Nutzer den Key nicht eingetragen hat
-TEAMUP_API_KEY_PLACEHOLDER = 'YOUR_TEAMUP_API_KEY_HERE'
 
 def start_gui():
     root = tk.Tk()
@@ -204,9 +196,12 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
     Sucht Teamup-Kalendereinträge basierend auf dem Titel/Notizen.
     """
     
-
-
-    clean_api_key = TEAMUP_API_KEY.strip()
+    # Lade Konfiguration dynamisch
+    api_key = CONFIG.get('TEAMUP_API_KEY', '')
+    calendar_id = CONFIG.get('TEAMUP_CALENDAR_ID', '')
+    
+    clean_api_key = api_key.strip()
+    base_url = f"https://api.teamup.com/{calendar_id}/events"
     
     headers = {
         'Teamup-Token': clean_api_key, 
@@ -225,7 +220,7 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
     }
     
     try:
-        response = requests.get(TEAMUP_BASE_URL, headers=headers, params=params)
+        response = requests.get(base_url, headers=headers, params=params)
         response.raise_for_status()  
         
         data = response.json()
@@ -1152,7 +1147,8 @@ class HonorarGeneratorApp:
         ttk.Label(search_frame, text="Patient suchen/laden:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
         self.patient_search_entry = ttk.Entry(search_frame, width=30)
         self.patient_search_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
-        ttk.Button(search_frame, text="Laden - Felder zurücksetzen", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
+        ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
+        ttk.Button(search_frame, text="Felder leeren", command=self.reset_patient_form).grid(row=0, column=3, padx=5, pady=5)
         
         self.patient_id_to_edit = None
 
@@ -1168,8 +1164,8 @@ class HonorarGeneratorApp:
             entry.grid(row=i + 1, column=1, padx=5, pady=5, sticky='we')
             self.patient_entries[field] = entry
 
-        self.patient_entries["Anrede"].insert(0, "Herr/Frau")
-        self.patient_entries["Diagnose"].insert(0, "Z71")
+        self.patient_entries["Anrede"].insert(0, CONFIG.get('DEFAULT_ANREDE') or "Herr/Frau")
+        self.patient_entries["Diagnose"].insert(0, CONFIG.get('DEFAULT_DIAGNOSE') or "Z71")
         self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
 
         # Hinzufügen/Aktualisieren Button
@@ -1189,8 +1185,9 @@ class HonorarGeneratorApp:
     def search_and_load_patient(self):
         # ... (Funktion bleibt unverändert)
         search_term = self.patient_search_entry.get().strip()
+        self.patient_search_entry.delete(0, tk.END)
+
         if not search_term:
-            self.reset_patient_form()
             messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff ein.")
             return
             
@@ -1301,8 +1298,8 @@ class HonorarGeneratorApp:
         for field in fields:
             self.patient_entries[field].delete(0, tk.END)
             
-        self.patient_entries["Anrede"].insert(0, "Herr/Frau")
-        self.patient_entries["Diagnose"].insert(0, "Z71")
+        self.patient_entries["Anrede"].insert(0, CONFIG.get('DEFAULT_ANREDE') or "Herr/Frau")
+        self.patient_entries["Diagnose"].insert(0, CONFIG.get('DEFAULT_DIAGNOSE') or "Z71")
         self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
         
         # Button-Text und ID zurücksetzen
@@ -1504,7 +1501,8 @@ class HonorarGeneratorApp:
         """Hilfsfunktion zum Zurücksetzen der Button-Auswahl in der GUI."""
         self.selected_leistungs_kurznamen.clear()
         for widget in self.leistung_button_frame.winfo_children():
-            if hasattr(widget, 'is_selected') and widget.is_selected:
+            # Reset unconditionally to prevent "stuck" selections
+            if hasattr(widget, 'kurzname'):
                 widget.config(style='TButton')
                 widget.is_selected = False
 
@@ -1928,17 +1926,18 @@ class HonorarGeneratorApp:
         if not self.patient_data:
             return 
             
+        # 1. Zuerst bestehende Auswahl zurücksetzen
+        self._reset_leistung_selection()
+
         patient_id = self.patient_data[0]
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
         
-        # 1. Letzte Auswahl abrufen (Index 12)
+        # 2. Letzte Auswahl abrufen (Index 12)
         cursor.execute("SELECT last_selected_kurznamen FROM patienten WHERE id = ?", (patient_id,))
-        kurznamen_str = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        kurznamen_str = row[0] if row else ""
         conn.close()
-        
-        # 2. Bestehende Auswahl zurücksetzen
-        self._reset_leistung_selection()
         
         if not kurznamen_str:
             return

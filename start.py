@@ -6,12 +6,12 @@ import webbrowser
 import os
 import subprocess
 import sys
-import main
+from config_loader import CONFIG
 
 # --- KONFIGURATION ---
 GITHUB_USER = "qztq"
 REPO_NAME = "LeprendiX"
-GITHUB_TOKEN = "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" # BITTE NEUEN TOKEN ERSTELLEN (SICHERHEIT!)
+GITHUB_TOKEN = CONFIG.get("GITHUB_TOKEN", "")
 RELEASE_PAGE = f"https://github.com/{GITHUB_USER}/{REPO_NAME}/releases"
 API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/tags"
 
@@ -23,6 +23,57 @@ def get_resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)
     # Normaler Ordner (Entwicklung)
     return os.path.join(os.path.abspath("."), relative_path)
+
+def check_system_integrity():
+    """Prüft auf kritische fehlende Dateien und zeigt einen Analyse-Bericht."""
+    errors = []
+    
+    # 1. version.txt
+    if not os.path.exists("version.txt"):
+        errors.append(("version.txt fehlt", "Die Datei 'version.txt' konnte nicht gefunden werden.\nLösung: Erstellen Sie eine Datei 'version.txt' mit dem Inhalt '1.0.0' im Programmordner oder installieren Sie das Programm neu."))
+
+    # 2. patienten.db
+    if not os.path.exists("patienten.db"):
+        errors.append(("patienten.db fehlt", "Die Datenbank 'patienten.db' fehlt.\nLösung: \n- Bei Neuinstallation: Führen Sie das 'Datenbank Setup' (db_setup.py) manuell aus.\n- Andernfalls: Stellen Sie ein Backup wieder her."))
+
+    # 3. credentials.dat
+    if not os.path.exists("credentials.dat"):
+        errors.append(("credentials.dat fehlt", "Die Login-Datei 'credentials.dat' fehlt.\nLösung: Bitte fordern Sie die Zugangsdaten erneut an oder führen Sie das Admin-Setup aus."))
+
+    if errors:
+        root = tk.Tk()
+        root.withdraw()
+        
+        err_win = tk.Toplevel(root)
+        err_win.title("System-Diagnose: Kritische Fehler")
+        err_win.geometry("600x500")
+        err_win.configure(bg="#2c3e50")
+        
+        tk.Label(err_win, text="⚠️ System-Integritätsprüfung fehlgeschlagen", font=("Segoe UI", 14, "bold"), fg="#e74c3c", bg="#2c3e50").pack(pady=10)
+        tk.Label(err_win, text="Das Programm kann nicht gestartet werden, da folgende Dateien fehlen:", font=("Segoe UI", 10), fg="white", bg="#2c3e50").pack(pady=5)
+        
+        frame = tk.Frame(err_win, bg="#2c3e50")
+        frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        for title, solution in errors:
+            err_frame = tk.LabelFrame(frame, text=title, font=("Segoe UI", 10, "bold"), fg="#f1c40f", bg="#34495e")
+            err_frame.pack(fill="x", pady=5)
+            tk.Label(err_frame, text=solution, justify="left", font=("Segoe UI", 9), fg="white", bg="#34495e", wraplength=520).pack(padx=10, pady=5, anchor="w")
+
+        def on_close():
+            root.destroy()
+            sys.exit()
+
+        tk.Button(err_win, text="Programm beenden", command=on_close, bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"), padx=20, pady=5).pack(pady=20)
+        
+        # Zentrieren
+        err_win.update_idletasks()
+        x = (err_win.winfo_screenwidth() // 2) - (err_win.winfo_width() // 2)
+        y = (err_win.winfo_screenheight() // 2) - (err_win.winfo_height() // 2)
+        err_win.geometry(f"+{x}+{y}")
+        
+        root.wait_window(err_win)
+        sys.exit()
 
 class CustomMsgBox(tk.Toplevel):
     """Eigene Neon-Style Yes/No Box."""
@@ -208,4 +259,5 @@ class NeonTraceSplash:
             self.running = False
 
 if __name__ == "__main__":
+    check_system_integrity()
     NeonTraceSplash()
