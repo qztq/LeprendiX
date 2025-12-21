@@ -630,6 +630,26 @@ def create_main():
 
     search_var.trace_add("write", filter_list)
 
+    # --- AUTO-BACKUP ON EXIT ---
+    def on_closing():
+        # Automatisches Backup beim Schließen
+        if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
+            db_path = os.path.join(BASE_DIR, "patienten.db")
+            if os.path.exists(db_path):
+                try:
+                    backup_dir = os.path.join(BASE_DIR, "backups")
+                    os.makedirs(backup_dir, exist_ok=True)
+                    # Wir behalten nur die letzten 5 Auto-Backups, um Platz zu sparen? 
+                    # Hier erstmal einfaches Backup mit Timestamp
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = os.path.join(backup_dir, f"autobackup_{timestamp}.db")
+                    shutil.copy2(db_path, backup_path)
+                    print(f"[AutoBackup] Backup erstellt: {backup_path}")
+                except Exception as e:
+                    print(f"[AutoBackup] Fehler: {e}")
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import os
 import requests 
 import subprocess 
 import sys
+import shutil
 from docx.enum.text import WD_UNDERLINE
 from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
 from docx.shared import Inches, Pt, Twips
@@ -660,6 +661,11 @@ class HonorarGeneratorApp:
         self.invoice_seq_var = tk.StringVar(master=root) 
         self.invoice_sequence_data = self._get_invoice_sequence_data()
         self.invoice_seq_var.set(str(self.invoice_sequence_data.get('rechnung_folgenummer', '0')).zfill(3))
+
+        # --- QoL: Status Bar ---
+        self.status_var = tk.StringVar()
+        self.status_bar = ttk.Label(root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
         self.add_gemeinde_block_var = tk.BooleanVar(master=root, value=0) # Standardmäßig AUS
 
@@ -704,7 +710,29 @@ class HonorarGeneratorApp:
         self.root.bind('<Return>', self.handle_global_enter)
         self.root.bind('<Delete>', self._switch_to_generate_tab)
         self.root.bind('<F12>', self._switch_to_generate_tab)
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    def on_closing(self):
+        if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
+            if os.path.exists(DATABASE_NAME):
+                try:
+                    base_dir = os.path.dirname(DATABASE_NAME)
+                    backup_dir = os.path.join(base_dir, "backups")
+                    os.makedirs(backup_dir, exist_ok=True)
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = os.path.join(backup_dir, f"autobackup_{timestamp}.db")
+                    shutil.copy2(DATABASE_NAME, backup_path)
+                    print(f"[AutoBackup] Backup erstellt: {backup_path}")
+                except Exception as e:
+                    print(f"[AutoBackup] Fehler: {e}")
+        self.root.destroy()
+
+    def set_status(self, message, duration=4000):
+        """Setzt eine Nachricht in der Statusleiste, die nach 'duration' ms verschwindet."""
+        self.status_var.set(f" {message}")
+        if duration:
+            self.root.after(duration, lambda: self.status_var.set(""))
         
    
     def _get_invoice_sequence_data(self):
@@ -1062,10 +1090,6 @@ class HonorarGeneratorApp:
         ausstellungs_datum = self._get_selected_invoice_date()
         
         try:
-            # NEU: BHAG-Nummer generieren und DB aktualisieren
-            data_for_template = self._prepare_bhag_number()
-            add_gemeinde_block = self.add_gemeinde_block_var.get() # NEU: Zustand abrufen
-            
             output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum)
             
             # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
@@ -1177,6 +1201,9 @@ class HonorarGeneratorApp:
         # NEU: Style für Lösch-Button
         self.ttk_style.configure('Danger.TButton', foreground='red') 
         self.delete_patient_button.grid(row=len(fields) + 2, column=0, columnspan=2, pady=5)
+
+        # NEU: Ordner öffnen Button
+        ttk.Button(tab, text="📂 Patienten-Ordner öffnen", command=self.open_patient_folder).grid(row=len(fields) + 2, column=1, pady=5, sticky='e')
         
         # Leere Zeile für Abstand
         ttk.Label(tab, text="").grid(row=len(fields) + 3, column=0, columnspan=2, pady=5)
@@ -1288,6 +1315,23 @@ class HonorarGeneratorApp:
         self.delete_patient_button.config(state=tk.NORMAL) 
         
         messagebox.showinfo("Geladen", f"Patient ID {patient_id} ({data[2]} {data[1]}) erfolgreich zur Bearbeitung geladen.")
+
+    def open_patient_folder(self):
+        """Öffnet den Ordner des aktuell geladenen Patienten im Explorer/Finder."""
+        if not self.patient_id_to_edit:
+            messagebox.showwarning("Info", "Bitte laden Sie zuerst einen Patienten.")
+            return
+        
+        nachname = self.patient_entries["Nachname"].get().strip()
+        vorname = self.patient_entries["Vorname"].get().strip()
+        folder_name = f"{nachname} {vorname}"
+        path = os.path.join(OUTPUT_FOLDER, folder_name)
+        
+        if os.path.exists(path):
+            if sys.platform == 'win32': os.startfile(path)
+            else: subprocess.Popen(['xdg-open', path])
+        else:
+            messagebox.showinfo("Info", f"Noch kein Ordner für '{folder_name}' vorhanden.\n(Wird erst bei der ersten Rechnung erstellt)")
 
     def reset_patient_form(self):
         fields = [
@@ -2024,7 +2068,7 @@ class HonorarGeneratorApp:
 
 
         if success_count > 0:
-            messagebox.showinfo("Erfolg", f"{success_count} Leistung(en) erfolgreich hinzugefügt.")
+            self.set_status(f"✅ {success_count} Leistung(en) erfolgreich hinzugefügt.")
             self._reset_leistung_selection()
             self.update_leistung_list()
         elif success_count == 0 and not use_manual_override:
