@@ -10,7 +10,7 @@
 
   ; Name der Applikation und der Installer-Datei
   Name "LeprendiX"
-  OutFile "LeprendiX_Installer.exe"
+  OutFile "LeprendiX_Installer_v1.5.5.exe"
   
   ; Standard-Installationsverzeichnis (Program Files für 64-bit, sonst Program Files (x86))
   InstallDir "$PROGRAMFILES64\LeprendiX"
@@ -24,13 +24,30 @@
   ; Unicode-Unterstützung aktivieren
   Unicode True
 
+  ; Version Information
+  VIProductVersion "1.5.5.0"
+  VIAddVersionKey "ProductName" "LeprendiX"
+  VIAddVersionKey "FileVersion" "1.5.5"
+  VIAddVersionKey "FileDescription" "LeprendiX Installer"
+  VIAddVersionKey "LegalCopyright" "LeprendiX"
+
 ;--------------------------------
 ; Interface Einstellungen (MUI2)
 
   !define MUI_ABORTWARNING
   ; Icon für den Installer (optional, Pfad anpassen oder auskommentieren)
-  ; !define MUI_ICON "dein_icon.ico" 
-  ; !define MUI_UNICON "dein_icon.ico"
+  !define MUI_ICON "favicon.ico" 
+  !define MUI_UNICON "favicon.ico"
+  
+  ; Modern UI Design Settings
+  !define MUI_HEADERIMAGE
+  !define MUI_HEADERIMAGE_RIGHT
+  ; !define MUI_HEADERIMAGE_BITMAP "header.bmp" ; Optional: Header image (150x57)
+  ; !define MUI_WELCOMEFINISHPAGE_BITMAP "sidebar.bmp" ; Optional: Sidebar image (164x314)
+  
+  ; Finish Page Settings
+  !define MUI_FINISHPAGE_RUN "$INSTDIR\LeprendiX.exe"
+  !define MUI_FINISHPAGE_RUN_TEXT "LeprendiX starten"
 
 ;--------------------------------
 ; Seiten (Pages)
@@ -84,6 +101,7 @@ Section "Installieren" SecInstall
   CreateDirectory "$SMPROGRAMS\LeprendiX"
   CreateShortcut "$SMPROGRAMS\LeprendiX\LeprendiX.lnk" "$INSTDIR\LeprendiX.exe"
   CreateShortcut "$SMPROGRAMS\LeprendiX\Deinstallieren.lnk" "$INSTDIR\Uninstall.exe"
+  CreateShortcut "$DESKTOP\LeprendiX.lnk" "$INSTDIR\LeprendiX.exe"
 
 SectionEnd
 
@@ -97,6 +115,7 @@ Section "Uninstall"
   
   ; Lösche Verknüpfungen
   RMDir /r "$SMPROGRAMS\LeprendiX"
+  Delete "$DESKTOP\LeprendiX.lnk"
 
   ; Lösche Registry-Schlüssel
   DeleteRegKey HKCU "Software\LeprendiX"
@@ -120,3 +139,13 @@ Section "Uninstall"
   RMDir "$INSTDIR"
 
 SectionEnd
+
+;--------------------------------
+; Splash Screen (Optional)
+
+Function .onInit
+  ; InitPluginsDir
+  ; File /oname=$PLUGINSDIR\splash.bmp "splash.bmp" ; Requires splash.bmp in script dir
+  ; advsplash::show 1000 2000 1000 -1 $PLUGINSDIR\splash.bmp
+  ; Pop $0
+FunctionEnd

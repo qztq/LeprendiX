@@ -253,10 +253,33 @@ def create_main():
     t3 = tk.Frame(nb, bg=COLOR_PRIMARY)
     nb.add(t3, text="  DOKUMENTATION  ")
 
-    sidebar = tk.Frame(t3, bg=COLOR_SECONDARY, width=250)
+    # --- Sidebar für Navigation & Suche ---
+    sidebar = tk.Frame(t3, bg=COLOR_SECONDARY, width=300)
     sidebar.pack(side="left", fill="y", padx=(10, 0), pady=10)
     sidebar.pack_propagate(False)
 
+    # Sucheingabe
+    tk.Label(sidebar, text="Suche:", bg=COLOR_SECONDARY, fg=COLOR_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
+    search_var = tk.StringVar()
+    search_entry = tk.Entry(sidebar, textvariable=search_var, bg=COLOR_PRIMARY, fg="white", insertbackground="white", relief="flat")
+    search_entry.pack(fill="x", padx=10, pady=(0, 10))
+
+    # Liste der Kapitel
+    tk.Label(sidebar, text="Inhalt:", bg=COLOR_SECONDARY, fg=COLOR_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(5, 5))
+    
+    # Listbox mit Scrollbar
+    list_frame = tk.Frame(sidebar, bg=COLOR_SECONDARY)
+    list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+    
+    nav_scroll = tk.Scrollbar(list_frame)
+    nav_scroll.pack(side="right", fill="y")
+    
+    nav_list = tk.Listbox(list_frame, bg=COLOR_PRIMARY, fg=COLOR_TEXT, selectbackground=COLOR_ACCENT, 
+                          selectforeground="white", relief="flat", yscrollcommand=nav_scroll.set, font=("Segoe UI", 10))
+    nav_list.pack(side="left", fill="both", expand=True)
+    nav_scroll.config(command=nav_list.yview)
+
+    # --- Content Bereich ---
     content_f = tk.Frame(t3, bg=COLOR_PRIMARY)
     content_f.pack(side="right", fill="both", expand=True, padx=10, pady=10)
 
@@ -268,21 +291,48 @@ def create_main():
     doc_t.pack(fill="both", expand=True)
     scroll.config(command=doc_t.yview)
 
+    # --- Dokumentations-Inhalt ---
     sections = [
-        ("🛠️ 1. Einleitung", "SEC_INTRO", "Systemdokumentation für LeprendiX...\n\n"),
-        ("⚙️ 2. Installation", "SEC_INST", "Initialisieren Sie zuerst die Datenbank...\n\n"),
-        ("👤 3. Patienten", "SEC_PAT", "Verwaltung über das Hauptfenster...\n\n")
+        ("1. Einleitung", "SEC_1", "Willkommen bei LeprendiX.\nDiese Software dient zur Verwaltung von Patienten und zur Erstellung von Honorarnoten.\n\n"),
+        ("2. Installation & Setup", "SEC_2", "Vor der ersten Nutzung muss die Datenbank initialisiert werden.\nGehen Sie dazu in den Tab 'Einstellungen' und nutzen Sie das Datenbank-Passwort.\n\n"),
+        ("3. Patientenverwaltung", "SEC_3", "Im Tab 'Patienten Verwalten' können Sie neue Patienten anlegen, bearbeiten oder löschen.\nNutzen Sie die Suche, um bestehende Datensätze zu laden.\n\n"),
+        ("4. Honorarnoten", "SEC_4", "Im Tab 'Honorarnote Generieren' wählen Sie einen Patienten aus und erstellen das Dokument.\nEs wird automatisch eine Word-Datei erzeugt und (optional) gedruckt.\n\n"),
+        ("5. Leistungen & Teamup", "SEC_5", "Leistungen können manuell oder via Teamup-Kalender importiert werden.\nStellen Sie sicher, dass der API-Key in der Konfiguration hinterlegt ist.\n\n"),
+        ("6. Archivierung", "SEC_6", "Über den 'Status-Checker' können abgerechnete Patienten ins Archiv verschoben werden.\nDies hält die aktive Datenbank sauber.\n\n"),
+        ("7. Einstellungen", "SEC_7", "Hier können Pfade für Speicherorte und Backups angepasst werden.\n\n"),
+        ("8. Troubleshooting", "SEC_8", "Bei Fehlern prüfen Sie bitte die Log-Dateien oder kontaktieren Sie den Support.\n\n")
     ]
 
-    for title, tag, content in sections:
-        btn = tk.Button(sidebar, text=title, font=("Segoe UI", 10), bg=COLOR_SECONDARY, fg=COLOR_TEXT,
-                        relief="flat", anchor="w", cursor="hand2", activebackground=COLOR_PRIMARY)
-        btn.pack(fill="x", padx=10, pady=2)
-        doc_t.insert(tk.END, title + "\n", tag)
-        doc_t.insert(tk.END, content)
+    title_to_tag = {}
 
-    doc_t.tag_configure("highlight", background=COLOR_HIGHLIGHT, foreground="white")
+    for title, tag, content in sections:
+        doc_t.insert(tk.END, title + "\n", ("heading", tag))
+        doc_t.insert(tk.END, content, ("content",))
+        title_to_tag[title] = tag
+        nav_list.insert(tk.END, title)
+
+    doc_t.tag_configure("heading", font=("Segoe UI", 14, "bold"), foreground=COLOR_ACCENT, spacing3=10)
+    doc_t.tag_configure("content", spacing1=5, spacing3=15)
     doc_t.config(state="disabled")
+
+    def on_nav_select(event):
+        selection = nav_list.curselection()
+        if selection:
+            title = nav_list.get(selection[0])
+            tag = title_to_tag.get(title)
+            if tag:
+                doc_t.see(f"{tag}.first")
+
+    nav_list.bind('<<ListboxSelect>>', on_nav_select)
+
+    def filter_list(*args):
+        search_term = search_var.get().lower()
+        nav_list.delete(0, tk.END)
+        for title, _, _ in sections:
+            if search_term in title.lower():
+                nav_list.insert(tk.END, title)
+
+    search_var.trace("w", filter_list)
 
     root.mainloop()
 
