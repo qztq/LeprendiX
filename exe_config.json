@@ -240,6 +240,10 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/version.txt;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/logo.bmp;."
   }
  ],
  "nonPyinstallerOptions": {

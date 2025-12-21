@@ -6,6 +6,7 @@ import runpy
 import pickle
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
+import requests
 from PIL import Image, ImageTk
 import json
 import datetime
@@ -47,6 +48,13 @@ COLOR_TEXT = "#ecf0f1"
 COLOR_HIGHLIGHT = "#3498db"
 LOGO_PATH = resource_path("logo.png")
 
+# --- GITHUB CONFIG FOR RELEASE NOTES ---
+GITHUB_USER = "qztq"
+REPO_NAME = "LeprendiX"
+RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases"
+GITHUB_TOKEN = CONFIG.get("GITHUB_TOKEN", "")
+
+
 # --- CREDENTIALS LADEN ---
 def load_credentials():
     cred_path = os.path.join(BASE_DIR, "credentials.dat")
@@ -59,6 +67,50 @@ def load_credentials():
     return None
 
 USER_CREDS = load_credentials()
+
+def get_release_notes():
+    """Fetches and formats the latest release notes from GitHub."""
+    notes_content = "Release-Informationen konnten nicht geladen werden.\n\n" \
+                    "Bitte prüfen Sie Ihre Internetverbindung oder besuchen Sie die Releases-Seite manuell."
+    try:
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+        # Get latest 5 releases
+        response = requests.get(RELEASES_API_URL, headers=headers, timeout=5, params={"per_page": 5})
+        response.raise_for_status()
+        releases = response.json()
+        
+        if not releases:
+            return "Derzeit sind keine Release-Informationen auf GitHub verfügbar."
+
+        formatted_notes = ""
+        for release in releases:
+            tag_name = release.get('tag_name', 'N/A')
+            name = release.get('name', tag_name) # Fallback to tag_name if name is empty
+            published_at_iso = release.get('published_at')
+            body = release.get('body', 'Keine Beschreibung vorhanden.')
+
+            # Format date
+            if published_at_iso:
+                # GitHub API returns ISO 8601 format (e.g., "2024-01-15T10:00:00Z")
+                dt_utc = datetime.datetime.fromisoformat(published_at_iso.replace('Z', '+00:00'))
+                published_at_str = dt_utc.strftime("%d.%m.%Y")
+            else:
+                published_at_str = "N/A"
+
+            # Build the string for one release
+            formatted_notes += f"Version: {name}\n"
+            formatted_notes += f"Datum: {published_at_str}\n"
+            formatted_notes += "--------------------------------------------------\n"
+            
+            clean_body = body.replace('\r\n', '\n').strip()
+            formatted_notes += clean_body + "\n\n\n"
+            
+        return formatted_notes if formatted_notes else notes_content
+
+    except requests.exceptions.RequestException as e:
+        return f"{notes_content}\n\nFehlerdetails: {e}"
+    except Exception as e:
+        return f"{notes_content}\n\nFehlerdetails: {e}"
 
 class LoginSplash(tk.Toplevel):
     def __init__(self, parent):
@@ -596,7 +648,10 @@ def create_main():
          "- config.json: Speichert Pfade.\n"
          "- credentials.dat: Verschlüsselte Login-Daten.\n"
          "- patienten.db: SQLite Datenbank.\n"
-         "Updates: Beim Start prüft der Launcher automatisch auf neue Versionen via GitHub.\n\n")
+         "Updates: Beim Start prüft der Launcher automatisch auf neue Versionen via GitHub.\n\n"),
+        
+        ("9. Release Notes", "SEC_9", 
+         "Lade Release Notes von GitHub...\n")
     ]
 
     title_to_tag = {}
@@ -629,6 +684,51 @@ def create_main():
                 nav_list.insert(tk.END, title)
 
     search_var.trace_add("write", filter_list)
+
+    # --- Release Notes Lade-Logik ---
+    def fetch_and_display_releases_threaded():
+        def fetch():
+            content = get_release_notes()
+            # Schedule the UI update in the main thread
+            if doc_t.winfo_exists():
+                doc_t.after(0, update_ui, content)
+
+        def update_ui(content):
+            try:
+                doc_t.config(state="normal")
+                
+                # Tag für die Überschrift der Release Notes
+                heading_tag = "SEC_9"
+                
+                # Finde den Start der Überschrift
+                heading_start_index = doc_t.tag_ranges(heading_tag)[0]
+                # Der Inhalt beginnt auf der nächsten Zeile
+                content_start_index = doc_t.index(f"{heading_start_index} + 1 lines linestart")
+                
+                # Finde das Ende des Inhaltsbereichs für diesen Abschnitt
+                next_heading_pos = doc_t.tag_nextrange("heading", content_start_index)
+                
+                if next_heading_pos:
+                    content_end_index = next_heading_pos[0]
+                else:
+                    content_end_index = tk.END
+
+                # Lösche den Platzhalter-Inhalt
+                doc_t.delete(content_start_index, content_end_index)
+                
+                # Füge den neuen Inhalt ein
+                doc_t.insert(content_start_index, content, ("content",))
+                
+            except (IndexError, tk.TclError):
+                print("Konnte Release Notes Sektion nicht aktualisieren (Fenster geschlossen?).")
+            finally:
+                if doc_t.winfo_exists():
+                    doc_t.config(state="disabled")
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    # Starte das Laden der Release Notes im Hintergrund
+    fetch_and_display_releases_threaded()
 
     # --- AUTO-BACKUP ON EXIT ---
     def on_closing():
