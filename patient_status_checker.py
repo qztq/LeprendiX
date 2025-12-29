@@ -86,6 +86,12 @@ class PatientStatusApp:
         except sqlite3.OperationalError:
             cursor.execute("ALTER TABLE patienten ADD COLUMN invoiced_since_reset INTEGER DEFAULT 0")
             conn.commit()
+        
+        try:
+            cursor.execute("SELECT is_archived FROM patienten LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
+            conn.commit()
         finally:
             conn.close()
 
@@ -122,7 +128,7 @@ class PatientStatusApp:
         try:
             conn = sqlite3.connect(DATABASE_NAME)
             cursor = conn.cursor()
-            cursor.execute("SELECT id, vorname, nachname, invoiced_since_reset FROM patienten ORDER BY nachname, vorname")
+            cursor.execute("SELECT id, vorname, nachname, invoiced_since_reset FROM patienten WHERE (is_archived IS NULL OR is_archived = 0) ORDER BY nachname, vorname")
             
             for p_id, vorname, nachname, status in cursor.fetchall():
                 display_name = f"{nachname} {vorname}"
@@ -183,8 +189,8 @@ class PatientStatusApp:
 
                     shutil.move(source_path, dest_path)
                     
-                    # Erst wenn das Verschieben geklappt hat, aus DB löschen
-                    cursor.execute("DELETE FROM patienten WHERE id=?", (patient_id,))
+                    # Erst wenn das Verschieben geklappt hat, Status auf archiviert setzen (NICHT LÖSCHEN)
+                    cursor.execute("UPDATE patienten SET is_archived = 1 WHERE id=?", (patient_id,))
                     conn.commit()
                     
                     messagebox.showinfo("Erfolg", f"Patient {full_name} wurde erfolgreich ins Archiv verschoben.")

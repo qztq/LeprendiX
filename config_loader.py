@@ -19,7 +19,8 @@ def get_config():
         "ARCHIVE_DIR": os.path.join(desktop, "1Ehemalige Patienten"),
         "TEAMUP_API_KEY": "c307ae48dc5f918fd9dada7b9e922a00e30c27a8939d8a31eb02dac60efe566a",
         "TEAMUP_CALENDAR_ID": "ks63f68d2f870c62a1",
-        "GITHUB_TOKEN": "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"
+        "GITHUB_TOKEN": "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",
+        "QUICK_AMOUNTS": "33, 35, 57, 83"
     }
 
     if os.path.exists(config_file):

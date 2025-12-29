@@ -13,6 +13,7 @@ from docx.enum.text import WD_UNDERLINE
 from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
 from docx.shared import Inches, Pt, Twips
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
+import logging
 from config_loader import PATIENT_BASE_DIR, CONFIG
 
 
@@ -63,7 +64,13 @@ def _ensure_status_column():
         # Wenn die Spalte nicht existiert, füge sie hinzu
         cursor.execute("ALTER TABLE patienten ADD COLUMN invoiced_since_reset INTEGER DEFAULT 0")
         conn.commit()
-        print("INFO: Spalte 'invoiced_since_reset' in patienten-Tabelle hinzugefügt.")
+        logging.info("Spalte 'invoiced_since_reset' in patienten-Tabelle hinzugefügt.")
+    
+    try:
+        cursor.execute("SELECT is_archived FROM patienten LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
+        conn.commit()
     finally:
         conn.close()
 
@@ -74,9 +81,9 @@ def _update_invoiced_status(patient_id, status=1):
     try:
         cursor.execute("UPDATE patienten SET invoiced_since_reset = ? WHERE id = ?", (status, patient_id))
         conn.commit()
-        print(f"INFO: Patient {patient_id} Honorarnoten-Status auf {status} gesetzt.")
+        logging.info(f"Patient {patient_id} Honorarnoten-Status auf {status} gesetzt.")
     except Exception as e:
-        print(f"FEHLER beim Status-Update für Patient {patient_id}: {e}")
+        logging.error(f"FEHLER beim Status-Update für Patient {patient_id}: {e}")
     finally:
         conn.close()
         
@@ -120,12 +127,12 @@ def get_patient_data(search_name):
     query = """
     SELECT id, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, last_selected_kurznamen
     FROM patienten 
-    WHERE nachname LIKE ? OR vorname LIKE ?
+    WHERE (nachname LIKE ? OR vorname LIKE ?) AND (is_archived IS NULL OR is_archived = 0)
     """
     params = [search_term, search_term]
     
     if search_name.isdigit():
-        query += " OR id = ?"
+        query += " OR (id = ? AND (is_archived IS NULL OR is_archived = 0))"
         params.append(search_name)
         
     cursor.execute(query, params)
@@ -147,7 +154,7 @@ def save_last_selected_leistungen(patient_id, kurznamen_set):
         """, (kurznamen_str, patient_id))
         conn.commit()
     except Exception as e:
-        print(f"Fehler beim Speichern der letzten Leistungen für Patient {patient_id}: {e}")
+        logging.error(f"Fehler beim Speichern der letzten Leistungen für Patient {patient_id}: {e}")
     finally:
         conn.close()
 
@@ -192,7 +199,7 @@ def get_all_stammdaten_dict():
     stammdaten_dict = {item: r[2] for item, r in zip(stammdaten_list, results)}
     return stammdaten_list, stammdaten_dict
 
-def search_teamup_events(search_term, start_date=None, end_date=None):
+def search_teamup_events(search_term, start_date=None, end_date=None, mode='standard'):
     """
     Sucht Teamup-Kalendereinträge basierend auf dem Titel/Notizen.
     """
@@ -232,8 +239,21 @@ def search_teamup_events(search_term, start_date=None, end_date=None):
         for event in data.get('events', []):
             title = event.get('title', '')
             notes = event.get('notes', '')
+            is_match = False
+
+            if mode == 'gemeinde':
+                # Suche nach Nachname UND (1x, 2x, 3x, 4x, 5x im Titel)
+                t_low = title.lower()
+                has_name = term in t_low or term in notes.lower()
+                has_x = any(x in t_low for x in ["1x", "2x", "3x", "4x", "5x"])
+                
+                if has_name and has_x:
+                    is_match = True
+            else:
+                if term in title.lower() or term in notes.lower():
+                    is_match = True
             
-            if term in title.lower() or term in notes.lower():
+            if is_match:
                 
                 start_iso = event.get('start_dt')
                 end_iso = event.get('end_dt')
@@ -327,7 +347,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         if 'Mödling, {{Datum_Austellung}}' in p.text:
             ORT_DATUM_PARAGRAPH = p
             
-        if 'Diagnose:   {{Diagnose}}' in p.text:
+        if '{{Diagnose}}' in p.text:
             DIAGNOSE_PLACEHOLDER_PARAGRAPH = p
             
         # Setze die Standardgröße 12pt global
@@ -632,6 +652,18 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         # Setze den Platzhalter auf den neuen Paragraphen, um die Leerzeile in Schritt 4 zu erhalten
         DIAGNOSE_PLACEHOLDER_PARAGRAPH = p_new
         
+    # --- 6. Footer Zusammenhalten (Keep With Next) ---
+    # Verhindert, dass der Block ab "Gesamt:" durch einen Seitenumbruch getrennt wird.
+    footer_started = False
+    for i, p in enumerate(document.paragraphs):
+        if 'Gesamt:' in p.text:
+            footer_started = True
+        
+        if footer_started:
+            # keep_with_next für alle Zeilen bis zur vorletzten setzen
+            if i < len(document.paragraphs) - 1:
+                p.paragraph_format.keep_with_next = True
+
 
     # --- Speichern des Dokuments ---
     patient_folder_name = f"{nachname} {vorname}"
@@ -723,9 +755,9 @@ class HonorarGeneratorApp:
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     backup_path = os.path.join(backup_dir, f"autobackup_{timestamp}.db")
                     shutil.copy2(DATABASE_NAME, backup_path)
-                    print(f"[AutoBackup] Backup erstellt: {backup_path}")
+                    logging.info(f"[AutoBackup] Backup erstellt: {backup_path}")
                 except Exception as e:
-                    print(f"[AutoBackup] Fehler: {e}")
+                    logging.error(f"[AutoBackup] Fehler: {e}")
         self.root.destroy()
 
     def set_status(self, message, duration=4000):
@@ -776,7 +808,7 @@ class HonorarGeneratorApp:
                  cursor.execute("INSERT OR IGNORE INTO einstellungen (key, value) VALUES (?, ?)", (key, str(value)))
             conn.commit()
         except Exception as e:
-            print(f"FEHLER beim Aktualisieren der Folgenummer in der DB ({key}): {e}")
+            logging.error(f"FEHLER beim Aktualisieren der Folgenummer in der DB ({key}): {e}")
             messagebox.showerror("Fehler", f"Fehler beim Aktualisieren der Folgenummer in der DB ({key}): {e}")
         finally:
             conn.close()
@@ -809,7 +841,7 @@ class HonorarGeneratorApp:
 
     def _prepare_bhag_number(self):
         """Generiert die nächste BHAG-Nummer, aktualisiert die DB und die GUI."""
-        print(f"[DEBUG] Sequenz-Daten aktuell: {self.invoice_sequence_data}")
+        logging.debug(f"Sequenz-Daten aktuell: {self.invoice_sequence_data}")
 
 
         now = datetime.datetime.now()
@@ -843,7 +875,7 @@ class HonorarGeneratorApp:
         self.invoice_sequence_data['rechnung_folgenummer'] = str(new_folgenummer)
         self._update_invoice_sequence_data('rechnung_folgenummer', str(new_folgenummer))
         self.invoice_seq_var.set(folgenummer_str) # Aktualisiere das Feld im GUI
-        print(f"[DEBUG] Generierte Nummer: {bhag_nummer}")
+        logging.info(f"Generierte Nummer: {bhag_nummer}")
         
         # Stelle sicher, dass die Monatsangabe immer aktuell ist (falls sie sich innerhalb des Jahres ändert)
         if stored_month != current_month:
@@ -1162,6 +1194,43 @@ class HonorarGeneratorApp:
             messagebox.showerror("Fehler", f"Fehler bei Generierung/Druck: {e}")
             traceback.print_exc()
 
+    def _get_ort_for_plz(self, plz):
+        """Gibt den Ortsnamen für eine PLZ zurück (Basis-Datenbank für NÖ/Wien)."""
+        # Erweiterbare Liste für die Region Mödling/Baden/Wien Umgebung
+        mapping = {
+            "2351": "Wiener Neudorf", "2340": "Mödling", "2344": "Maria Enzersdorf",
+            "2345": "Brunn am Gebirge", "2331": "Vösendorf", "2333": "Leopoldsdorf",
+            "2334": "Vösendorf", "2352": "Gumpoldskirchen", "2353": "Guntramsdorf",
+            "2361": "Laxenburg", "2362": "Biedermannsdorf", "2380": "Perchtoldsdorf",
+            "2384": "Breitenfurt bei Wien", "2391": "Kaltenleutgeben", "2392": "Sulz im Wienerwald",
+            "2483": "Ebreichsdorf", "2500": "Baden", "2511": "Pfaffstätten",
+            "2512": "Tribuswinkel", "2514": "Traiskirchen", "2521": "Trumau",
+            "2522": "Oberwaltersdorf", "2540": "Bad Vöslau", "2542": "Kottingbrunn",
+            "2544": "Leobersdorf", "2700": "Wiener Neustadt", "3100": "St. Pölten"
+        }
+        
+        if plz in mapping:
+            return mapping[plz]
+            
+        # Generische Wien-Logik (1010 - 1230)
+        if len(plz) == 4 and plz.startswith("1") and plz.endswith("0"):
+            try:
+                bezirk = int(plz[1:3])
+                if 1 <= bezirk <= 23:
+                    return "Wien"
+            except ValueError:
+                pass
+        return None
+
+    def autofill_ort(self, event):
+        """Füllt das Ort-Feld automatisch basierend auf der PLZ."""
+        plz = self.patient_entries["PLZ"].get().strip()
+        # Nur reagieren, wenn 4 Zeichen eingegeben wurden
+        if len(plz) == 4:
+            ort = self._get_ort_for_plz(plz)
+            if ort:
+                self.patient_entries["Ort"].delete(0, tk.END)
+                self.patient_entries["Ort"].insert(0, ort)
 
     # --- 2. Patienten Verwalten Tab (Hinzufügen und Bearbeiten) ---
     def setup_patient_tab(self, tab):
@@ -1173,6 +1242,7 @@ class HonorarGeneratorApp:
         self.patient_search_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
         ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
         ttk.Button(search_frame, text="Felder leeren", command=self.reset_patient_form).grid(row=0, column=3, padx=5, pady=5)
+        ttk.Button(search_frame, text="♻️ Archiv durchsuchen", command=self.open_archive_manager).grid(row=0, column=4, padx=5, pady=5)
         
         self.patient_id_to_edit = None
 
@@ -1187,6 +1257,9 @@ class HonorarGeneratorApp:
             entry = ttk.Entry(tab, width=40)
             entry.grid(row=i + 1, column=1, padx=5, pady=5, sticky='we')
             self.patient_entries[field] = entry
+
+        # NEU: Auto-Fill Ort bei PLZ Eingabe
+        self.patient_entries["PLZ"].bind("<KeyRelease>", self.autofill_ort)
 
         self.patient_entries["Anrede"].insert(0, CONFIG.get('DEFAULT_ANREDE') or "Herr/Frau")
         self.patient_entries["Diagnose"].insert(0, CONFIG.get('DEFAULT_DIAGNOSE') or "Z71")
@@ -1208,6 +1281,67 @@ class HonorarGeneratorApp:
         # Leere Zeile für Abstand
         ttk.Label(tab, text="").grid(row=len(fields) + 3, column=0, columnspan=2, pady=5)
 
+    def open_archive_manager(self):
+        """Öffnet ein Fenster zum Suchen und Reaktivieren von archivierten Patienten."""
+        archive_win = tk.Toplevel(self.root)
+        archive_win.title("Archivierte Patienten")
+        archive_win.geometry("600x500")
+        
+        ttk.Label(archive_win, text="Archivierte Patienten (Doppelklick zum Reaktivieren):", font=("Segoe UI", 10, "bold")).pack(pady=10)
+        
+        list_frame = ttk.Frame(archive_win)
+        list_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        lb = tk.Listbox(list_frame, width=80, height=20)
+        lb.pack(side="left", fill="both", expand=True)
+        
+        scroll = ttk.Scrollbar(list_frame, command=lb.yview)
+        scroll.pack(side="right", fill="y")
+        lb.config(yscrollcommand=scroll.set)
+        
+        # Daten laden
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, vorname, nachname FROM patienten WHERE is_archived = 1 ORDER BY nachname")
+        archived_patients = cursor.fetchall()
+        conn.close()
+        
+        for pid, vn, nn in archived_patients:
+            lb.insert(tk.END, f"{nn} {vn} (ID: {pid})")
+            
+        def reactivate():
+            sel = lb.curselection()
+            if not sel: return
+            
+            index = sel[0]
+            pid, vn, nn = archived_patients[index]
+            folder_name = f"{nn} {vn}"
+            
+            if messagebox.askyesno("Reaktivieren", f"Möchten Sie '{folder_name}' reaktivieren?\nDer Ordner wird aus dem Archiv zurückverschoben."):
+                # 1. DB Update
+                conn = sqlite3.connect(DATABASE_NAME)
+                cursor = conn.cursor()
+                cursor.execute("UPDATE patienten SET is_archived = 0 WHERE id = ?", (pid,))
+                conn.commit()
+                conn.close()
+                
+                # 2. Ordner verschieben
+                archive_dir = CONFIG.get('ARCHIVE_DIR')
+                base_dir = CONFIG.get('PATIENT_BASE_DIR')
+                src = os.path.join(archive_dir, folder_name)
+                dst = os.path.join(base_dir, folder_name)
+                
+                if os.path.exists(src):
+                    shutil.move(src, dst)
+                    messagebox.showinfo("Erfolg", "Patient und Ordner erfolgreich reaktiviert.")
+                else:
+                    messagebox.showwarning("Hinweis", "Patient wurde in der Datenbank reaktiviert, aber der Ordner wurde im Archiv nicht gefunden.")
+                
+                archive_win.destroy()
+                self.search_patients() # Hauptliste aktualisieren
+
+        lb.bind("<Double-1>", lambda e: reactivate())
+        ttk.Button(archive_win, text="Ausgewählten Patienten Reaktivieren", command=reactivate).pack(pady=10)
 
     def search_and_load_patient(self):
         # ... (Funktion bleibt unverändert)
@@ -1487,7 +1621,7 @@ class HonorarGeneratorApp:
             conn.commit()
             return True
         except Exception as e:
-            print(f"FEHLER beim Löschen von Patient ID {patient_id}: {e}")
+            logging.error(f"FEHLER beim Löschen von Patient ID {patient_id}: {e}", exc_info=True)
             messagebox.showerror("Fehler", f"Fehler beim Löschen des Patienten: {e}")
             return False
         finally:
@@ -1523,7 +1657,7 @@ class HonorarGeneratorApp:
             conn.commit()
             return True
         except Exception as e:
-            print(f"FEHLER: Fehler beim Löschen aller Leistungen für Patient {patient_id}: {e}")
+            logging.error(f"FEHLER: Fehler beim Löschen aller Leistungen für Patient {patient_id}: {e}")
             return False
         finally:
             conn.close()
@@ -1531,6 +1665,10 @@ class HonorarGeneratorApp:
 
     def _get_leistung_insertion_params(self):
         """Hilfsfunktion zur Vorbereitung von Betrag und KM-Geld."""
+        # Wenn der Editor nicht sichtbar ist, ignorieren wir manuelle Eingaben
+        if not hasattr(self, 'editor_frame') or not self.editor_frame.winfo_viewable():
+            return 0.0, False, self.get_current_kilometergeld()
+
         manual_betrag_str = self.amount_entry.get().strip().replace(',', '.')
         try:
             manual_betrag = float(manual_betrag_str)
@@ -1550,7 +1688,7 @@ class HonorarGeneratorApp:
                 widget.config(style='TButton')
                 widget.is_selected = False
 
-    def add_leistung_to_db(self, patient_id, datum_str, time_from, time_to, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld):
+    def add_leistung_to_db(self, patient_id, datum_str, time_from, time_to, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld, custom_description=None):
         """Fügt eine einzelne Leistung in die DB ein."""
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
@@ -1560,10 +1698,13 @@ class HonorarGeneratorApp:
             betrag = manual_betrag if use_manual_override else standard_betrag
             end_betrag = betrag + km_geld 
 
-            # Beschreibung basierend auf manuellem Override oder Stammdaten
-            beschreibung = self.stammdaten_betraege.get(kurzname, kurzname)
-            if use_manual_override:
-                beschreibung = f"Manuelle Eingabe ({kurzname})"
+            # Beschreibung basierend auf Textbox, manuellem Override oder Stammdaten
+            if custom_description:
+                beschreibung = custom_description
+            elif use_manual_override:
+                beschreibung = f"Manuelle Eingabe"
+            else:
+                beschreibung = self.stammdaten_betraege.get(kurzname, kurzname)
 
             cursor.execute("""
             INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
@@ -1572,7 +1713,7 @@ class HonorarGeneratorApp:
             conn.commit()
             return True
         except Exception as e:
-            print(f"FEHLER: Fehler beim Speichern der Leistung {kurzname}: {e}")
+            logging.error(f"FEHLER: Fehler beim Speichern der Leistung {kurzname}: {e}")
             return False
         finally:
             conn.close()
@@ -1593,7 +1734,7 @@ class HonorarGeneratorApp:
                 # Der Kurzname in stammdaten_betraege ist im Format 'Kurzname - Beschreibung'
                 stammdaten_key = [k for k in self.stammdaten_betraege.keys() if k.startswith(kurzname + ' -')]
                 if not stammdaten_key:
-                    print(f"WARNUNG: Stammdaten für '{kurzname}' nicht gefunden. Überspringe.")
+                    logging.warning(f"Stammdaten für '{kurzname}' nicht gefunden. Überspringe.")
                     continue
                 
                 standard_betrag = self.stammdaten_betraege[stammdaten_key[0]]
@@ -1612,7 +1753,7 @@ class HonorarGeneratorApp:
                     """, (patient_id, datum_db, time_from, time_to, final_beschreibung, end_betrag))
                     total_success_count += 1
                 except Exception as e:
-                    print(f"FEHLER: Fehler beim Speichern des Termins {date_str} für Leistung {kurzname}: {e}")
+                    logging.error(f"Fehler beim Speichern des Termins {date_str} für Leistung {kurzname}: {e}")
 
         conn.commit()
         conn.close()
@@ -1653,15 +1794,57 @@ class HonorarGeneratorApp:
         self.teamup_button = ttk.Button(date_time_frame, text="📅 Teamup-Termine Importieren/Ersetzen", command=self.open_teamup_search)
         self.teamup_button.pack(side=tk.LEFT, padx=10)
 
-        # Leistungsbuttons Frame (Scrollable)
+        # Zeile 2: Toggle Editor Button
+        self.toggle_editor_btn = ttk.Button(tab, text="🔽 Manuelle Eingabe / Editor öffnen", command=self.toggle_editor)
+        self.toggle_editor_btn.grid(row=2, column=0, columnspan=3, padx=5, pady=(10,0), sticky='w')
+
+        # Zeile 3: Editor Frame (Hidden by default)
+        self.editor_frame = ttk.Frame(tab, borderwidth=1, relief="groove", padding=5)
+        self.editor_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky='ew')
+        
+        # 3.1 Loader (Stammdaten in Editor laden)
+        loader_frame = ttk.Frame(self.editor_frame)
+        loader_frame.pack(fill='x', pady=5)
+        ttk.Label(loader_frame, text="Vorlage aus Stammdaten laden:").pack(side=tk.LEFT)
+        self.stammdaten_combo = ttk.Combobox(loader_frame, width=40, state="readonly")
+        self.stammdaten_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Button(loader_frame, text="In Editor übernehmen", command=self.load_description_from_combo).pack(side=tk.LEFT, padx=5)
+
+        # 3.2 Description
+        desc_frame = ttk.Frame(self.editor_frame)
+        desc_frame.pack(fill='x', pady=5)
+        ttk.Label(desc_frame, text="Beschreibung:").pack(side=tk.LEFT, anchor='n', padx=(0,5))
+        self.description_text = tk.Text(desc_frame, height=3, width=60, font=("Segoe UI", 10))
+        self.description_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        desc_scroll = ttk.Scrollbar(desc_frame, command=self.description_text.yview)
+        desc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.description_text.config(yscrollcommand=desc_scroll.set)
+
+        # 3.3 Amount & Buttons
+        manual_frame = ttk.Frame(self.editor_frame)
+        manual_frame.pack(fill='x', pady=5)
+        ttk.Label(manual_frame, text="Manuelle Betragseingabe (€):").pack(side=tk.LEFT, padx=(0,5))
+        self.amount_entry = ttk.Entry(manual_frame, width=10)
+        self.amount_entry.pack(side=tk.LEFT, padx=(0,15))
+        self.amount_entry.insert(0, "0.00")
+        
+        self.add_leistung_button = ttk.Button(manual_frame, text="Leistung Speichern", command=self.add_leistung_gui)
+        self.add_leistung_button.pack(side=tk.LEFT, padx=10)
+        ttk.Button(manual_frame, text="Editor Leeren", command=self.clear_editor).pack(side=tk.LEFT, padx=10)
+
+        self.editor_frame.grid_remove() # Standardmäßig versteckt
+
+        # Zeile 4: Leistungsbuttons Frame (Scrollable)
         leistung_scroll_frame = ttk.Frame(tab)
-        leistung_scroll_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
+        leistung_scroll_frame.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
+        
+        ttk.Label(leistung_scroll_frame, text="Schnellwahl aus Stammdaten:").pack(anchor='w', padx=5)
         
         self.leistung_canvas = tk.Canvas(leistung_scroll_frame)
-        self.leistung_canvas.pack(side="left", fill="both", expand=True)
+        self.leistung_canvas.pack(side="left", fill="both", expand=True, pady=5)
 
         leistung_scrollbar = ttk.Scrollbar(leistung_scroll_frame, orient="vertical", command=self.leistung_canvas.yview)
-        leistung_scrollbar.pack(side="right", fill="y")
+        leistung_scrollbar.pack(side="right", fill="y", pady=5)
 
         self.leistung_canvas.configure(yscrollcommand=leistung_scrollbar.set)
         self.leistung_canvas.bind('<Configure>', self._on_canvas_configure)
@@ -1669,28 +1852,22 @@ class HonorarGeneratorApp:
         self.leistung_button_frame = ttk.Frame(self.leistung_canvas)
         self.window_id = self.leistung_canvas.create_window((0, 0), window=self.leistung_button_frame, anchor="nw")
         
-        # Zeile 3: Manuelle Beschreibung und Betrag
-        manual_frame = ttk.Frame(tab)
-        manual_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky='w')
+        # Zeile 5: Actions for Quick Select
+        action_frame = ttk.Frame(tab)
+        action_frame.grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky='ew')
         
-        ttk.Label(manual_frame, text="Manuelle Betragseingabe (€):").pack(side=tk.LEFT, padx=(0,5))
-        self.amount_entry = ttk.Entry(manual_frame, width=10)
-        self.amount_entry.pack(side=tk.LEFT, padx=(0,15))
-        self.amount_entry.insert(0, "0.00")
-        
-        self.add_leistung_button = ttk.Button(manual_frame, text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
-        self.add_leistung_button.pack(side=tk.LEFT, padx=10)
-        
-        ttk.Button(manual_frame, text="Zurücksetzen", command=lambda: self._reset_leistung_selection()).pack(side=tk.LEFT, padx=10)
+        self.add_selection_button = ttk.Button(action_frame, text="Ausgewählte Leistungen Hinzufügen", command=self.add_leistung_gui)
+        self.add_selection_button.pack(side=tk.LEFT, padx=10)
+        ttk.Button(action_frame, text="Auswahl zurücksetzen", command=lambda: self._reset_leistung_selection()).pack(side=tk.LEFT, padx=10)
 
-        # Zeile 4: Trennlinie
-        ttk.Separator(tab, orient='horizontal').grid(row=4, column=0, columnspan=3, sticky='ew', pady=5)
+        # Zeile 6: Trennlinie
+        ttk.Separator(tab, orient='horizontal').grid(row=6, column=0, columnspan=3, sticky='ew', pady=5)
 
-        # Zeile 5: Gesamtübersicht
+        # Zeile 7: Gesamtübersicht
         self.summary_label = ttk.Label(tab, text="Gesamtsumme: €0.00 | Nicht abgerechnete Leistungen: 0")
-        self.summary_label.grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky='w')
+        self.summary_label.grid(row=7, column=0, columnspan=3, padx=5, pady=5, sticky='w')
 
-        # Zeile 6: Treeview
+        # Zeile 8: Treeview
         columns = ('ID', 'Datum', 'Von', 'Bis', 'Beschreibung', 'Betrag')
         self.leistung_tree = ttk.Treeview(tab, columns=columns, show='headings', selectmode='browse')
         for col in columns:
@@ -1703,15 +1880,14 @@ class HonorarGeneratorApp:
         self.leistung_tree.column('Bis', width=60, anchor='center')
         self.leistung_tree.column('Beschreibung', width=300, anchor='w')
         self.leistung_tree.column('Betrag', width=120, anchor='e')
-        self.leistung_tree.grid(row=6, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
-
+        self.leistung_tree.grid(row=8, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
 
         
-        tab.grid_rowconfigure(5, weight=1)
+        tab.grid_rowconfigure(8, weight=1)
 
 
         control_frame = ttk.Frame(tab)
-        control_frame.grid(row=7, column=0, columnspan=3, pady=10, sticky='ew')
+        control_frame.grid(row=9, column=0, columnspan=3, pady=10, sticky='ew')
         ttk.Button(control_frame, text="Leistung Löschen", command=self.delete_leistung_gui).pack(side=tk.LEFT, padx=10)
         ttk.Button(control_frame, text="Alle Leistungen Löschen", command=self.delete_all_leistungen_gui).pack(side=tk.LEFT, padx=10)
         ttk.Button(control_frame, text="Leistung Bearbeiten/Laden", command=self.load_leistung_for_edit).pack(side=tk.RIGHT, padx=10)
@@ -1721,6 +1897,42 @@ class HonorarGeneratorApp:
         
         
         self.leistung_tree.bind('<<TreeviewSelect>>', self.select_leistung_for_edit)
+
+    def toggle_editor(self):
+        if self.editor_frame.winfo_viewable():
+            self.editor_frame.grid_remove()
+            self.toggle_editor_btn.config(text="🔽 Manuelle Eingabe / Editor öffnen")
+        else:
+            self.editor_frame.grid()
+            self.toggle_editor_btn.config(text="🔼 Editor schließen")
+
+    def open_editor(self):
+        if not self.editor_frame.winfo_viewable():
+            self.editor_frame.grid()
+            self.toggle_editor_btn.config(text="🔼 Editor schließen")
+
+    def clear_editor(self):
+        self.description_text.delete("1.0", tk.END)
+        self.amount_entry.delete(0, tk.END)
+        self.amount_entry.insert(0, "0.00")
+        self._reset_leistung_selection()
+        # Reset button state if it was in edit mode
+        self.add_leistung_button.config(text="Leistung Speichern", command=self.add_leistung_gui)
+        self.selected_leistung_id = None
+
+    def load_description_from_combo(self):
+        selection = self.stammdaten_combo.get()
+        if not selection: return
+        
+        if selection in self.stammdaten_betraege:
+            betrag = self.stammdaten_betraege[selection]
+            parts = selection.split(' - ', 1)
+            desc = parts[1] if len(parts) > 1 else selection
+            
+            self.description_text.delete("1.0", tk.END)
+            self.description_text.insert("1.0", desc)
+            self.amount_entry.delete(0, tk.END)
+            self.amount_entry.insert(0, f"{betrag:.2f}")
 
     def get_current_kilometergeld(self):
 # ... (Rest der Klasse bleibt unverändert)
@@ -1837,24 +2049,51 @@ class HonorarGeneratorApp:
             for r in results:
                 item = results_tree.insert('', tk.END, values=r)
                 results_tree.selection_add(item)
+        else:
+            results_tree.insert('', tk.END, values=("keine Treffer", "", "", ""))
 
         # --- INTERNE FUNKTIONEN (ORIGINAL LOGIK) ---
-        def perform_search(term=None):
+        def perform_search(term=None, mode='standard'):
             search_t = term if term is not None else search_entry.get().strip()
             
             # NEU: Datum aus GUI lesen
             s_date = start_date_entry.get().strip()
             e_date = end_date_entry.get().strip()
 
-            # Nutzt auch hier den Datumsfilter
-            res = search_teamup_events(search_t, start_date=s_date, end_date=e_date)
+            # Ladebalken anzeigen
+            progress_win = tk.Toplevel(search_window)
+            progress_win.title("Suche läuft...")
+            progress_win.geometry("300x100")
+            progress_win.transient(search_window)
+            progress_win.grab_set()
+            
+            # Zentrieren
+            try:
+                px = search_window.winfo_x() + (search_window.winfo_width() // 2) - 150
+                py = search_window.winfo_y() + (search_window.winfo_height() // 2) - 50
+                progress_win.geometry(f"+{px}+{py}")
+            except:
+                pass
+
+            ttk.Label(progress_win, text=f"Suche nach: {search_t}...", justify="center").pack(pady=10)
+            pb = ttk.Progressbar(progress_win, mode='indeterminate', length=200)
+            pb.pack(pady=5)
+            pb.start(15)
+            progress_win.update()
+
+            try:
+                # Nutzt auch hier den Datumsfilter
+                res = search_teamup_events(search_t, start_date=s_date, end_date=e_date, mode=mode)
+            finally:
+                progress_win.destroy()
+
             results_tree.delete(*results_tree.get_children())
             if res:
                 for r in res:
                     new_item = results_tree.insert('', tk.END, values=r)
                     results_tree.selection_add(new_item)
             else:
-                results_tree.insert('', tk.END, values=(f"Keine Termine für '{search_t}' gefunden.", "", "", ""))
+                results_tree.insert('', tk.END, values=("keine Treffer", "", "", ""))
 
         def _get_selected_events_and_validate():
             """Original Validierungs-Logik."""
@@ -1889,11 +2128,31 @@ class HonorarGeneratorApp:
                 self.replace_all_leistungen_from_teamup(events)
                 search_window.destroy()
 
+        def search_gemeinde():
+            if not self.patient_data: return
+            lastname = self.patient_data[2]
+            
+            # Setze Datum auf ganzes Jahr
+            now = datetime.datetime.now()
+            s_date = f"{now.year}-01-01"
+            e_date = f"{now.year}-12-31"
+            
+            start_date_entry.delete(0, tk.END)
+            start_date_entry.insert(0, s_date)
+            end_date_entry.delete(0, tk.END)
+            end_date_entry.insert(0, e_date)
+            
+            search_entry.delete(0, tk.END)
+            search_entry.insert(0, lastname)
+            
+            perform_search(term=lastname, mode='gemeinde')
+
         # --- BUTTONS ---
         btn_frame = ttk.Frame(search_window)
         btn_frame.pack(pady=10)
         
         ttk.Button(btn_frame, text="Manuelle Suche", command=lambda: perform_search()).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Gemeinderechnung Suche", command=search_gemeinde).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="+ Hinzufügen", command=add_selected_events).pack(side=tk.LEFT, padx=5)
         save_btn = ttk.Button(btn_frame, text="Auswahl Speichern & Ersetzen (ENTER)", command=replace_selected_events)
         save_btn.pack(side=tk.LEFT, padx=5)
@@ -1922,6 +2181,10 @@ class HonorarGeneratorApp:
         """Lädt die Stammdaten und befüllt den Button-Bereich."""
         stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
         self.stammdaten_betraege = stammdaten_dict 
+        
+        # Update Combobox im Editor
+        if hasattr(self, 'stammdaten_combo'):
+            self.stammdaten_combo['values'] = stammdaten_list
 
         # FIX: Theme auf 'clam' setzen, damit Hintergrundfarben unterstützt werden
         # Windows-Standard-Themes (vista/xpnative) ignorieren oft background-Farben
@@ -2027,6 +2290,7 @@ class HonorarGeneratorApp:
         time_to_str = self.time_to_entry.get().strip()
         
         manual_betrag, use_manual_override, km_geld = self._get_leistung_insertion_params()
+        custom_desc = self.description_text.get("1.0", tk.END).strip()
 
         try:
             datetime.datetime.strptime(datum_str, '%d.%m.%Y')
@@ -2042,7 +2306,7 @@ class HonorarGeneratorApp:
             # Nur eine Leistung (manuelle) hinzufügen
             kurzname = "Manuell"
             standard_betrag = manual_betrag
-            if self.add_leistung_to_db(patient_id, datum_str, time_from_str, time_to_str, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld):
+            if self.add_leistung_to_db(patient_id, datum_str, time_from_str, time_to_str, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld, custom_description=custom_desc):
                 success_count = 1
         
         else:
@@ -2055,7 +2319,7 @@ class HonorarGeneratorApp:
                 # Finde den vollen Stammdaten-Key für den Betrag
                 stammdaten_key = [k for k in self.stammdaten_betraege.keys() if k.startswith(kurzname + ' -')]
                 if not stammdaten_key:
-                    print(f"WARNUNG: Stammdaten für '{kurzname}' nicht gefunden. Überspringe.")
+                    logging.warning(f"Stammdaten für '{kurzname}' nicht gefunden. Überspringe.")
                     continue
                 
                 standard_betrag = self.stammdaten_betraege[stammdaten_key[0]]
@@ -2070,6 +2334,7 @@ class HonorarGeneratorApp:
         if success_count > 0:
             self.set_status(f"✅ {success_count} Leistung(en) erfolgreich hinzugefügt.")
             self._reset_leistung_selection()
+            self.description_text.delete("1.0", tk.END) # Textbox leeren
             self.update_leistung_list()
         elif success_count == 0 and not use_manual_override:
             messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (Prüfen Sie, ob Stammdaten fehlen).")
@@ -2098,7 +2363,7 @@ class HonorarGeneratorApp:
 # ... (Rest der Klasse bleibt unverändert)
         """Löscht alle bestehenden Leistungen des Patienten und fügt die ausgewählten Teamup-Termine als neue Leistungen ein."""
         if not self.patient_data or not self.selected_leistungs_kurznamen:
-            print("FEHLER: Kein Patient oder keine Leistung ausgewählt. Vorgang abgebrochen.")
+            logging.warning("Kein Patient oder keine Leistung ausgewählt. Vorgang abgebrochen.")
             return
 
         patient_id = self.patient_data[0]
@@ -2121,7 +2386,7 @@ class HonorarGeneratorApp:
             self.root.focus_force()
         else:
             messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
-            print("INFO: Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
+            logging.info("Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
 
     def update_leistung_list(self):
         # ... (Rest der Klasse bleibt unverändert)
@@ -2195,7 +2460,7 @@ class HonorarGeneratorApp:
         datum_formatiert = datetime.datetime.strptime(res[0], '%Y-%m-%d').strftime('%d.%m.%Y')
         uhrzeit_von = res[1]
         uhrzeit_bis = res[2]
-        # beschreibung = res[3] # Beschreibung wird beim Bearbeiten nicht benötigt, da sie aus den Stammdaten kommt
+        beschreibung = res[3] 
 
         betrag_str = f"{basis_betrag:.2f}"
 
@@ -2207,13 +2472,18 @@ class HonorarGeneratorApp:
         self.time_to_entry.insert(0, uhrzeit_bis)
         self.amount_entry.delete(0, tk.END)
         self.amount_entry.insert(0, betrag_str)
+        self.description_text.delete("1.0", tk.END)
+        self.description_text.insert("1.0", beschreibung)
+        
+        # Öffne den Editor automatisch
+        self.open_editor()
         
         # NEU: Beim Bearbeiten alle Buttons abwählen, da der Betrag manuell gesetzt wird
         self._reset_leistung_selection() 
 
         # Button-Funktion auf Update umstellen
         self.add_leistung_button.config(text=f"Leistung Aktualisieren (ID: {leistung_id})", command=lambda: self.update_leistung_gui(leistung_id))
-        print(f"INFO: Leistung ID {leistung_id} zum Bearbeiten geladen. Basisbetrag (€{basis_betrag:.2f}) angezeigt.") # messagebox entfernt
+        logging.info(f"Leistung ID {leistung_id} zum Bearbeiten geladen. Basisbetrag (€{basis_betrag:.2f}) angezeigt.")
 
 
     def update_leistung_gui(self, leistung_id):
@@ -2223,6 +2493,7 @@ class HonorarGeneratorApp:
         time_from_str = self.time_from_entry.get().strip()
         time_to_str = self.time_to_entry.get().strip()
         betrag_str = self.amount_entry.get().strip().replace(',', '.') 
+        beschreibung = self.description_text.get("1.0", tk.END).strip()
 
         km_geld = self.get_current_kilometergeld()
         
@@ -2238,7 +2509,8 @@ class HonorarGeneratorApp:
             cursor = conn.cursor()
             
             # Aktualisiere die Beschreibung, da es sich nun um eine manuelle Bearbeitung handelt
-            beschreibung = f"Manuelle Korrektur (ID {leistung_id})"
+            if not beschreibung:
+                beschreibung = f"Manuelle Korrektur (ID {leistung_id})"
 
             cursor.execute("""
             UPDATE leistungen
@@ -2253,6 +2525,7 @@ class HonorarGeneratorApp:
             # Setze den Button zurück auf Hinzufügen-Modus
             self.add_leistung_button.config(text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
             self.selected_leistung_id = None
+            self.description_text.delete("1.0", tk.END)
             
         except ValueError as e:
             messagebox.showerror("Fehler", f"Ungültiges Datums-, Zeit- oder Betragsformat: {e}")
@@ -2274,7 +2547,7 @@ class HonorarGeneratorApp:
             try:
                 cursor.execute("DELETE FROM leistungen WHERE id = ?", (leistung_id,))
                 conn.commit()
-                print(f"INFO: Leistung ID {leistung_id} erfolgreich gelöscht.") # messagebox entfernt
+                logging.info(f"Leistung ID {leistung_id} erfolgreich gelöscht.")
                 self.update_leistung_list()
             except Exception as e:
                 messagebox.showerror("Fehler", f"Fehler beim Löschen: {e}")
@@ -2292,35 +2565,94 @@ class HonorarGeneratorApp:
         patient_name = f"{self.patient_data[1]} {self.patient_data[2]}"
         if messagebox.askyesno("WARNUNG", f"Sind Sie sicher, dass Sie ALLE Leistungen für Patient '{patient_name}' (ID: {patient_id}) löschen möchten? Dieser Schritt kann nicht rückgängig gemacht werden."):
             if self._delete_all_patient_leistungen(patient_id):
-                print(f"INFO: Alle Leistungen für Patient '{patient_name}' wurden gelöscht.") # messagebox entfernt
+                logging.info(f"Alle Leistungen für Patient '{patient_name}' wurden gelöscht.")
                 self.update_leistung_list()
 
     # --- 4. Stammdaten Leistungen Tab ---
     def setup_stammdaten_tab(self, tab):
-        # ... (Rest der Klasse bleibt unverändert)
-        fields = ["Kurzname (Eindeutig)", "Beschreibung", "Standard Betrag (€)"]
-        self.stammdaten_entries = {}
+        # Clear existing widgets if any
+        for widget in tab.winfo_children():
+            widget.destroy()
 
-        for i, field in enumerate(fields):
-            ttk.Label(tab, text=f"{field}:").grid(row=i, column=0, padx=5, pady=5, sticky='w')
-            entry = ttk.Entry(tab, width=60)
-            entry.grid(row=i, column=1, padx=5, pady=5, sticky='ew')
-            self.stammdaten_entries[field] = entry
+        # --- Input Bereich (Oben) ---
+        input_frame = ttk.LabelFrame(tab, text="Leistung bearbeiten / neu anlegen", padding=15)
+        input_frame.pack(fill='x', padx=10, pady=10)
 
-        ttk.Button(tab, text="Speichern/Aktualisieren", command=self.save_stammdaten).grid(row=3, column=0, columnspan=2, pady=10)
+        # Zeile 1: Kurzname und Betrag
+        row1 = ttk.Frame(input_frame)
+        row1.pack(fill='x', pady=5)
         
-        ttk.Separator(tab, orient='horizontal').grid(row=4, column=0, columnspan=2, sticky='ew', pady=10)
+        ttk.Label(row1, text="Kurzname (Eindeutig):").pack(side=tk.LEFT)
+        self.stammdaten_kurzname_entry = ttk.Entry(row1, width=25)
+        self.stammdaten_kurzname_entry.pack(side=tk.LEFT, padx=(5, 20))
+        
+        ttk.Label(row1, text="Standard Betrag (€):").pack(side=tk.LEFT)
+        self.stammdaten_betrag_entry = ttk.Entry(row1, width=15)
+        self.stammdaten_betrag_entry.pack(side=tk.LEFT, padx=5)
 
-        self.stammdaten_listbox = tk.Listbox(tab, height=10, width=80)
-        self.stammdaten_listbox.grid(row=5, column=0, columnspan=2, padx=5, pady=5, sticky='nsew')
+        # Schnellauswahl Buttons
+        def _set_quick_amt(val):
+            self.stammdaten_betrag_entry.delete(0, tk.END)
+            self.stammdaten_betrag_entry.insert(0, f"{val:.2f}")
+
+        # Werte aus Config laden
+        quick_amounts_str = CONFIG.get('QUICK_AMOUNTS', "33, 35, 57, 83")
+        try:
+            # String "33, 57, 80" -> Liste [33.0, 57.0, 80.0]
+            quick_amounts = [float(x.strip()) for x in quick_amounts_str.split(',') if x.strip()]
+        except ValueError:
+            quick_amounts = [33, 35, 57, 83] # Fallback bei Tippfehlern
+
+        for val in quick_amounts:
+            # Anzeige ohne Nachkommastellen, wenn es eine ganze Zahl ist (z.B. 57 statt 57.0)
+            label_text = f"€{int(val)}" if val.is_integer() else f"€{val}"
+            ttk.Button(row1, text=label_text, width=5, command=lambda v=val: _set_quick_amt(v)).pack(side=tk.LEFT, padx=2)
+
+        # Zeile 2: Beschreibung Label
+        ttk.Label(input_frame, text="Beschreibung (für Honorarnote):").pack(anchor='w', pady=(15, 5))
+
+        # Zeile 3: Beschreibung Textbox (Groß)
+        desc_frame = ttk.Frame(input_frame)
+        desc_frame.pack(fill='x', pady=0)
+        
+        self.stammdaten_desc_text = tk.Text(desc_frame, height=6, font=("Segoe UI", 10))
+        self.stammdaten_desc_text.pack(side=tk.LEFT, fill='x', expand=True)
+        
+        scrollbar = ttk.Scrollbar(desc_frame, command=self.stammdaten_desc_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill='y')
+        self.stammdaten_desc_text.config(yscrollcommand=scrollbar.set)
+
+        # Zeile 4: Buttons
+        btn_frame = ttk.Frame(input_frame)
+        btn_frame.pack(fill='x', pady=(15, 0))
+        
+        ttk.Button(btn_frame, text="💾 Speichern / Aktualisieren", command=self.save_stammdaten).pack(side=tk.RIGHT)
+        ttk.Button(btn_frame, text="Felder leeren", command=self.clear_stammdaten_fields).pack(side=tk.RIGHT, padx=10)
+
+        # --- Liste Bereich (Mitte) ---
+        list_frame = ttk.LabelFrame(tab, text="Vorhandene Leistungen (Stammdaten)", padding=10)
+        list_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+        self.stammdaten_listbox = tk.Listbox(list_frame, height=10, font=("Segoe UI", 10))
+        self.stammdaten_listbox.pack(side=tk.LEFT, fill='both', expand=True)
+        
+        list_scroll = ttk.Scrollbar(list_frame, command=self.stammdaten_listbox.yview)
+        list_scroll.pack(side=tk.RIGHT, fill='y')
+        self.stammdaten_listbox.config(yscrollcommand=list_scroll.set)
+        
         self.stammdaten_listbox.bind('<<ListboxSelect>>', self.select_stammdaten_from_list)
 
+        # --- Controls (Unten) ---
         control_frame = ttk.Frame(tab)
-        control_frame.grid(row=6, column=0, columnspan=2, pady=10, sticky='ew')
-        ttk.Button(control_frame, text="Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT, padx=10)
-        
-        tab.grid_rowconfigure(5, weight=1)
+        control_frame.pack(fill='x', padx=10, pady=10)
+        ttk.Button(control_frame, text="🗑️ Ausgewählte Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT)
+
         self.update_stammdaten_list()
+
+    def clear_stammdaten_fields(self):
+        self.stammdaten_kurzname_entry.delete(0, tk.END)
+        self.stammdaten_betrag_entry.delete(0, tk.END)
+        self.stammdaten_desc_text.delete("1.0", tk.END)
 
     def update_stammdaten_list(self):
         # ... (Rest der Klasse bleibt unverändert)
@@ -2344,23 +2676,24 @@ class HonorarGeneratorApp:
             full_desc = match[0]
             betrag_str = match[1].replace('€', '').replace(')', '')
             
-            kurzname = full_desc.split(' - ')[0]
-            beschreibung = full_desc.split(' - ')[1]
+            parts = full_desc.split(' - ', 1)
+            kurzname = parts[0]
+            beschreibung = parts[1] if len(parts) > 1 else ""
             
-            self.stammdaten_entries["Kurzname (Eindeutig)"].delete(0, tk.END)
-            self.stammdaten_entries["Kurzname (Eindeutig)"].insert(0, kurzname)
-            self.stammdaten_entries["Beschreibung"].delete(0, tk.END)
-            self.stammdaten_entries["Beschreibung"].insert(0, beschreibung)
-            self.stammdaten_entries["Standard Betrag (€)"].delete(0, tk.END)
-            self.stammdaten_entries["Standard Betrag (€)"].insert(0, betrag_str)
+            self.stammdaten_kurzname_entry.delete(0, tk.END)
+            self.stammdaten_kurzname_entry.insert(0, kurzname)
+            self.stammdaten_betrag_entry.delete(0, tk.END)
+            self.stammdaten_betrag_entry.insert(0, betrag_str)
+            self.stammdaten_desc_text.delete("1.0", tk.END)
+            self.stammdaten_desc_text.insert("1.0", beschreibung)
 
 
     def save_stammdaten(self):
         # ... (Rest der Klasse bleibt unverändert)
         """Speichert oder aktualisiert Stammdaten."""
-        kurzname = self.stammdaten_entries["Kurzname (Eindeutig)"].get().strip()
-        beschreibung = self.stammdaten_entries["Beschreibung"].get().strip()
-        betrag_str = self.stammdaten_entries["Standard Betrag (€)"].get().strip().replace(',', '.')
+        kurzname = self.stammdaten_kurzname_entry.get().strip()
+        betrag_str = self.stammdaten_betrag_entry.get().strip().replace(',', '.')
+        beschreibung = self.stammdaten_desc_text.get("1.0", tk.END).strip()
 
         if not kurzname or not beschreibung or not betrag_str:
             messagebox.showwarning("Achtung", "Alle Felder müssen ausgefüllt sein.")
@@ -2396,8 +2729,7 @@ class HonorarGeneratorApp:
             conn.commit()
             self.update_stammdaten_list()
             
-            for entry in self.stammdaten_entries.values():
-                 entry.delete(0, tk.END)
+            self.clear_stammdaten_fields()
                 
         except sqlite3.IntegrityError:
             messagebox.showerror("Fehler", f"Kurzname '{kurzname}' existiert bereits. Bitte ändern Sie den Kurznamen.")

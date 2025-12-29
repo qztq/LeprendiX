@@ -8,9 +8,12 @@
 ;--------------------------------
 ; Allgemeine Einstellungen
 
+  ; Version automatisch aus version.txt auslesen
+  !searchparse /file "version.txt" "" APP_VERSION
+
   ; Name der Applikation und der Installer-Datei
   Name "LeprendiX"
-  OutFile "LeprendiX_Installer_v1.5.5.exe"
+  OutFile "LeprendiX_Installer_v${APP_VERSION}.exe"
   
   ; Standard-Installationsverzeichnis (Program Files für 64-bit, sonst Program Files (x86))
   InstallDir "$PROGRAMFILES64\LeprendiX"
@@ -25,9 +28,9 @@
   Unicode True
 
   ; Version Information
-  VIProductVersion "1.5.5.0"
+  VIProductVersion "${APP_VERSION}.0"
   VIAddVersionKey "ProductName" "LeprendiX"
-  VIAddVersionKey "FileVersion" "1.5.5"
+  VIAddVersionKey "FileVersion" "${APP_VERSION}"
   VIAddVersionKey "FileDescription" "LeprendiX Installer"
   VIAddVersionKey "LegalCopyright" "LeprendiX"
 
@@ -53,7 +56,8 @@
 ; Seiten (Pages)
 
   !insertmacro MUI_PAGE_WELCOME
-  ; !insertmacro MUI_PAGE_LICENSE "LICENSE.txt" ; Lizenzdatei falls vorhanden
+  !insertmacro MUI_PAGE_LICENSE "LICENSE.txt"
+  !insertmacro MUI_PAGE_COMPONENTS
   !insertmacro MUI_PAGE_DIRECTORY
   !insertmacro MUI_PAGE_INSTFILES
   !insertmacro MUI_PAGE_FINISH
@@ -71,7 +75,8 @@
 ;--------------------------------
 ; Installer Sektion
 
-Section "Installieren" SecInstall
+Section "LeprendiX (Erforderlich)" SecCore
+  SectionIn RO
 
   SetOutPath "$INSTDIR"
   
@@ -97,12 +102,22 @@ Section "Installieren" SecInstall
   WriteRegStr HKCU "Software\LeprendiX" "" $INSTDIR
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
+  ; Eintrag in "Programme und Features" (Systemsteuerung) mit Icon und Details
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\LeprendiX" "DisplayName" "LeprendiX"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\LeprendiX" "UninstallString" "$\"$INSTDIR\Uninstall.exe$\""
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\LeprendiX" "DisplayIcon" "$INSTDIR\LeprendiX.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\LeprendiX" "DisplayVersion" "${APP_VERSION}"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\LeprendiX" "Publisher" "LeprendiX"
+
   ; Startmenü-Verknüpfungen erstellen
   CreateDirectory "$SMPROGRAMS\LeprendiX"
   CreateShortcut "$SMPROGRAMS\LeprendiX\LeprendiX.lnk" "$INSTDIR\LeprendiX.exe"
   CreateShortcut "$SMPROGRAMS\LeprendiX\Deinstallieren.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\LeprendiX.lnk" "$INSTDIR\LeprendiX.exe"
 
+SectionEnd
+
+Section "Desktop-Verknüpfung" SecDesktop
+  CreateShortcut "$DESKTOP\LeprendiX.lnk" "$INSTDIR\LeprendiX.exe"
 SectionEnd
 
 ;--------------------------------
@@ -119,6 +134,7 @@ Section "Uninstall"
 
   ; Lösche Registry-Schlüssel
   DeleteRegKey HKCU "Software\LeprendiX"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\LeprendiX"
 
   ; Lösche Haupt-Executable und Uninstaller
   Delete "$INSTDIR\LeprendiX.exe"
@@ -144,8 +160,8 @@ SectionEnd
 ; Splash Screen (Optional)
 
 Function .onInit
-  ; InitPluginsDir
-  ; File /oname=$PLUGINSDIR\splash.bmp "splash.bmp" ; Requires splash.bmp in script dir
-  ; advsplash::show 1000 2000 1000 -1 $PLUGINSDIR\splash.bmp
-  ; Pop $0
+  ; Laufende Instanzen beenden, um Dateikonflikte zu vermeiden
+  nsExec::Exec 'taskkill /F /IM "LeprendiX.exe"'
+  Pop $0 ; Rückgabewert vom Stack entfernen
+  Sleep 1000 ; Kurz warten, damit das System die Dateizugriffe freigibt
 FunctionEnd

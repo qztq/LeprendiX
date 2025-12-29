@@ -14,6 +14,8 @@ import webbrowser
 import time
 import math
 import shutil
+import logging
+import traceback # Für Crash-Handling
 
 def get_base_path():
     """ Ermittelt den Pfad zum Ordner, in dem die EXE oder das Skript liegt """
@@ -39,6 +41,114 @@ def resource_path(relative_path):
 from config_loader import CONFIG
 import gui_generator
 import patient_status_checker
+
+# --- LOGGING SETUP ---
+def setup_logging():
+    log_file = os.path.join(BASE_DIR, "leprendix.log")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(module)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logging.info("=== LeprendiX gestartet ===")
+
+# --- CRASH HANDLER SETUP ---
+def handle_crash(exc_type, exc_value, exc_traceback):
+    """
+    Globaler Handler für unbehandelte Ausnahmen.
+    Loggt den Fehler, speichert ihn und startet den Crash-Handler.
+    """
+    # 1. Logging
+    logging.critical("KRITISCHER ABSTURZ", exc_info=(exc_type, exc_value, exc_traceback))
+    
+    # 2. Traceback in Datei speichern
+    err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    crash_file = os.path.join(BASE_DIR, "last_crash.txt")
+    
+    try:
+        with open(crash_file, "w", encoding="utf-8") as f:
+            f.write(err_msg)
+    except Exception as e:
+        print(f"Konnte Crash-Log nicht schreiben: {e}")
+
+    # 3. Crash Handler GUI starten (als separater Prozess)
+    crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
+    if os.path.exists(crash_handler_script):
+        try:
+            subprocess.Popen([sys.executable, crash_handler_script])
+        except Exception as e:
+            print(f"Konnte Crash-Handler nicht starten: {e}")
+    
+    # 4. Anwendung beenden
+    sys.exit(1)
+
+# --- WATCHDOG KLASSE (FREEZE DETECTION) ---
+class AppWatchdog:
+    """
+    Überwacht den Haupt-Thread. Wenn dieser für 'timeout_sec' Sekunden blockiert,
+    wird der Crash-Handler ausgelöst.
+    """
+    def __init__(self, root, check_interval_ms=1000, timeout_sec=20):
+        self.root = root
+        self.check_interval_ms = check_interval_ms
+        self.timeout_sec = timeout_sec
+        self.last_heartbeat = time.time()
+        self.running = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+
+    def start(self):
+        self.monitor_thread.start()
+        self._schedule_heartbeat()
+
+    def stop(self):
+        self.running = False
+
+    def _schedule_heartbeat(self):
+        if not self.running:
+            return
+        # Heartbeat aktualisieren (dies läuft im Main-Thread)
+        self.last_heartbeat = time.time()
+        try:
+            self.root.after(self.check_interval_ms, self._schedule_heartbeat)
+        except Exception:
+            pass # Falls root zerstört wurde
+
+    def _monitor_loop(self):
+        while self.running:
+            time.sleep(1)
+            # Prüfen, ob der letzte Heartbeat zu lange her ist
+            if time.time() - self.last_heartbeat > self.timeout_sec:
+                self._trigger_freeze_handling()
+                break
+
+    def _trigger_freeze_handling(self):
+        logging.critical("WATCHDOG: Programm reagiert nicht mehr (Freeze detected).")
+        
+        # Crash-Log schreiben
+        crash_file = os.path.join(BASE_DIR, "last_crash.txt")
+        try:
+            with open(crash_file, "w", encoding="utf-8") as f:
+                f.write("KRITISCHER FEHLER: PROGRAMM EINGEFROREN (FREEZE)\n")
+                f.write("================================================\n")
+                f.write("Der Watchdog hat festgestellt, dass die Benutzeroberfläche seit über 20 Sekunden nicht mehr reagiert.\n")
+                f.write("Mögliche Ursachen: Endlosschleife, blockierende Netzwerkabfrage oder Deadlock.\n")
+                f.write(f"Zeitstempel: {datetime.datetime.now()}\n")
+        except Exception:
+            pass
+
+        # Crash Handler starten
+        crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
+        if os.path.exists(crash_handler_script):
+            try:
+                subprocess.Popen([sys.executable, crash_handler_script])
+            except Exception:
+                pass
+        
+        # Prozess hart beenden (os._exit killt sofort, sys.exit wirft nur Exception)
+        os._exit(1)
 
 # --- KONFIGURATION & DESIGN ---
 COLOR_PRIMARY = "#2c3e50"
@@ -239,10 +349,24 @@ class CollapsiblePane(tk.Frame):
 
 # --- HAUPTFENSTER ---
 def create_main():
+    setup_logging() # Logging initialisieren
+    
+    # Hooks installieren
+    sys.excepthook = handle_crash
+    if hasattr(threading, 'excepthook'):
+        threading.excepthook = lambda args: handle_crash(args.exc_type, args.exc_value, args.exc_traceback)
+    
     root = tk.Tk()
+    # Tkinter Callback-Fehler auch abfangen
+    root.report_callback_exception = handle_crash
+    
     root.title("LeprendiX - Control Center")
     root.geometry("1150x850")
     root.configure(bg=COLOR_PRIMARY)
+
+    # Watchdog starten (Schutz gegen Freezes)
+    watchdog = AppWatchdog(root)
+    watchdog.start()
 
     # Styles
     style = ttk.Style()
@@ -442,11 +566,12 @@ def create_main():
     create_config_entry(cat2.frame, "GitHub Token (Updates):", "GITHUB_TOKEN", show_char="*")
 
     # --- KATEGORIE 3: STANDARDWERTE ---
-    cat3 = CollapsiblePane(db_container, "Standardwerte (Neue Patienten)", expanded=False)
+    cat3 = CollapsiblePane(db_container, "Standardwerte & Editor", expanded=False)
     cat3.pack(fill="x", pady=5, padx=5)
 
     create_config_entry(cat3.frame, "Standard Diagnose:", "DEFAULT_DIAGNOSE")
     create_config_entry(cat3.frame, "Standard Anrede:", "DEFAULT_ANREDE")
+    create_config_entry(cat3.frame, "Schnellwahl Beträge (Komma-getrennt):", "QUICK_AMOUNTS")
 
     # --- KATEGORIE 4: WARTUNG & BACKUPS ---
     cat4 = CollapsiblePane(db_container, "Wartung & Backups", expanded=False)
@@ -546,10 +671,15 @@ def create_main():
     def open_releases():
         webbrowser.open("https://github.com/qztq/LeprendiX/releases")
         
+    def trigger_crash():
+        # Simuliert einen Absturz, um den Handler zu testen
+        raise RuntimeError("Dies ist ein manuell ausgelöster Test-Absturz!")
+        
     support_frame = tk.Frame(cat5.frame, bg=COLOR_PRIMARY)
     support_frame.pack(pady=10)
     tk.Button(support_frame, text="Support / Fehler melden", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=open_support, padx=20, pady=5).pack(side="left", padx=5)
     tk.Button(support_frame, text="Auf Updates prüfen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_releases, padx=20, pady=5).pack(side="left", padx=5)
+    tk.Button(support_frame, text="Crash Test 💥", bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=trigger_crash, padx=20, pady=5).pack(side="left", padx=5)
 
     # --- TAB 3: DOKUMENTATION ---
     t3 = tk.Frame(nb, bg=COLOR_PRIMARY)
@@ -732,6 +862,7 @@ def create_main():
 
     # --- AUTO-BACKUP ON EXIT ---
     def on_closing():
+        watchdog.stop() # Watchdog stoppen, um False Positives beim Beenden zu vermeiden
         # Automatisches Backup beim Schließen
         if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
             db_path = os.path.join(BASE_DIR, "patienten.db")

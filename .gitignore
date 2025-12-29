@@ -4,3 +4,6 @@ create_credentials.py
 patienten.db
 __pycache__
 ~
+last_crash.txt
+/backups
+*.log

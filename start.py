@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox, ttk
 import time
 import math
 import requests
@@ -6,6 +7,7 @@ import webbrowser
 import os
 import subprocess
 import sys
+import socket
 from config_loader import CONFIG
 
 # --- KONFIGURATION ---
@@ -13,7 +15,7 @@ GITHUB_USER = "qztq"
 REPO_NAME = "LeprendiX"
 GITHUB_TOKEN = CONFIG.get("GITHUB_TOKEN", "")
 RELEASE_PAGE = f"https://github.com/{GITHUB_USER}/{REPO_NAME}/releases"
-API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/tags"
+API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases/latest"
 
 
 def get_resource_path(relative_path):
@@ -23,6 +25,24 @@ def get_resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)
     # Normaler Ordner (Entwicklung)
     return os.path.join(os.path.abspath("."), relative_path)
+
+def cleanup_old_installers():
+    """Löscht alte Installer-Dateien, falls vorhanden."""
+    installer_name = "LeprendiX_Win64.exe"
+    if os.path.exists(installer_name):
+        try:
+            os.remove(installer_name)
+            print(f"[INFO] Alter Installer '{installer_name}' wurde gelöscht.")
+        except Exception as e:
+            print(f"[WARNUNG] Konnte '{installer_name}' nicht löschen: {e}")
+
+def check_internet_connection():
+    """Prüft, ob eine Internetverbindung besteht (Ping zu Google DNS)."""
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=3)
+        return True
+    except OSError:
+        return False
 
 def check_system_integrity():
     """Prüft auf kritische fehlende Dateien und zeigt einen Analyse-Bericht."""
@@ -152,33 +172,91 @@ class NeonTraceSplash:
 
     def check_for_updates(self):
         print("\n--- UPDATE CHECK ---")
+        if not check_internet_connection():
+            print("[DEBUG] Keine Internetverbindung. Update-Check übersprungen.")
+            print("--- CHECK BEENDET ---\n")
+            return
+
         local_v = self.get_local_version()
         try:
             headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
             response = requests.get(API_URL, headers=headers, timeout=5)
             if response.status_code == 200:
-                tags = response.json()
-                if tags:
-                    latest_tag = tags[0]['name'].replace('v', '')
-                    clean_local = local_v.replace('v', '')
-                    
-                    def to_tup(v): return tuple(map(int, v.split('.')))
-                    
-                    print(f"[DEBUG] Vergleich: GitHub({latest_tag}) vs Lokal({clean_local})")
-                    if to_tup(latest_tag) > to_tup(clean_local):
-                        print("[DEBUG] Update verfügbar!")
-                        self.root.attributes('-topmost', False)
-                        msg = CustomMsgBox(self.root, "Update verfügbar", f"Neu: {latest_tag}\nLokal: {local_v}\nJetzt updaten?")
-                        self.root.wait_window(msg)
-                        if msg.result: 
+                release = response.json()
+                latest_tag = release.get('tag_name', '').replace('v', '')
+                clean_local = local_v.replace('v', '')
+                
+                def to_tup(v): return tuple(map(int, v.split('.')))
+                
+                print(f"[DEBUG] Vergleich: GitHub({latest_tag}) vs Lokal({clean_local})")
+                if to_tup(latest_tag) > to_tup(clean_local):
+                    print("[DEBUG] Update verfügbar!")
+                    self.root.attributes('-topmost', False)
+                    msg = CustomMsgBox(self.root, "Update verfügbar", f"Neu: {latest_tag}\nLokal: {local_v}\nJetzt herunterladen & installieren?")
+                    self.root.wait_window(msg)
+                    if msg.result: 
+                        # Asset suchen
+                        target_file = "LeprendiX_Win64.exe"
+                        assets = release.get('assets', [])
+                        asset_url = next((a['url'] for a in assets if a['name'] == target_file), None)
+                        
+                        if asset_url:
+                            self.download_and_install(asset_url, target_file)
+                        else:
+                            messagebox.showerror("Fehler", f"Datei '{target_file}' nicht im Release gefunden.")
                             webbrowser.open(RELEASE_PAGE)
                             self.root.destroy()
                             sys.exit()
-                    else:
-                        print("[DEBUG] Kein Update nötig (Lokal >= GitHub).")
+                else:
+                    print("[DEBUG] Kein Update nötig (Lokal >= GitHub).")
         except Exception as e:
             print(f"[DEBUG] Fehler beim Update-Check: {e}")
         print("--- CHECK BEENDET ---\n")
+
+    def download_and_install(self, url, filename):
+        dl_win = tk.Toplevel(self.root)
+        dl_win.title("Update Download")
+        w, h = 400, 150
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        dl_win.geometry(f"{w}x{h}+{int(sw/2-w/2)}+{int(sh/2-h/2)}")
+        dl_win.configure(bg='#1a1a1a')
+        dl_win.attributes("-topmost", True)
+        dl_win.grab_set()
+
+        lbl = tk.Label(dl_win, text="Starte Download...", font=("Segoe UI", 10), fg="white", bg='#1a1a1a')
+        lbl.pack(pady=20)
+        
+        pb = ttk.Progressbar(dl_win, orient="horizontal", length=300, mode="determinate")
+        pb.pack(pady=10)
+        dl_win.update()
+
+        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/octet-stream"}
+        save_path = os.path.join(os.getcwd(), filename)
+
+        try:
+            with requests.get(url, headers=headers, stream=True) as r:
+                r.raise_for_status()
+                total = int(r.headers.get('content-length', 0))
+                dl = 0
+                with open(save_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        dl += len(chunk)
+                        f.write(chunk)
+                        if total:
+                            perc = int(dl/total*100)
+                            pb['value'] = perc
+                            lbl.config(text=f"Herunterladen: {perc}%")
+                            dl_win.update()
+            
+            lbl.config(text="Starte Installer...")
+            dl_win.update()
+            time.sleep(1)
+            subprocess.Popen([save_path])
+            self.root.destroy()
+            sys.exit()
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Download fehlgeschlagen: {e}")
+            dl_win.destroy()
 
     def final_action(self):
         """Wird 1 Sekunde vor dem Ende ausgeführt."""
@@ -259,5 +337,6 @@ class NeonTraceSplash:
             self.running = False
 
 if __name__ == "__main__":
+    cleanup_old_installers()
     check_system_integrity()
     NeonTraceSplash()

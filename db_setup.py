@@ -32,6 +32,7 @@ def setup_database():
         diagnose TEXT,
         kilometergeld REAL DEFAULT 0.0,
         last_selected_kurznamen TEXT DEFAULT '', -- NEUE SPALTE FÜR ZULETZT GEWÄHLTE LEISTUNGEN
+        is_archived INTEGER DEFAULT 0, -- 0 = Aktiv, 1 = Archiviert
         UNIQUE(vorname, nachname, plz)
     )
     """)
@@ -93,6 +94,12 @@ def setup_database():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE patienten ADD COLUMN last_selected_kurznamen TEXT DEFAULT ''")
         print("Spalte 'last_selected_kurznamen' zur patienten-Tabelle hinzugefügt.")
+
+    try:
+        cursor.execute("SELECT is_archived FROM patienten LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
+        print("Spalte 'is_archived' zur patienten-Tabelle hinzugefügt.")
     
            
     conn.commit()
