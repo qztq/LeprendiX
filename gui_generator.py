@@ -700,6 +700,7 @@ class HonorarGeneratorApp:
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
         self.add_gemeinde_block_var = tk.BooleanVar(master=root, value=0) # Standardmäßig AUS
+        self.use_km_money_var = tk.BooleanVar(master=root, value=True) # NEU: Standardmäßig AN
 
         # In HonorarGeneratorApp.__init__ (nach self.add_gemeinde_block_var = ...)
         now = datetime.datetime.now()
@@ -1665,9 +1666,15 @@ class HonorarGeneratorApp:
 
     def _get_leistung_insertion_params(self):
         """Hilfsfunktion zur Vorbereitung von Betrag und KM-Geld."""
+        # KM-Geld basierend auf Checkbox
+        if self.use_km_money_var.get():
+            km_geld = self.get_current_kilometergeld()
+        else:
+            km_geld = 0.0
+
         # Wenn der Editor nicht sichtbar ist, ignorieren wir manuelle Eingaben
         if not hasattr(self, 'editor_frame') or not self.editor_frame.winfo_viewable():
-            return 0.0, False, self.get_current_kilometergeld()
+            return 0.0, False, km_geld
 
         manual_betrag_str = self.amount_entry.get().strip().replace(',', '.')
         try:
@@ -1676,7 +1683,6 @@ class HonorarGeneratorApp:
         except ValueError:
             use_manual_override = False
             manual_betrag = 0.0
-        km_geld = self.get_current_kilometergeld()
         return manual_betrag, use_manual_override, km_geld
 
     def _reset_leistung_selection(self):
@@ -1723,7 +1729,10 @@ class HonorarGeneratorApp:
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
         total_success_count = 0
-        km_geld = self.get_current_kilometergeld()
+        if self.use_km_money_var.get():
+            km_geld = self.get_current_kilometergeld()
+        else:
+            km_geld = 0.0
 
         for title, date_str, time_from, time_to in events_list:
             
@@ -1793,6 +1802,10 @@ class HonorarGeneratorApp:
         # NEU: Button zum Starten der Kalender-Suche
         self.teamup_button = ttk.Button(date_time_frame, text="📅 Teamup-Termine Importieren/Ersetzen", command=self.open_teamup_search)
         self.teamup_button.pack(side=tk.LEFT, padx=10)
+
+        # NEU: Checkbox für Kilometergeld
+        self.km_check = ttk.Checkbutton(date_time_frame, text="inkl. KM-Geld", variable=self.use_km_money_var)
+        self.km_check.pack(side=tk.LEFT, padx=10)
 
         # Zeile 2: Toggle Editor Button
         self.toggle_editor_btn = ttk.Button(tab, text="🔽 Manuelle Eingabe / Editor öffnen", command=self.toggle_editor)
@@ -2480,6 +2493,7 @@ class HonorarGeneratorApp:
         
         # NEU: Beim Bearbeiten alle Buttons abwählen, da der Betrag manuell gesetzt wird
         self._reset_leistung_selection() 
+        self.use_km_money_var.set(True) # Reset auf Standard (da KM-Geld aus Anzeige herausgerechnet wurde)
 
         # Button-Funktion auf Update umstellen
         self.add_leistung_button.config(text=f"Leistung Aktualisieren (ID: {leistung_id})", command=lambda: self.update_leistung_gui(leistung_id))
@@ -2495,7 +2509,10 @@ class HonorarGeneratorApp:
         betrag_str = self.amount_entry.get().strip().replace(',', '.') 
         beschreibung = self.description_text.get("1.0", tk.END).strip()
 
-        km_geld = self.get_current_kilometergeld()
+        if self.use_km_money_var.get():
+            km_geld = self.get_current_kilometergeld()
+        else:
+            km_geld = 0.0
         
         try:
             datum_db = datetime.datetime.strptime(datum_str, '%d.%m.%Y').strftime('%Y-%m-%d')
