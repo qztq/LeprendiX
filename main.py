@@ -41,6 +41,7 @@ def resource_path(relative_path):
 from config_loader import CONFIG
 import gui_generator
 import patient_status_checker
+import crash_handler
 
 # --- LOGGING SETUP ---
 def setup_logging():
@@ -75,12 +76,18 @@ def handle_crash(exc_type, exc_value, exc_traceback):
         print(f"Konnte Crash-Log nicht schreiben: {e}")
 
     # 3. Crash Handler GUI starten (als separater Prozess)
-    crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
-    if os.path.exists(crash_handler_script):
+    if getattr(sys, 'frozen', False):
         try:
-            subprocess.Popen([sys.executable, crash_handler_script])
+            subprocess.Popen([sys.executable, "--crash-handler"])
         except Exception as e:
             print(f"Konnte Crash-Handler nicht starten: {e}")
+    else:
+        crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
+        if os.path.exists(crash_handler_script):
+            try:
+                subprocess.Popen([sys.executable, crash_handler_script])
+            except Exception as e:
+                print(f"Konnte Crash-Handler nicht starten: {e}")
     
     # 4. Anwendung beenden
     sys.exit(1)
@@ -140,12 +147,18 @@ class AppWatchdog:
             pass
 
         # Crash Handler starten
-        crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
-        if os.path.exists(crash_handler_script):
+        if getattr(sys, 'frozen', False):
             try:
-                subprocess.Popen([sys.executable, crash_handler_script])
+                subprocess.Popen([sys.executable, "--crash-handler"])
             except Exception:
                 pass
+        else:
+            crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
+            if os.path.exists(crash_handler_script):
+                try:
+                    subprocess.Popen([sys.executable, crash_handler_script])
+                except Exception:
+                    pass
         
         # Prozess hart beenden (os._exit killt sofort, sys.exit wirft nur Exception)
         os._exit(1)
@@ -884,4 +897,7 @@ def create_main():
     root.mainloop()
 
 if __name__ == "__main__":
-    create_main()
+    if "--crash-handler" in sys.argv:
+        crash_handler.main()
+    else:
+        create_main()

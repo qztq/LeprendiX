@@ -25,6 +25,13 @@ def restart_program(root):
     """Versucht, start.py oder main.py neu zu starten."""
     root.destroy()
     
+    if getattr(sys, 'frozen', False):
+        try:
+            subprocess.Popen([sys.executable])
+        except Exception as e:
+            print(f"Fehler beim Neustart: {e}")
+        sys.exit(0)
+    
     # Versuche start.py zu finden (Launcher)
     script_to_run = os.path.join(BASE_DIR, "start.py")
     if not os.path.exists(script_to_run):

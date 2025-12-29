@@ -11,6 +11,7 @@ import socket
 import shutil
 import glob
 from config_loader import CONFIG
+import crash_handler
 
 # --- KONFIGURATION ---
 GITHUB_USER = "qztq"
@@ -384,6 +385,10 @@ class NeonTraceSplash:
             self.running = False
 
 if __name__ == "__main__":
+    if "--crash-handler" in sys.argv:
+        crash_handler.main()
+        sys.exit(0)
+
     cleanup_old_installers()
     check_system_integrity()
     NeonTraceSplash()
