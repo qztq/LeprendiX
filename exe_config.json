@@ -244,6 +244,30 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/logo.bmp;."
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "logging"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "traceback"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "logging"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "traceback"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "urllib.parse"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "urllib.parse"
   }
  ],
  "nonPyinstallerOptions": {
