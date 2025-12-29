@@ -8,6 +8,8 @@ import os
 import subprocess
 import sys
 import socket
+import shutil
+import glob
 from config_loader import CONFIG
 
 # --- KONFIGURATION ---
@@ -248,6 +250,10 @@ class NeonTraceSplash:
                             lbl.config(text=f"Herunterladen: {perc}%")
                             dl_win.update()
             
+            lbl.config(text="Sichere Datenbank...")
+            dl_win.update()
+            self.create_db_backup(parent=dl_win)
+            
             lbl.config(text="Starte Installer...")
             dl_win.update()
             time.sleep(1)
@@ -257,6 +263,47 @@ class NeonTraceSplash:
         except Exception as e:
             messagebox.showerror("Fehler", f"Download fehlgeschlagen: {e}")
             dl_win.destroy()
+
+    def create_db_backup(self, parent=None):
+        """Erstellt ein Backup der patienten.db vor dem Update."""
+        if os.path.exists("patienten.db"):
+            backup_dir = "backups"
+            if not os.path.exists(backup_dir):
+                try:
+                    os.makedirs(backup_dir)
+                except OSError as e:
+                    print(f"[ERROR] Konnte Backup-Ordner nicht erstellen: {e}")
+                    return
+
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            backup_name = f"patienten_backup_{timestamp}.db"
+            backup_path = os.path.join(backup_dir, backup_name)
+
+            try:
+                shutil.copy2("patienten.db", backup_path)
+                print(f"[INFO] Backup erstellt: {backup_path}")
+                self.cleanup_old_backups(backup_dir)
+            except Exception as e:
+                print(f"[ERROR] Backup fehlgeschlagen: {e}")
+                messagebox.showwarning("Backup Warnung", f"Konnte kein Backup der Datenbank erstellen:\n{e}\nDas Update wird trotzdem fortgesetzt.", parent=parent)
+
+    def cleanup_old_backups(self, backup_dir):
+        """Behält nur die neuesten 5 Backups, löscht ältere."""
+        try:
+            files = glob.glob(os.path.join(backup_dir, "patienten_backup_*.db"))
+            # Sortieren nach Änderungsdatum (älteste zuerst)
+            files.sort(key=os.path.getmtime)
+            
+            # Wenn mehr als 5, die ältesten löschen (Rotation)
+            if len(files) > 5:
+                for f in files[:-5]:
+                    try:
+                        os.remove(f)
+                        print(f"[INFO] Altes Backup gelöscht: {f}")
+                    except OSError as e:
+                        print(f"[WARNUNG] Konnte altes Backup nicht löschen: {e}")
+        except Exception as e:
+            print(f"[ERROR] Fehler beim Bereinigen der Backups: {e}")
 
     def final_action(self):
         """Wird 1 Sekunde vor dem Ende ausgeführt."""

@@ -42,11 +42,18 @@
   !define MUI_ICON "favicon.ico" 
   !define MUI_UNICON "favicon.ico"
   
+  ; --- STYLE ANPASSUNGEN (LeprendiX Style) ---
+  !define MUI_FONT "Segoe UI"
+  !define MUI_INSTALLCOLORS "00f2ff 1a1a1a" ; Neon Text auf dunklem Grund (Installations-Log)
+  ; Hinweis: Für den kompletten Dark-Mode sollten Sie 'sidebar.bmp' und 'header.bmp' dunkel gestalten.
+  !define MUI_HEADERIMAGE_BITMAP "header.bmp"
+  !define MUI_WELCOMEFINISHPAGE_BITMAP "sidebar.bmp"
+
   ; Modern UI Design Settings
   !define MUI_HEADERIMAGE
   !define MUI_HEADERIMAGE_RIGHT
-  ; !define MUI_HEADERIMAGE_BITMAP "header.bmp" ; Optional: Header image (150x57)
-  ; !define MUI_WELCOMEFINISHPAGE_BITMAP "sidebar.bmp" ; Optional: Sidebar image (164x314)
+  !define MUI_HEADERIMAGE_BITMAP "header.bmp" ; Optional: Header image (150x57)
+  !define MUI_WELCOMEFINISHPAGE_BITMAP "sidebar.bmp" ; Optional: Sidebar image (164x314)
   
   ; Finish Page Settings
   !define MUI_FINISHPAGE_RUN "$INSTDIR\LeprendiX.exe"
@@ -55,12 +62,18 @@
 ;--------------------------------
 ; Seiten (Pages)
 
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW "WelcomePageShow"
   !insertmacro MUI_PAGE_WELCOME
+  !undef MUI_PAGE_CUSTOMFUNCTION_SHOW
+
   !insertmacro MUI_PAGE_LICENSE "LICENSE.txt"
   !insertmacro MUI_PAGE_COMPONENTS
   !insertmacro MUI_PAGE_DIRECTORY
   !insertmacro MUI_PAGE_INSTFILES
+
+  !define MUI_PAGE_CUSTOMFUNCTION_SHOW "FinishPageShow"
   !insertmacro MUI_PAGE_FINISH
+  !undef MUI_PAGE_CUSTOMFUNCTION_SHOW
 
   !insertmacro MUI_UNPAGE_WELCOME
   !insertmacro MUI_UNPAGE_CONFIRM
@@ -164,4 +177,24 @@ Function .onInit
   nsExec::Exec 'taskkill /F /IM "LeprendiX.exe"'
   Pop $0 ; Rückgabewert vom Stack entfernen
   Sleep 1000 ; Kurz warten, damit das System die Dateizugriffe freigibt
+FunctionEnd
+
+;--------------------------------
+; Style Funktionen (Farben setzen)
+
+Function WelcomePageShow
+  ; Setzt Textfarben passend zum Dark-Mode (benötigt dunkle sidebar.bmp für guten Kontrast)
+  ; 1201 = Titel, 1202 = Text
+  GetDlgItem $0 $MUI_HWND 1201
+  SetCtlColors $0 "00f2ff" "transparent" ; Neon Titel (#00f2ff)
+  GetDlgItem $0 $MUI_HWND 1202
+  SetCtlColors $0 "FFFFFF" "transparent" ; Weißer Text
+FunctionEnd
+
+Function FinishPageShow
+  ; 1201 = Titel, 1202 = Text
+  GetDlgItem $0 $MUI_HWND 1201
+  SetCtlColors $0 "00f2ff" "transparent"
+  GetDlgItem $0 $MUI_HWND 1202
+  SetCtlColors $0 "FFFFFF" "transparent"
 FunctionEnd
