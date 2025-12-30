@@ -56,42 +56,6 @@ def setup_logging():
     )
     logging.info("=== LeprendiX gestartet ===")
 
-# --- CRASH HANDLER SETUP ---
-def handle_crash(exc_type, exc_value, exc_traceback):
-    """
-    Globaler Handler für unbehandelte Ausnahmen.
-    Loggt den Fehler, speichert ihn und startet den Crash-Handler.
-    """
-    # 1. Logging
-    logging.critical("KRITISCHER ABSTURZ", exc_info=(exc_type, exc_value, exc_traceback))
-    
-    # 2. Traceback in Datei speichern
-    err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-    crash_file = os.path.join(BASE_DIR, "last_crash.txt")
-    
-    try:
-        with open(crash_file, "w", encoding="utf-8") as f:
-            f.write(err_msg)
-    except Exception as e:
-        print(f"Konnte Crash-Log nicht schreiben: {e}")
-
-    # 3. Crash Handler GUI starten (als separater Prozess)
-    if getattr(sys, 'frozen', False):
-        try:
-            subprocess.Popen([sys.executable, "--crash-handler"])
-        except Exception as e:
-            print(f"Konnte Crash-Handler nicht starten: {e}")
-    else:
-        crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
-        if os.path.exists(crash_handler_script):
-            try:
-                subprocess.Popen([sys.executable, crash_handler_script])
-            except Exception as e:
-                print(f"Konnte Crash-Handler nicht starten: {e}")
-    
-    # 4. Anwendung beenden
-    sys.exit(1)
-
 # --- WATCHDOG KLASSE (FREEZE DETECTION) ---
 class AppWatchdog:
     """
@@ -147,18 +111,7 @@ class AppWatchdog:
             pass
 
         # Crash Handler starten
-        if getattr(sys, 'frozen', False):
-            try:
-                subprocess.Popen([sys.executable, "--crash-handler"])
-            except Exception:
-                pass
-        else:
-            crash_handler_script = os.path.join(BASE_DIR, "crash_handler.py")
-            if os.path.exists(crash_handler_script):
-                try:
-                    subprocess.Popen([sys.executable, crash_handler_script])
-                except Exception:
-                    pass
+        crash_handler.start_crash_handler_process()
         
         # Prozess hart beenden (os._exit killt sofort, sys.exit wirft nur Exception)
         os._exit(1)
@@ -364,14 +317,15 @@ class CollapsiblePane(tk.Frame):
 def create_main():
     setup_logging() # Logging initialisieren
     
-    # Hooks installieren
-    sys.excepthook = handle_crash
+    # Hooks installieren via crash_handler
+    crash_handler.install_exception_handler()
+    
     if hasattr(threading, 'excepthook'):
-        threading.excepthook = lambda args: handle_crash(args.exc_type, args.exc_value, args.exc_traceback)
+        threading.excepthook = lambda args: crash_handler.global_exception_handler(args.exc_type, args.exc_value, args.exc_traceback)
     
     root = tk.Tk()
     # Tkinter Callback-Fehler auch abfangen
-    root.report_callback_exception = handle_crash
+    root.report_callback_exception = crash_handler.global_exception_handler
     
     root.title("LeprendiX - Control Center")
     root.geometry("1150x850")

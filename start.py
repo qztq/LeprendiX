@@ -10,8 +10,12 @@ import sys
 import socket
 import shutil
 import glob
+import ctypes
 from config_loader import CONFIG
 import crash_handler
+
+# Sofort den Crash-Handler aktivieren, um Fehler beim Start/Splash abzufangen
+crash_handler.install_exception_handler()
 
 # --- KONFIGURATION ---
 GITHUB_USER = "qztq"
@@ -45,6 +49,12 @@ def check_internet_connection():
         socket.create_connection(("8.8.8.8", 53), timeout=3)
         return True
     except OSError:
+        return False
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
         return False
 
 def check_system_integrity():
@@ -198,6 +208,18 @@ class NeonTraceSplash:
                     msg = CustomMsgBox(self.root, "Update verfügbar", f"Neu: {latest_tag}\nLokal: {local_v}\nJetzt herunterladen & installieren?")
                     self.root.wait_window(msg)
                     if msg.result: 
+                        # Admin-Rechte anfordern, falls noch nicht vorhanden
+                        if not is_admin():
+                            try:
+                                if getattr(sys, 'frozen', False):
+                                    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, "", None, 1)
+                                else:
+                                    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{os.path.abspath(sys.argv[0])}"', None, 1)
+                                self.root.destroy()
+                                sys.exit()
+                            except Exception:
+                                return
+
                         # Asset suchen
                         target_file = "LeprendiX_Win64.exe"
                         assets = release.get('assets', [])
@@ -219,7 +241,7 @@ class NeonTraceSplash:
     def download_and_install(self, url, filename):
         dl_win = tk.Toplevel(self.root)
         dl_win.title("Update Download")
-        w, h = 400, 150
+        w, h = 400, 180
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         dl_win.geometry(f"{w}x{h}+{int(sw/2-w/2)}+{int(sh/2-h/2)}")
         dl_win.configure(bg='#1a1a1a')
@@ -227,14 +249,19 @@ class NeonTraceSplash:
         dl_win.grab_set()
 
         lbl = tk.Label(dl_win, text="Starte Download...", font=("Segoe UI", 10), fg="white", bg='#1a1a1a')
-        lbl.pack(pady=20)
+        lbl.pack(pady=(20, 5))
         
+        detail_lbl = tk.Label(dl_win, text="Initialisiere...", font=("Segoe UI", 9), fg="#aaaaaa", bg='#1a1a1a')
+        detail_lbl.pack(pady=(0, 10))
+
         pb = ttk.Progressbar(dl_win, orient="horizontal", length=300, mode="determinate")
         pb.pack(pady=10)
         dl_win.update()
 
         headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/octet-stream"}
         save_path = os.path.join(os.getcwd(), filename)
+
+        start_time = time.time()
 
         try:
             with requests.get(url, headers=headers, stream=True) as r:
@@ -248,7 +275,18 @@ class NeonTraceSplash:
                         if total:
                             perc = int(dl/total*100)
                             pb['value'] = perc
+                            
+                            # Details berechnen (MB und Geschwindigkeit)
+                            elapsed = time.time() - start_time
+                            dl_mb = dl / (1024 * 1024)
+                            total_mb = total / (1024 * 1024)
+                            speed_str = "0 KB/s"
+                            if elapsed > 0:
+                                speed = (dl / 1024) / elapsed
+                                speed_str = f"{speed/1024:.2f} MB/s" if speed > 1024 else f"{speed:.0f} KB/s"
+
                             lbl.config(text=f"Herunterladen: {perc}%")
+                            detail_lbl.config(text=f"{dl_mb:.2f} MB / {total_mb:.2f} MB @ {speed_str}")
                             dl_win.update()
             
             lbl.config(text="Sichere Datenbank...")

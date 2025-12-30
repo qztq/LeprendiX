@@ -6,6 +6,8 @@ import subprocess
 import json
 import webbrowser
 import urllib.parse
+import traceback
+import logging
 # Design-Konstanten (passend zu LeprendiX)
 COLOR_PRIMARY = "#2c3e50"
 COLOR_SECONDARY = "#34495e"
@@ -75,6 +77,47 @@ def send_and_restart(root, error_text):
         print(f"Konnte Mail-Programm nicht öffnen: {e}")
         
     restart_program(root)
+
+def start_crash_handler_process():
+    """Startet den Crash-Handler als neuen unabhängigen Prozess."""
+    if getattr(sys, 'frozen', False):
+        try:
+            subprocess.Popen([sys.executable, "--crash-handler"])
+        except Exception as e:
+            print(f"Konnte Crash-Handler nicht starten: {e}")
+    else:
+        # Wir nehmen an, dass crash_handler.py im selben Verzeichnis liegt
+        script_path = os.path.abspath(__file__)
+        if os.path.exists(script_path):
+            try:
+                subprocess.Popen([sys.executable, script_path])
+            except Exception as e:
+                print(f"Konnte Crash-Handler nicht starten: {e}")
+
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    """Globaler Exception Handler, der von start.py und main.py genutzt wird."""
+    # 1. Logging (falls konfiguriert)
+    try:
+        logging.critical("KRITISCHER ABSTURZ", exc_info=(exc_type, exc_value, exc_traceback))
+    except:
+        pass
+
+    # 2. Traceback in Datei speichern
+    try:
+        err_msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        with open(CRASH_FILE, "w", encoding="utf-8") as f:
+            f.write(err_msg)
+    except Exception as e:
+        print(f"Konnte Crash-Log nicht schreiben: {e}")
+
+    # 3. GUI starten
+    start_crash_handler_process()
+
+    # 4. Beenden
+    sys.exit(1)
+
+def install_exception_handler():
+    sys.excepthook = global_exception_handler
 
 def main():
     root = tk.Tk()
