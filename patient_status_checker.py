@@ -4,12 +4,7 @@ import sqlite3
 import os
 import shutil
 import json
-from config_loader import DATABASE_NAME, PATIENT_BASE_DIR, ARCHIVE_DIR
-
-
-DATABASE_NAME = DATABASE_NAME
-PATIENT_BASE_DIR = PATIENT_BASE_DIR
-ARCHIVE_DIR = ARCHIVE_DIR
+from config_loader import CONFIG
 
 class PatientStatusApp:
     def __init__(self, master, selection_callback=None):
@@ -75,11 +70,13 @@ class PatientStatusApp:
     
     def _ensure_archive_dir(self):
         """Stellt sicher, dass der Archiv-Ordner existiert."""
-        if not os.path.exists(ARCHIVE_DIR):
-            os.makedirs(ARCHIVE_DIR)
+        archive_dir = CONFIG.get('ARCHIVE_DIR')
+        if archive_dir and not os.path.exists(archive_dir):
+            os.makedirs(archive_dir)
 
     def _ensure_status_column(self):
-        conn = sqlite3.connect(DATABASE_NAME)
+        db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
+        conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT invoiced_since_reset FROM patienten LIMIT 1")
@@ -126,7 +123,8 @@ class PatientStatusApp:
             self.tree.delete(item)
             
         try:
-            conn = sqlite3.connect(DATABASE_NAME)
+            db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
+            conn = sqlite3.connect(db_name)
             cursor = conn.cursor()
             cursor.execute("SELECT id, vorname, nachname, invoiced_since_reset FROM patienten WHERE (is_archived IS NULL OR is_archived = 0) ORDER BY nachname, vorname")
             
@@ -149,7 +147,8 @@ class PatientStatusApp:
         full_name = self.tree.item(patient_id, 'values')[1]
         
         try:
-            conn = sqlite3.connect(DATABASE_NAME)
+            db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
+            conn = sqlite3.connect(db_name)
             cursor = conn.cursor()
             cursor.execute("SELECT vorname, nachname FROM patienten WHERE id=?", (patient_id,))
             res = cursor.fetchone()
@@ -158,13 +157,14 @@ class PatientStatusApp:
                 v_name, n_name = res
                 folder_name = f"{n_name} {v_name}"
                 
-                # 1. Versuch: Standardpfad (Desktop)
-                source_path = os.path.join(PATIENT_BASE_DIR, folder_name)
+                # 1. Versuch: Standardpfad aus Config
+                patient_base_dir = CONFIG.get('PATIENT_BASE_DIR')
+                source_path = os.path.join(patient_base_dir, folder_name)
                 
-                # 2. Versuch: Wenn nicht auf Desktop, dann fragen
+                # 2. Versuch: Wenn nicht gefunden, dann fragen
                 if not os.path.exists(source_path):
                     messagebox.showinfo("Ordner suchen", 
-                        f"Der Standardordner für '{folder_name}' wurde nicht auf dem Desktop gefunden.\n"
+                        f"Der Standardordner für '{folder_name}' wurde nicht unter '{patient_base_dir}' gefunden.\n"
                         "Bitte wählen Sie den Patientenordner manuell aus.")
                     
                     # Öffnet Verzeichnisauswahl
@@ -174,10 +174,11 @@ class PatientStatusApp:
                         return
 
                 # Zielpfad im Archiv
-                if not os.path.exists(ARCHIVE_DIR):
-                    os.makedirs(ARCHIVE_DIR)
+                archive_dir = CONFIG.get('ARCHIVE_DIR')
+                if not os.path.exists(archive_dir):
+                    os.makedirs(archive_dir)
                 
-                dest_path = os.path.join(ARCHIVE_DIR, os.path.basename(source_path))
+                dest_path = os.path.join(archive_dir, os.path.basename(source_path))
 
                 # Verschieben
                 if os.path.exists(source_path):
@@ -206,7 +207,8 @@ class PatientStatusApp:
     def reset_all_statuses(self):
         if not messagebox.askyesno("Reset", "Alle auf ROT setzen?"):
             return
-        conn = sqlite3.connect(DATABASE_NAME)
+        db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
+        conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
         cursor.execute("UPDATE patienten SET invoiced_since_reset = 0")
         conn.commit()

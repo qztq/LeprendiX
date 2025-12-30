@@ -558,6 +558,8 @@ def create_main():
     create_config_entry(cat3.frame, "Standard Diagnose:", "DEFAULT_DIAGNOSE")
     create_config_entry(cat3.frame, "Standard Anrede:", "DEFAULT_ANREDE")
     create_config_entry(cat3.frame, "Schnellwahl Beträge (Komma-getrennt):", "QUICK_AMOUNTS")
+    create_config_entry(cat3.frame, "Hotkey Hauptaktion (Enter):", "HOTKEY_ENTER")
+    create_config_entry(cat3.frame, "Hotkey Tab-Wechsel (z.B. <F12>):", "HOTKEY_SWITCH_TAB")
 
     # --- KATEGORIE 4: WARTUNG & BACKUPS ---
     cat4 = CollapsiblePane(db_container, "Wartung & Backups", expanded=False)

@@ -13,6 +13,7 @@ import glob
 import ctypes
 from config_loader import CONFIG
 import crash_handler
+import migrate_legacy
 
 # Sofort den Crash-Handler aktivieren, um Fehler beim Start/Splash abzufangen
 crash_handler.install_exception_handler()
@@ -56,6 +57,20 @@ def is_admin():
         return ctypes.windll.shell32.IsUserAnAdmin()
     except:
         return False
+
+_mutex_handle = None
+def check_single_instance():
+    """Prüft via Named Mutex, ob die Anwendung bereits läuft."""
+    global _mutex_handle
+    if sys.platform == "win32":
+        try:
+            mutex_name = "Global\\LeprendiX_Single_Instance_Mutex"
+            _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
+            if ctypes.windll.kernel32.GetLastError() == 183: # ERROR_ALREADY_EXISTS
+                return False
+        except Exception:
+            pass
+    return True
 
 def check_system_integrity():
     """Prüft auf kritische fehlende Dateien und zeigt einen Analyse-Bericht."""
@@ -191,6 +206,7 @@ class NeonTraceSplash:
             return
 
         local_v = self.get_local_version()
+        force_update = "--force-update" in sys.argv
         try:
             headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
             response = requests.get(API_URL, headers=headers, timeout=5)
@@ -202,14 +218,14 @@ class NeonTraceSplash:
                 def to_tup(v): return tuple(map(int, v.split('.')))
                 
                 print(f"[DEBUG] Vergleich: GitHub({latest_tag}) vs Lokal({clean_local})")
-                if to_tup(latest_tag) > to_tup(clean_local):
-                    print("[DEBUG] Update verfügbar!")
+                if force_update or to_tup(latest_tag) > to_tup(clean_local):
+                    print(f"[DEBUG] Update {'erzwungen' if force_update else 'verfügbar'}!")
                     
                     # Prüfen, ob wir vom Admin-Neustart kommen (um doppelte Abfrage zu vermeiden)
                     auto_install = "--admin-restart" in sys.argv
                     should_install = False
 
-                    if auto_install:
+                    if auto_install or force_update:
                         should_install = True
                     else:
                         self.root.attributes('-topmost', False)
@@ -423,8 +439,52 @@ if __name__ == "__main__":
     if "--crash-handler" in sys.argv:
         crash_handler.main()
         sys.exit(0)
+        
+    # Check für Migrations-Modus (Admin-Prozess)
+    if "--migrate-cleanup" in sys.argv:
+        migrate_legacy.perform_cleanup()
+        sys.exit(0)
+
+    if not check_single_instance():
+        # Prüfen, ob der Nutzer die existierende Instanz beenden möchte
+        response = ctypes.windll.user32.MessageBoxW(
+            0, 
+            "LeprendiX läuft bereits!\nMöchten Sie die bestehende Instanz beenden und neu starten?", 
+            "LeprendiX läuft bereits", 
+            0x04 | 0x30 | 0x40000 # MB_YESNO | MB_ICONWARNING | MB_TOPMOST
+        )
+        
+        if response == 6: # IDYES
+            try:
+                my_pid = os.getpid()
+                if getattr(sys, 'frozen', False):
+                    exe_name = os.path.basename(sys.executable)
+                    subprocess.Popen(f'taskkill /F /IM "{exe_name}" /FI "PID ne {my_pid}"', shell=True, creationflags=0x08000000).wait()
+                else:
+                    cmd = f"wmic process where \"name='python.exe' and commandline like '%start.py%' and ProcessId!={my_pid}\" call terminate"
+                    subprocess.Popen(cmd, shell=True, creationflags=0x08000000).wait()
+                
+                if _mutex_handle:
+                    ctypes.windll.kernel32.CloseHandle(_mutex_handle)
+                    _mutex_handle = None
+                
+                time.sleep(1)
+                
+                if not check_single_instance():
+                    ctypes.windll.user32.MessageBoxW(0, "Konnte die alte Instanz nicht vollständig beenden.", "Fehler", 0x10)
+                    sys.exit(0)
+            except Exception as e:
+                ctypes.windll.user32.MessageBoxW(0, f"Fehler beim Beenden: {e}", "Fehler", 0x10)
+                sys.exit(0)
+        else:
+            sys.exit(0)
 
     cleanup_old_installers()
+    
+    # Prüfen auf alte Installation und ggf. Migration anstoßen
+    if migrate_legacy.check_and_migrate():
+        sys.exit(0)
+    
     check_system_integrity()
     NeonTraceSplash()
     

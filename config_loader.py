@@ -21,7 +21,9 @@ def get_config():
         "TEAMUP_CALENDAR_ID": "ks63f68d2f870c62a1",
         "GITHUB_TOKEN": "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",
         "QUICK_AMOUNTS": "33, 35, 57, 83",
-        "LAST_SETUP_VERSION": "0.0.0"
+        "LAST_SETUP_VERSION": "0.0.0",
+        "HOTKEY_ENTER": "<Return>",
+        "HOTKEY_SWITCH_TAB": "<F12>, <Delete>"
     }
 
     if os.path.exists(config_file):

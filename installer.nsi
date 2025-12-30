@@ -15,14 +15,14 @@
   Name "LeprendiX"
   OutFile "LeprendiX_Installer_v${APP_VERSION}.exe"
   
-  ; Standard-Installationsverzeichnis (Program Files für 64-bit, sonst Program Files (x86))
-  InstallDir "$PROGRAMFILES64\LeprendiX"
+  ; Standard-Installationsverzeichnis (AppData Local für Schreibzugriff ohne Admin)
+  InstallDir "$LOCALAPPDATA\LeprendiX"
   
   ; Installationspfad aus der Registry lesen, falls vorhanden (für Updates)
-  InstallDirRegKey HKCU "Software\LeprendiX" ""
+  ; InstallDirRegKey HKCU "Software\LeprendiX" ""
 
-  ; Admin-Rechte anfordern (nötig für Schreibzugriff auf Programme-Ordner)
-  RequestExecutionLevel admin
+  ; Keine Admin-Rechte anfordern (Installation im Benutzerverzeichnis)
+  RequestExecutionLevel user
 
   ; Unicode-Unterstützung aktivieren
   Unicode True

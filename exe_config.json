@@ -288,6 +288,10 @@
   {
    "optionDest": "collect_submodules",
    "value": "tempfile"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/migrate_legacy.py;."
   }
  ],
  "nonPyinstallerOptions": {

@@ -14,7 +14,7 @@ from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benö
 from docx.shared import Inches, Pt, Twips
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 import logging
-from config_loader import PATIENT_BASE_DIR, CONFIG
+from config_loader import CONFIG
 
 
 # --- HELPER FUNCTIONS FOR PATH RESOLUTION ---
@@ -39,9 +39,6 @@ def resolve_resource_path(relative_path):
 # --- KONFIGURATION ---
 DATABASE_NAME = resolve_data_path('patienten.db')
 TEMPLATE_FILE = resolve_resource_path('honorar_vorlage.docx') 
-OUTPUT_FOLDER = os.path.expanduser(PATIENT_BASE_DIR)
-
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 
 def start_gui():
@@ -667,7 +664,9 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
 
     # --- Speichern des Dokuments ---
     patient_folder_name = f"{nachname} {vorname}"
-    patient_output_path = os.path.join(OUTPUT_FOLDER, patient_folder_name)
+    
+    output_folder = os.path.expanduser(CONFIG.get('PATIENT_BASE_DIR'))
+    patient_output_path = os.path.join(output_folder, patient_folder_name)
     os.makedirs(patient_output_path, exist_ok=True)
     
     output_filename = f"Honorarnote Krankenkasse {template_data['BHAG_NUMMER']}.docx"
@@ -740,9 +739,24 @@ class HonorarGeneratorApp:
         self.open_status_checker()
 
         self.search_entry.focus_set()
-        self.root.bind('<Return>', self.handle_global_enter)
-        self.root.bind('<Delete>', self._switch_to_generate_tab)
-        self.root.bind('<F12>', self._switch_to_generate_tab)
+        
+        # Hotkeys aus Config laden und binden
+        hk_enter = CONFIG.get('HOTKEY_ENTER', '<Return>')
+        hk_switch = CONFIG.get('HOTKEY_SWITCH_TAB', '<F12>, <Delete>')
+
+        try:
+            if hk_enter:
+                self.root.bind(hk_enter, self.handle_global_enter)
+        except Exception as e:
+            logging.error(f"Fehler beim Binden von Enter-Hotkey: {e}")
+
+        if hk_switch:
+            for k in hk_switch.split(','):
+                if k.strip():
+                    try:
+                        self.root.bind(k.strip(), self._switch_to_generate_tab)
+                    except Exception as e:
+                        logging.error(f"Fehler beim Binden von Switch-Hotkey '{k}': {e}")
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -1460,7 +1474,8 @@ class HonorarGeneratorApp:
         nachname = self.patient_entries["Nachname"].get().strip()
         vorname = self.patient_entries["Vorname"].get().strip()
         folder_name = f"{nachname} {vorname}"
-        path = os.path.join(OUTPUT_FOLDER, folder_name)
+        output_folder = os.path.expanduser(CONFIG.get('PATIENT_BASE_DIR'))
+        path = os.path.join(output_folder, folder_name)
         
         if os.path.exists(path):
             if sys.platform == 'win32': os.startfile(path)
@@ -1673,7 +1688,7 @@ class HonorarGeneratorApp:
             km_geld = 0.0
 
         # Wenn der Editor nicht sichtbar ist, ignorieren wir manuelle Eingaben
-        if not hasattr(self, 'editor_frame') or not self.editor_frame.winfo_viewable():
+        if not hasattr(self, 'editor_window') or not self.editor_window or not self.editor_window.winfo_exists():
             return 0.0, False, km_geld
 
         manual_betrag_str = self.amount_entry.get().strip().replace(',', '.')
@@ -1808,7 +1823,7 @@ class HonorarGeneratorApp:
         self.km_check.pack(side=tk.LEFT, padx=10)
 
         # Zeile 2: Toggle Editor Button
-        self.toggle_editor_btn = ttk.Button(tab, text="🔽 Manuelle Eingabe / Editor öffnen", command=self.toggle_editor)
+        self.toggle_editor_btn = ttk.Button(tab, text="📝 Manuelle Eingabe / Editor öffnen", command=self.open_manual_editor)
         self.toggle_editor_btn.grid(row=2, column=0, columnspan=3, padx=5, pady=(10,0), sticky='w')
 
         # Zeile 3: Editor Frame (Hidden by default)
@@ -1918,19 +1933,67 @@ class HonorarGeneratorApp:
         else:
             self.editor_frame.grid()
             self.toggle_editor_btn.config(text="🔼 Editor schließen")
+    def open_manual_editor(self):
+        if hasattr(self, 'editor_window') and self.editor_window and self.editor_window.winfo_exists():
+            self.editor_window.lift()
+            self.editor_window.focus_force()
+            return
 
-    def open_editor(self):
-        if not self.editor_frame.winfo_viewable():
-            self.editor_frame.grid()
-            self.toggle_editor_btn.config(text="🔼 Editor schließen")
+        self.editor_window = tk.Toplevel(self.root)
+        self.editor_window.title("Manuelle Leistungseingabe / Editor")
+        self.editor_window.geometry("700x450")
+        self.editor_window.attributes("-topmost", True)
+        
+        # 3.1 Loader (Stammdaten in Editor laden)
+        loader_frame = ttk.Frame(self.editor_window)
+        loader_frame.pack(fill='x', pady=10, padx=10)
+        ttk.Label(loader_frame, text="Vorlage aus Stammdaten laden:").pack(side=tk.LEFT)
+        self.stammdaten_combo = ttk.Combobox(loader_frame, width=40, state="readonly")
+        self.stammdaten_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Populate combo
+        stammdaten_list, _ = get_all_stammdaten_dict()
+        self.stammdaten_combo['values'] = stammdaten_list
+        
+        ttk.Button(loader_frame, text="In Editor übernehmen", command=self.load_description_from_combo).pack(side=tk.LEFT, padx=5)
+
+        # 3.2 Description
+        desc_frame = ttk.Frame(self.editor_window)
+        desc_frame.pack(fill='both', expand=True, pady=5, padx=10)
+        ttk.Label(desc_frame, text="Beschreibung:").pack(anchor='w', padx=(0,5))
+        self.description_text = tk.Text(desc_frame, height=5, width=60, font=("Segoe UI", 10))
+        self.description_text.pack(side=tk.LEFT, fill='both', expand=True)
+        desc_scroll = ttk.Scrollbar(desc_frame, command=self.description_text.yview)
+        desc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.description_text.config(yscrollcommand=desc_scroll.set)
+
+        # 3.3 Amount & Buttons
+        manual_frame = ttk.Frame(self.editor_window)
+        manual_frame.pack(fill='x', pady=10, padx=10)
+        ttk.Label(manual_frame, text="Manuelle Betragseingabe (€):").pack(side=tk.LEFT, padx=(0,5))
+        self.amount_entry = ttk.Entry(manual_frame, width=10)
+        self.amount_entry.pack(side=tk.LEFT, padx=(0,15))
+        self.amount_entry.insert(0, "0.00")
+        
+        self.add_leistung_button = ttk.Button(manual_frame, text="Leistung Speichern", command=self.add_leistung_gui)
+        self.add_leistung_button.pack(side=tk.LEFT, padx=10)
+        ttk.Button(manual_frame, text="Editor Leeren", command=self.clear_editor).pack(side=tk.LEFT, padx=10)
 
     def clear_editor(self):
         self.description_text.delete("1.0", tk.END)
         self.amount_entry.delete(0, tk.END)
         self.amount_entry.insert(0, "0.00")
+        if hasattr(self, 'description_text') and self.description_text.winfo_exists():
+            self.description_text.delete("1.0", tk.END)
+        if hasattr(self, 'amount_entry') and self.amount_entry.winfo_exists():
+            self.amount_entry.delete(0, tk.END)
+            self.amount_entry.insert(0, "0.00")
+            
         self._reset_leistung_selection()
         # Reset button state if it was in edit mode
         self.add_leistung_button.config(text="Leistung Speichern", command=self.add_leistung_gui)
+        if hasattr(self, 'add_leistung_button') and self.add_leistung_button.winfo_exists():
+            self.add_leistung_button.config(text="Leistung Speichern", command=self.add_leistung_gui)
         self.selected_leistung_id = None
 
     def load_description_from_combo(self):
@@ -2196,7 +2259,7 @@ class HonorarGeneratorApp:
         self.stammdaten_betraege = stammdaten_dict 
         
         # Update Combobox im Editor
-        if hasattr(self, 'stammdaten_combo'):
+        if hasattr(self, 'stammdaten_combo') and self.stammdaten_combo.winfo_exists():
             self.stammdaten_combo['values'] = stammdaten_list
 
         # FIX: Theme auf 'clam' setzen, damit Hintergrundfarben unterstützt werden
@@ -2346,8 +2409,9 @@ class HonorarGeneratorApp:
 
         if success_count > 0:
             self.set_status(f"✅ {success_count} Leistung(en) erfolgreich hinzugefügt.")
-            self._reset_leistung_selection()
             self.description_text.delete("1.0", tk.END) # Textbox leeren
+            if hasattr(self, 'description_text') and self.description_text.winfo_exists():
+                self.description_text.delete("1.0", tk.END) # Textbox leeren
             self.update_leistung_list()
         elif success_count == 0 and not use_manual_override:
             messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (Prüfen Sie, ob Stammdaten fehlen).")
@@ -2367,7 +2431,6 @@ class HonorarGeneratorApp:
             # Speichere die aktuelle Auswahl für diesen Patienten
             save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
             messagebox.showinfo("Erfolg", f"{total_success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
-            self._reset_leistung_selection()
             self.update_leistung_list()
             self.root.focus_force()
         # Keine MessageBox bei 0, da das System das intern loggen kann.
@@ -2394,7 +2457,6 @@ class HonorarGeneratorApp:
             # Speichere die aktuelle Auswahl für diesen Patienten
             save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
             messagebox.showinfo("Erfolg", f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
-            self._reset_leistung_selection()
             self.update_leistung_list()
             self.root.focus_force()
         else:
@@ -2490,6 +2552,7 @@ class HonorarGeneratorApp:
         
         # Öffne den Editor automatisch
         self.open_editor()
+        self.open_manual_editor()
         
         # NEU: Beim Bearbeiten alle Buttons abwählen, da der Betrag manuell gesetzt wird
         self._reset_leistung_selection() 
