@@ -272,6 +272,22 @@
   {
    "optionDest": "collect_submodules",
    "value": "ctypes"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/crash_handler.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/setup_wizard.py;."
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "tempfile"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "tempfile"
   }
  ],
  "nonPyinstallerOptions": {

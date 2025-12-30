@@ -15,6 +15,7 @@ import time
 import math
 import shutil
 import logging
+import tempfile
 import traceback # Für Crash-Handling
 
 def get_base_path():
@@ -46,7 +47,20 @@ import setup_wizard
 
 # --- LOGGING SETUP ---
 def setup_logging():
-    log_file = os.path.join(BASE_DIR, "leprendix.log")
+    # Use a user-writable directory for logs to avoid PermissionError
+    app_name = "LeprendiX"
+    if sys.platform == "win32":
+        base_path = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
+    else:
+        base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
+    
+    log_dir = os.path.join(base_path, app_name, "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "leprendix.log")
+    except Exception:
+        log_file = os.path.join(tempfile.gettempdir(), "leprendix.log")
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(module)s: %(message)s",
@@ -55,7 +69,7 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
-    logging.info("=== LeprendiX gestartet ===")
+    logging.info(f"=== LeprendiX gestartet (Log: {log_file}) ===")
 
 # --- WATCHDOG KLASSE (FREEZE DETECTION) ---
 class AppWatchdog:
@@ -100,7 +114,7 @@ class AppWatchdog:
         logging.critical("WATCHDOG: Programm reagiert nicht mehr (Freeze detected).")
         
         # Crash-Log schreiben
-        crash_file = os.path.join(BASE_DIR, "last_crash.txt")
+        crash_file = crash_handler.CRASH_FILE
         try:
             with open(crash_file, "w", encoding="utf-8") as f:
                 f.write("KRITISCHER FEHLER: PROGRAMM EINGEFROREN (FREEZE)\n")
@@ -327,6 +341,7 @@ def create_main():
     root = tk.Tk()
     # Tkinter Callback-Fehler auch abfangen
     root.report_callback_exception = crash_handler.global_exception_handler
+    root.withdraw() # Fenster erst verstecken, bis alles geladen ist
     
     # --- SETUP WIZARD CHECK (Startet nur bei neuer Version/Erstinstallation) ---
     setup_wizard.check_and_run_setup(root)
@@ -616,11 +631,29 @@ def create_main():
         except Exception as e:
             messagebox.showerror("Fehler", f"Konnte Ordner nicht öffnen: {e}")
 
+    def open_log_dir():
+        app_name = "LeprendiX"
+        if sys.platform == "win32":
+            base_path = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
+        else:
+            base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
+        
+        log_dir = os.path.join(base_path, app_name, "logs")
+        
+        if os.path.exists(log_dir):
+            try:
+                os.startfile(log_dir) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', log_dir])
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Konnte Log-Ordner nicht öffnen: {e}")
+        else:
+            messagebox.showinfo("Info", f"Log-Ordner existiert noch nicht:\n{log_dir}")
+
     btn_frame = tk.Frame(cat4.frame, bg=COLOR_PRIMARY)
     btn_frame.pack(pady=5)
     tk.Button(btn_frame, text="Backup erstellen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=create_backup, padx=15, pady=5).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Backup wiederherstellen", bg="#e67e22", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=restore_backup, padx=15, pady=5).pack(side="left", padx=5)
     tk.Button(btn_frame, text="Ordner öffnen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_app_dir, padx=15, pady=5).pack(side="left", padx=5)
+    tk.Button(btn_frame, text="Logs öffnen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_log_dir, padx=15, pady=5).pack(side="left", padx=5)
 
     refresh_backups()
 
@@ -852,6 +885,7 @@ def create_main():
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.deiconify() # Fenster jetzt anzeigen (fertig geladen)
     root.mainloop()
 
 if __name__ == "__main__":

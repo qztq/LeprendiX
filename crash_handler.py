@@ -8,6 +8,7 @@ import webbrowser
 import urllib.parse
 import traceback
 import logging
+import tempfile
 # Design-Konstanten (passend zu LeprendiX)
 COLOR_PRIMARY = "#2c3e50"
 COLOR_SECONDARY = "#34495e"
@@ -21,7 +22,22 @@ def get_base_path():
         return os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = get_base_path()
-CRASH_FILE = os.path.join(BASE_DIR, "last_crash.txt")
+
+def get_crash_file():
+    app_name = "LeprendiX"
+    if sys.platform == "win32":
+        base_path = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
+    else:
+        base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
+    
+    data_dir = os.path.join(base_path, app_name)
+    try:
+        os.makedirs(data_dir, exist_ok=True)
+        return os.path.join(data_dir, "last_crash.txt")
+    except Exception:
+        return os.path.join(tempfile.gettempdir(), "last_crash.txt")
+
+CRASH_FILE = get_crash_file()
 
 def restart_program(root):
     """Versucht, start.py oder main.py neu zu starten."""

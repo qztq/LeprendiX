@@ -204,20 +204,34 @@ class NeonTraceSplash:
                 print(f"[DEBUG] Vergleich: GitHub({latest_tag}) vs Lokal({clean_local})")
                 if to_tup(latest_tag) > to_tup(clean_local):
                     print("[DEBUG] Update verfügbar!")
-                    self.root.attributes('-topmost', False)
-                    msg = CustomMsgBox(self.root, "Update verfügbar", f"Neu: {latest_tag}\nLokal: {local_v}\nJetzt herunterladen & installieren?")
-                    self.root.wait_window(msg)
-                    if msg.result: 
+                    
+                    # Prüfen, ob wir vom Admin-Neustart kommen (um doppelte Abfrage zu vermeiden)
+                    auto_install = "--admin-restart" in sys.argv
+                    should_install = False
+
+                    if auto_install:
+                        should_install = True
+                    else:
+                        self.root.attributes('-topmost', False)
+                        msg = CustomMsgBox(self.root, "Update verfügbar", f"Neu: {latest_tag}\nLokal: {local_v}\nJetzt herunterladen & installieren?")
+                        self.root.wait_window(msg)
+                        should_install = msg.result
+
+                    if should_install: 
                         # Admin-Rechte anfordern, falls noch nicht vorhanden
                         if not is_admin():
                             try:
+                                params = "--admin-restart"
                                 if getattr(sys, 'frozen', False):
-                                    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, "", None, 1)
+                                    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
                                 else:
-                                    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{os.path.abspath(sys.argv[0])}"', None, 1)
+                                    # Argumente für Skript: "script.py" --admin-restart
+                                    script_args = f'"{os.path.abspath(sys.argv[0])}" {params}'
+                                    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, script_args, None, 1)
                                 self.root.destroy()
                                 sys.exit()
-                            except Exception:
+                            except Exception as e:
+                                print(f"[ERROR] Admin-Rechte konnten nicht angefordert werden: {e}")
                                 return
 
                         # Asset suchen
@@ -416,5 +430,11 @@ if __name__ == "__main__":
     
     # Nach dem Splash-Screen (wenn mainloop beendet ist):
     print("[DEBUG] Starte Hauptprogramm...")
-    import main
-    main.create_main()
+    try:
+        import main
+        main.create_main()
+    except Exception as e:
+        import traceback
+        err_msg = f"Kritischer Fehler beim Start:\n{e}\n\n{traceback.format_exc()}"
+        print(err_msg)
+        ctypes.windll.user32.MessageBoxW(0, err_msg, "LeprendiX Start-Fehler", 0x10)

@@ -184,7 +184,14 @@ class SetupWizard(tk.Toplevel):
 
 def check_and_run_setup(root):
     try:
-        with open("version.txt", "r") as f:
+        # Pfad sicher auflösen (für EXE und Skript)
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        version_file = os.path.join(base_path, "version.txt")
+        with open(version_file, "r") as f:
             current_version = f.read().strip()
     except:
         current_version = "1.0.0"
@@ -195,7 +202,7 @@ def check_and_run_setup(root):
         root.withdraw()
         wizard = SetupWizard(root, current_version)
         root.wait_window(wizard)
-        root.deiconify()
+        # root.deiconify() # Entfernt: main.py übernimmt das Anzeigen am Ende
 
 if __name__ == "__main__":
     # Ermöglicht das direkte Starten von setup_wizard.py zum Testen
