@@ -63,11 +63,13 @@ def _ensure_status_column():
         conn.commit()
         logging.info("Spalte 'invoiced_since_reset' in patienten-Tabelle hinzugefügt.")
     
+    
     try:
         cursor.execute("SELECT is_archived FROM patienten LIMIT 1")
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
         conn.commit()
+        logging.info("Spalte 'is_archived' zur patienten-Tabelle hinzugefügt.")
     finally:
         conn.close()
 
@@ -280,7 +282,7 @@ def search_teamup_events(search_term, start_date=None, end_date=None, mode='stan
         messagebox.showerror("Fehler", f"Teamup API-Fehler: {e}")
         return []
 
-def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block, ausstellungs_datum): 
+def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block, ausstellungs_datum, ueberweisung=True): 
     """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
     
     # Imports müssen am Anfang der Datei sein, aber wir stellen sicher, dass Pt verfügbar ist
@@ -295,6 +297,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     SPACE_AFTER_LEISTUNG_BLOCK = Pt(12) 
 
     # ... (Datenextraktion bleibt unverändert) ...
+    # Unpacking für 13 Elemente (ohne ueberweisung in DB)
     _, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, _ = patient_data_tuple
     
     # Annahme: get_patient_leistungen_for_template, TEMPLATE_FILE, OUTPUT_FOLDER sind hier verfügbar
@@ -576,6 +579,20 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
             if p.paragraph_format.space_after is None: 
                 p.paragraph_format.space_after = Pt(0)
             p.paragraph_format.line_spacing = 1.0
+
+    # --- 3b. Überweisungstext Logik (NEU) ---
+    # Wenn Überweisung = NEIN (0), ersetze den Bank-Block durch "Betrag dankend erhalten!"
+    if not ueberweisung:
+        for p in document.paragraphs:
+            # Suche nach dem Standard-Text aus der Vorlage
+            if "Bitte überweisen Sie den Betrag" in p.text:
+                p.text = "" # Text löschen
+                run = p.add_run("Betrag dankend erhalten!")
+                run.bold = True
+                run.font.size = Pt(12)
+            # Falls IBAN/BIC in eigenen Paragraphen stehen oder Reste davon da sind
+            if "BIC GIBA" in p.text or "IBAN AT73" in p.text:
+                p.text = ""
 
 
     # --- 4. Leerzeilen an den gewünschten Stellen einfügen (Post-Processing) ---
@@ -949,6 +966,9 @@ class HonorarGeneratorApp:
         zusatz_frame.grid(row=5, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
         ttk.Checkbutton(zusatz_frame, text="Zusätzlichen 'Gemeinde Wiener Neudorf' Block in Dokument einfügen", variable=self.add_gemeinde_block_var).grid(row=0, column=0, padx=5, pady=5, sticky='w')
         
+        self.gen_ueberweisung_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(zusatz_frame, text="Überweisung? (Sonst: 'Betrag dankend erhalten!')", variable=self.gen_ueberweisung_var).grid(row=1, column=0, padx=5, pady=5, sticky='w')
+        
         # In setup_generate_tab hinzufügen (z.B. nach dem folgenummer_frame):
         date_selection_frame = ttk.LabelFrame(tab, text="Ausstellungsdatum (Letzter Tag des Monats)")
         date_selection_frame.grid(row=6, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
@@ -1135,9 +1155,10 @@ class HonorarGeneratorApp:
         add_gemeinde_block = self.add_gemeinde_block_var.get()
         patient_id = self.patient_data[0]
         ausstellungs_datum = self._get_selected_invoice_date()
+        ueberweisung = self.gen_ueberweisung_var.get()
         
         try:
-            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum)
+            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum, ueberweisung=ueberweisung)
             
             # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
             _update_invoiced_status(patient_id, 1)
@@ -1174,10 +1195,11 @@ class HonorarGeneratorApp:
         template_data = self._prepare_bhag_number() 
         add_gemeinde_block = self.add_gemeinde_block_var.get()
         ausstellungs_datum = self._get_selected_invoice_date()
+        ueberweisung = self.gen_ueberweisung_var.get()
 
         try:
             # NEU: BHAG-Nummer generieren und DB aktualisieren
-            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum)
+            output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum, ueberweisung=ueberweisung)
             add_gemeinde_block = self.add_gemeinde_block_var.get()
             
             
@@ -1282,19 +1304,19 @@ class HonorarGeneratorApp:
 
         # Hinzufügen/Aktualisieren Button
         self.save_patient_button = ttk.Button(tab, text="Patient Hinzufügen", command=self.add_patient_gui)
-        self.save_patient_button.grid(row=len(fields) + 1, column=0, columnspan=2, pady=10)
+        self.save_patient_button.grid(row=len(fields) + 2, column=0, columnspan=2, pady=10)
         
         # NEU: Löschen Button
         self.delete_patient_button = ttk.Button(tab, text="Patient LÖSCHEN", command=self.delete_patient_gui, style='Danger.TButton', state=tk.DISABLED)
         # NEU: Style für Lösch-Button
         self.ttk_style.configure('Danger.TButton', foreground='red') 
-        self.delete_patient_button.grid(row=len(fields) + 2, column=0, columnspan=2, pady=5)
+        self.delete_patient_button.grid(row=len(fields) + 3, column=0, columnspan=2, pady=5)
 
         # NEU: Ordner öffnen Button
-        ttk.Button(tab, text="📂 Patienten-Ordner öffnen", command=self.open_patient_folder).grid(row=len(fields) + 2, column=1, pady=5, sticky='e')
+        ttk.Button(tab, text="📂 Patienten-Ordner öffnen", command=self.open_patient_folder).grid(row=len(fields) + 3, column=1, pady=5, sticky='e')
         
         # Leere Zeile für Abstand
-        ttk.Label(tab, text="").grid(row=len(fields) + 3, column=0, columnspan=2, pady=5)
+        ttk.Label(tab, text="").grid(row=len(fields) + 4, column=0, columnspan=2, pady=5)
 
     def open_archive_manager(self):
         """Öffnet ein Fenster zum Suchen und Reaktivieren von archivierten Patienten."""
@@ -1526,7 +1548,7 @@ class HonorarGeneratorApp:
             # Sicherstellen, dass die Dezimaltrennzeichen korrekt sind und Leere in 0.0 umgewandelt werden
             km_string = data.get("Kilometergeld (€)").replace(',', '.') if data.get("Kilometergeld (€)") else '0.0'
             kilometergeld = float(km_string)
-
+            
             # Basis-Validierung
             if not nachname or not vorname or not plz:
                 messagebox.showwarning("Achtung", "Nachname, Vorname und PLZ sind Pflichtfelder.")
@@ -2539,6 +2561,9 @@ class HonorarGeneratorApp:
 
         betrag_str = f"{basis_betrag:.2f}"
 
+        # Öffne den Editor automatisch ZUERST, damit die Referenzen (amount_entry, description_text) auf das Fenster zeigen
+        self.open_manual_editor()
+
         self.date_entry.delete(0, tk.END)
         self.date_entry.insert(0, datum_formatiert)
         self.time_from_entry.delete(0, tk.END)
@@ -2550,9 +2575,6 @@ class HonorarGeneratorApp:
         self.description_text.delete("1.0", tk.END)
         self.description_text.insert("1.0", beschreibung)
         
-        # Öffne den Editor automatisch
-        self.open_editor()
-        self.open_manual_editor()
         
         # NEU: Beim Bearbeiten alle Buttons abwählen, da der Betrag manuell gesetzt wird
         self._reset_leistung_selection() 

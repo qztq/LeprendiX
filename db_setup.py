@@ -1,9 +1,15 @@
 # db_setup.py
 import sqlite3
 import os
+import sys
 
-# Konfigurationsvariable muss hier lokal definiert oder aus gui_generator importiert werden
-DATABASE_NAME = 'patienten.db'
+def get_base_path():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    else:
+        return os.path.dirname(os.path.abspath(__file__))
+
+DATABASE_NAME = os.path.join(get_base_path(), 'patienten.db')
 
 def setup_database():
     """
