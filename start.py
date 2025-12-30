@@ -348,25 +348,8 @@ class NeonTraceSplash:
         """Wird 1 Sekunde vor dem Ende ausgeführt."""
         print("[DEBUG] Bereite Start vor...")
         self.running = False  # Animation stoppen
-        
-        # Wir speichern uns die Referenz auf das Root-Objekt
-        root_ref = self.root
-        
-        try:
-            # 1. Das Splash-Fenster komplett zerstören
-            # .destroy() beendet die mainloop von start.py
-            root_ref.destroy()
-            print("[DEBUG] Splash-Screen geschlossen.")
-
-            # 2. JETZT erst main importieren und starten
-            # Da root_ref.destroy() die aktuelle mainloop beendet,
-            # rufen wir die neue mainloop von main.py direkt danach auf.
-            import main
-            print("[DEBUG] Starte Hauptprogramm...")
-            main.create_main()
-            
-        except Exception as e:
-            print(f"[DEBUG] Fehler beim Übergang: {e}")
+        self.root.destroy()
+        print("[DEBUG] Splash-Screen geschlossen.")
 
     def animate(self):
         if not self.running or not self.canvas.winfo_exists():
@@ -430,3 +413,8 @@ if __name__ == "__main__":
     cleanup_old_installers()
     check_system_integrity()
     NeonTraceSplash()
+    
+    # Nach dem Splash-Screen (wenn mainloop beendet ist):
+    print("[DEBUG] Starte Hauptprogramm...")
+    import main
+    main.create_main()

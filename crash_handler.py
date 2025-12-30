@@ -121,7 +121,7 @@ def install_exception_handler():
 
 def main():
     root = tk.Tk()
-    root.title("LeprendiX - Unerwarteter Fehler")
+    root.title("LeprendiX Crash Handler")
     root.geometry("700x500")
     root.configure(bg=COLOR_PRIMARY)
 
@@ -137,7 +137,7 @@ def main():
     # Header
     header_frame = tk.Frame(root, bg=COLOR_ACCENT, pady=10)
     header_frame.pack(fill="x")
-    tk.Label(header_frame, text="⚠️ LeprendiX ist abgestürzt", font=("Segoe UI", 16, "bold"), 
+    tk.Label(header_frame, text="A LeprendiX Process has crashed", font=("Segoe UI", 16, "bold"), 
              bg=COLOR_ACCENT, fg="white").pack()
     tk.Label(header_frame, text="Es ist ein unerwarteter Fehler aufgetreten.", font=("Segoe UI", 10), 
              bg=COLOR_ACCENT, fg="white").pack()
@@ -146,7 +146,7 @@ def main():
     content_frame = tk.Frame(root, bg=COLOR_PRIMARY, padx=20, pady=20)
     content_frame.pack(fill="both", expand=True)
 
-    tk.Label(content_frame, text="Fehlerdetails (für Support):", font=("Segoe UI", 10, "bold"), 
+    tk.Label(content_frame, text="Fehlerdetails:", font=("Segoe UI", 10, "bold"), 
              bg=COLOR_PRIMARY, fg=COLOR_TEXT, anchor="w").pack(fill="x", pady=(0, 5))
 
     text_area = tk.Text(content_frame, height=15, bg=COLOR_SECONDARY, fg="#ffcccc", 
@@ -176,10 +176,10 @@ def main():
     tk.Button(btn_frame, text="Schließen", command=close_program, 
               bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 11), relief="flat", padx=20, pady=10).pack(side="left", padx=20)
     
-    tk.Button(btn_frame, text="Neustarten", command=lambda: restart_program(root), 
+    tk.Button(btn_frame, text="LeprendiX Neustarten", command=lambda: restart_program(root), 
               bg="#27ae60", fg="white", font=("Segoe UI", 11, "bold"), relief="flat", padx=20, pady=10).pack(side="left", padx=20)
 
-    tk.Button(btn_frame, text="Senden und Neustarten", command=lambda: send_and_restart(root, error_content), 
+    tk.Button(btn_frame, text="Absturzbericht Senden und Neustarten", command=lambda: send_and_restart(root, error_content), 
               bg="#3498db", fg="white", font=("Segoe UI", 11), relief="flat", padx=20, pady=10).pack(side="left", padx=20)
 
     root.mainloop()

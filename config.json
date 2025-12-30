@@ -6,5 +6,6 @@
     "TEAMUP_CALENDAR_ID": "ks63f68d2f870c62a1",
     "GITHUB_TOKEN": "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",
     "DEFAULT_DIAGNOSE": "Diagnose",
-    "DEFAULT_ANREDE": "Herr/Frau"
+    "DEFAULT_ANREDE": "Herr/Frau",
+    "LAST_SETUP_VERSION": "0.0.0"
 }

@@ -42,6 +42,7 @@ from config_loader import CONFIG
 import gui_generator
 import patient_status_checker
 import crash_handler
+import setup_wizard
 
 # --- LOGGING SETUP ---
 def setup_logging():
@@ -326,6 +327,9 @@ def create_main():
     root = tk.Tk()
     # Tkinter Callback-Fehler auch abfangen
     root.report_callback_exception = crash_handler.global_exception_handler
+    
+    # --- SETUP WIZARD CHECK (Startet nur bei neuer Version/Erstinstallation) ---
+    setup_wizard.check_and_run_setup(root)
     
     root.title("LeprendiX - Control Center")
     root.geometry("1150x850")

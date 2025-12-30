@@ -264,6 +264,14 @@
   {
    "optionDest": "collect_submodules",
    "value": "urllib.parse"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "ctypes"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "ctypes"
   }
  ],
  "nonPyinstallerOptions": {
