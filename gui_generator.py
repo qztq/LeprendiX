@@ -62,6 +62,13 @@ def _ensure_status_column():
         cursor.execute("ALTER TABLE patienten ADD COLUMN invoiced_since_reset INTEGER DEFAULT 0")
         conn.commit()
         logging.info("Spalte 'invoiced_since_reset' in patienten-Tabelle hinzugefügt.")
+
+    try:
+        cursor.execute("SELECT last_selected_kurznamen FROM patienten LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE patienten ADD COLUMN last_selected_kurznamen TEXT DEFAULT ''")
+        conn.commit()
+        logging.info("Spalte 'last_selected_kurznamen' zur patienten-Tabelle hinzugefügt.")
     
     
     try:
@@ -305,6 +312,11 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
     
     heute = ausstellungs_datum # Verwendet das übergebene Datum
     
+    # Sicherheitscheck: Falls ueberweisung None ist, Standard auf True setzen
+    if ueberweisung is None:
+        ueberweisung = True
+    logging.info(f"Generiere Rechnung. Überweisung-Modus: {ueberweisung}")
+
     try:
         document = Document(TEMPLATE_FILE)
     except FileNotFoundError:
@@ -717,6 +729,7 @@ class HonorarGeneratorApp:
         
         self.add_gemeinde_block_var = tk.BooleanVar(master=root, value=0) # Standardmäßig AUS
         self.use_km_money_var = tk.BooleanVar(master=root, value=True) # NEU: Standardmäßig AN
+        self.gen_ueberweisung_var = tk.BooleanVar(master=root, value=True) # Standardmäßig AN (Überweisung)
 
         # In HonorarGeneratorApp.__init__ (nach self.add_gemeinde_block_var = ...)
         now = datetime.datetime.now()
@@ -966,7 +979,6 @@ class HonorarGeneratorApp:
         zusatz_frame.grid(row=5, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
         ttk.Checkbutton(zusatz_frame, text="Zusätzlichen 'Gemeinde Wiener Neudorf' Block in Dokument einfügen", variable=self.add_gemeinde_block_var).grid(row=0, column=0, padx=5, pady=5, sticky='w')
         
-        self.gen_ueberweisung_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(zusatz_frame, text="Überweisung? (Sonst: 'Betrag dankend erhalten!')", variable=self.gen_ueberweisung_var).grid(row=1, column=0, padx=5, pady=5, sticky='w')
         
         # In setup_generate_tab hinzufügen (z.B. nach dem folgenummer_frame):
@@ -1155,7 +1167,7 @@ class HonorarGeneratorApp:
         add_gemeinde_block = self.add_gemeinde_block_var.get()
         patient_id = self.patient_data[0]
         ausstellungs_datum = self._get_selected_invoice_date()
-        ueberweisung = self.gen_ueberweisung_var.get()
+        ueberweisung = bool(self.gen_ueberweisung_var.get())
         
         try:
             output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum, ueberweisung=ueberweisung)
@@ -1195,7 +1207,7 @@ class HonorarGeneratorApp:
         template_data = self._prepare_bhag_number() 
         add_gemeinde_block = self.add_gemeinde_block_var.get()
         ausstellungs_datum = self._get_selected_invoice_date()
-        ueberweisung = self.gen_ueberweisung_var.get()
+        ueberweisung = bool(self.gen_ueberweisung_var.get())
 
         try:
             # NEU: BHAG-Nummer generieren und DB aktualisieren
