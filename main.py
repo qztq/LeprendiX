@@ -5,6 +5,7 @@ import threading
 import runpy
 import pickle
 import tkinter as tk
+import sqlite3
 from tkinter import messagebox, ttk, filedialog
 import requests
 from PIL import Image, ImageTk
@@ -560,6 +561,104 @@ def create_main():
     create_config_entry(cat3.frame, "Schnellwahl Beträge (Komma-getrennt):", "QUICK_AMOUNTS")
     create_config_entry(cat3.frame, "Hotkey Hauptaktion (Enter):", "HOTKEY_ENTER")
     create_config_entry(cat3.frame, "Hotkey Tab-Wechsel (z.B. <F12>):", "HOTKEY_SWITCH_TAB")
+
+    # --- Auto-Date Selector Settings ---
+    date_frame = tk.Frame(cat3.frame, bg=COLOR_PRIMARY)
+    date_frame.pack(fill="x", pady=5)
+    
+    tk.Label(date_frame, text="Datums-Modus (Teamup/Suche):", fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"), width=25, anchor="w").pack(side="left")
+    
+    date_mode_var = tk.StringVar(value=CONFIG.get("AUTO_DATE_SELECTOR", "Auto"))
+    date_mode_combo = ttk.Combobox(date_frame, textvariable=date_mode_var, values=["Auto", "Manual"], state="readonly", width=10)
+    date_mode_combo.pack(side="left", padx=10)
+    
+    # Manual Dates Row
+    manual_date_frame = tk.Frame(cat3.frame, bg=COLOR_PRIMARY)
+    manual_date_frame.pack(fill="x", pady=5)
+    
+    tk.Label(manual_date_frame, text="Manuell (YYYY-MM-DD):", fg=COLOR_TEXT, bg=COLOR_PRIMARY, width=25, anchor="w").pack(side="left")
+    manual_start_var = tk.StringVar(value=CONFIG.get("MANUAL_DATE_START", ""))
+    tk.Entry(manual_date_frame, textvariable=manual_start_var, width=12).pack(side="left", padx=5)
+    
+    tk.Label(manual_date_frame, text="bis", fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(side="left")
+    manual_end_var = tk.StringVar(value=CONFIG.get("MANUAL_DATE_END", ""))
+    tk.Entry(manual_date_frame, textvariable=manual_end_var, width=12).pack(side="left", padx=5)
+    
+    def save_date_settings():
+        CONFIG["AUTO_DATE_SELECTOR"] = date_mode_var.get()
+        CONFIG["MANUAL_DATE_START"] = manual_start_var.get()
+        CONFIG["MANUAL_DATE_END"] = manual_end_var.get()
+        try:
+            with open("config.json", "w", encoding="utf-8") as f:
+                json.dump(CONFIG, f, indent=4)
+            messagebox.showinfo("Gespeichert", "Datumseinstellungen gespeichert.")
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Speichern fehlgeschlagen: {e}")
+
+    tk.Button(manual_date_frame, text="Speichern", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 8), 
+            relief="flat", command=save_date_settings, padx=10).pack(side="right", padx=10)
+
+    # --- KATEGORIE: BLACKLIST MANAGER ---
+    cat_bl = CollapsiblePane(db_container, "Blacklist Manager", expanded=False)
+    cat_bl.pack(fill="x", pady=5, padx=5)
+
+    bl_frame = tk.Frame(cat_bl.frame, bg=COLOR_PRIMARY)
+    bl_frame.pack(fill="x", pady=5, padx=10)
+
+    tk.Label(bl_frame, text="Begriffe, die bei der 'Neuen Patienten'-Suche ignoriert werden:", 
+             fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 9)).pack(anchor="w")
+
+    bl_listbox = tk.Listbox(bl_frame, height=6, bg=COLOR_SECONDARY, fg="white", relief="flat")
+    bl_listbox.pack(side="left", fill="x", expand=True, pady=5)
+    
+    bl_scroll = tk.Scrollbar(bl_frame, command=bl_listbox.yview)
+    bl_scroll.pack(side="right", fill="y", pady=5)
+    bl_listbox.config(yscrollcommand=bl_scroll.set)
+
+    def refresh_blacklist():
+        bl_listbox.delete(0, tk.END)
+        db_path = os.path.join(BASE_DIR, "patienten.db")
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("CREATE TABLE IF NOT EXISTS blacklist (name TEXT PRIMARY KEY)")
+                cursor.execute("SELECT name FROM blacklist ORDER BY name")
+                for row in cursor.fetchall():
+                    bl_listbox.insert(tk.END, row[0])
+                conn.close()
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Fehler beim Laden der Blacklist: {e}")
+
+    def remove_blacklist_item():
+        selection = bl_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Auswahl", "Bitte wählen Sie einen Eintrag zum Löschen.")
+            return
+        
+        item = bl_listbox.get(selection[0])
+        if messagebox.askyesno("Löschen", f"Soll '{item}' wirklich aus der Blacklist entfernt werden?"):
+            db_path = os.path.join(BASE_DIR, "patienten.db")
+            try:
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM blacklist WHERE name = ?", (item,))
+                conn.commit()
+                conn.close()
+                refresh_blacklist()
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Fehler beim Löschen: {e}")
+
+    bl_btn_frame = tk.Frame(cat_bl.frame, bg=COLOR_PRIMARY)
+    bl_btn_frame.pack(fill="x", padx=10, pady=5)
+    
+    tk.Button(bl_btn_frame, text="Ausgewählten Eintrag Löschen", bg="#c0392b", fg="white", font=("Segoe UI", 9, "bold"), 
+              relief="flat", command=remove_blacklist_item).pack(side="right", padx=5)
+    
+    tk.Button(bl_btn_frame, text="Aktualisieren", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 9), 
+              relief="flat", command=refresh_blacklist).pack(side="right", padx=5)
+
+    refresh_blacklist()
 
     # --- KATEGORIE 4: WARTUNG & BACKUPS ---
     cat4 = CollapsiblePane(db_container, "Wartung & Backups", expanded=False)

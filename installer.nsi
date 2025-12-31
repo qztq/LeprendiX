@@ -85,23 +85,24 @@ Section "LeprendiX (Erforderlich)" SecCore
 
   SetOutPath "$INSTDIR"
   
-  ; --- SCHUTZ FÜR patienten.db ---
+  ; --- SCHUTZ FÜR patienten.db UND config.json ---
   ; SetOverwrite off bewirkt, dass existierende Dateien NICHT überschrieben werden.
   SetOverwrite off
   
-  ; Versuche die Datenbank zu installieren. 
-  ; Wenn sie schon da ist, wird dieser Schritt ignoriert (Daten bleiben erhalten).
+  ; Versuche die Datenbank und Config zu installieren. 
+  ; Wenn sie schon da sind, wird dieser Schritt ignoriert (Daten bleiben erhalten).
   ; Pfad anpassen: "output\LeprendiX\patienten.db"
   File "output\LeprendiX\patienten.db"
+  File "output\LeprendiX\config.json"
   
   ; --- RESTLICHE DATEIEN ---
   ; Ab hier wieder überschreiben erlauben (für Updates der .exe etc.)
   SetOverwrite on
   
   ; Alle Dateien aus dem auto-py-to-exe Output Ordner installieren
-  ; /x schließt die patienten.db hier aus, da wir sie oben schon behandelt haben
+  ; /x schließt die patienten.db und config.json hier aus, da wir sie oben schon behandelt haben
   ; Pfad anpassen: "output\LeprendiX\*.*"
-  File /r /x "patienten.db" "output\LeprendiX\*.*"
+  File /r /x "patienten.db" /x "config.json" "output\LeprendiX\*.*"
 
   ; Registry-Einträge für Installationspfad und Uninstaller
   WriteRegStr HKCU "Software\LeprendiX" "" $INSTDIR

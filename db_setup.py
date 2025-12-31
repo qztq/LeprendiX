@@ -62,7 +62,8 @@ def setup_database():
     CREATE TABLE IF NOT EXISTS stammdaten_leistungen (
         kurzname TEXT PRIMARY KEY NOT NULL,
         beschreibung TEXT NOT NULL,
-        standard_betrag REAL NOT NULL
+        standard_betrag REAL NOT NULL,
+        is_archived INTEGER DEFAULT 0 -- 0 = Aktiv, 1 = Archiviert
     )
     """)
 
@@ -106,6 +107,12 @@ def setup_database():
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
         print("Spalte 'is_archived' zur patienten-Tabelle hinzugefügt.")
+
+    try:
+        cursor.execute("SELECT is_archived FROM stammdaten_leistungen LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE stammdaten_leistungen ADD COLUMN is_archived INTEGER DEFAULT 0")
+        print("Spalte 'is_archived' zur stammdaten_leistungen-Tabelle hinzugefügt.")
     
            
     conn.commit()

@@ -17,13 +17,17 @@ def get_config():
         "DATABASE_NAME": "patienten.db",
         "PATIENT_BASE_DIR": desktop,
         "ARCHIVE_DIR": os.path.join(desktop, "1Ehemalige Patienten"),
+        "FIXED_ADDRESS": "Triesterstraße 10/4, 2351 Wiener Neudorf",
         "TEAMUP_API_KEY": "c307ae48dc5f918fd9dada7b9e922a00e30c27a8939d8a31eb02dac60efe566a",
         "TEAMUP_CALENDAR_ID": "ks63f68d2f870c62a1",
         "GITHUB_TOKEN": "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",
         "QUICK_AMOUNTS": "33, 35, 57, 83",
         "LAST_SETUP_VERSION": "0.0.0",
         "HOTKEY_ENTER": "<Return>",
-        "HOTKEY_SWITCH_TAB": "<F12>, <Delete>"
+        "HOTKEY_SWITCH_TAB": "<F12>, <Delete>",
+        "AUTO_DATE_SELECTOR": "Auto",
+        "MANUAL_DATE_START": "",
+        "MANUAL_DATE_END": ""
     }
 
     if os.path.exists(config_file):

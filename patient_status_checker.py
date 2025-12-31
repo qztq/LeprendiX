@@ -7,11 +7,12 @@ import json
 from config_loader import CONFIG
 
 class PatientStatusApp:
-    def __init__(self, master, selection_callback=None):
+    def __init__(self, master, selection_callback=None, archive_callback=None):
         self.master = master
         self.selection_callback = selection_callback
+        self.archive_callback = archive_callback
         master.title("Patienten Status & Archivierung")
-        master.geometry("600x750") 
+        master.geometry("400x780") 
         self.after_id = None
         
         self._ensure_status_column()
@@ -192,10 +193,23 @@ class PatientStatusApp:
                     
                     # Erst wenn das Verschieben geklappt hat, Status auf archiviert setzen (NICHT LÖSCHEN)
                     cursor.execute("UPDATE patienten SET is_archived = 1 WHERE id=?", (patient_id,))
+                    
+                    # NEU: Prüfen, ob noch andere aktive Patienten den gleichen Nachnamen haben
+                    cursor.execute("SELECT COUNT(*) FROM patienten WHERE nachname = ? AND is_archived = 0 AND id != ?", (n_name, patient_id))
+                    active_patients_with_same_name = cursor.fetchone()[0]
+                    
+                    # Nur die Stammdatenleistung archivieren, wenn dies der LETZTE aktive Patient mit dem Namen war
+                    if active_patients_with_same_name == 0:
+                        cursor.execute("UPDATE stammdaten_leistungen SET is_archived = 1 WHERE kurzname=?", (n_name,))
+                    
                     conn.commit()
                     
                     messagebox.showinfo("Erfolg", f"Patient {full_name} wurde erfolgreich ins Archiv verschoben.")
                     self.load_patient_statuses()
+                    
+                    # Rufen Sie den Callback auf, um die Haupt-GUI zu aktualisieren
+                    if self.archive_callback:
+                        self.archive_callback()
                 else:
                     messagebox.showerror("Fehler", "Der gewählte Ordner existiert nicht.")
                     

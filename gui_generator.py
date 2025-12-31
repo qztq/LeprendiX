@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import sqlite3
 import datetime
 from typing import Self
@@ -14,7 +14,11 @@ from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benö
 from docx.shared import Inches, Pt, Twips
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 import logging
+import threading
 from config_loader import CONFIG
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+
 
 
 # --- HELPER FUNCTIONS FOR PATH RESOLUTION ---
@@ -77,6 +81,13 @@ def _ensure_status_column():
         cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
         conn.commit()
         logging.info("Spalte 'is_archived' zur patienten-Tabelle hinzugefügt.")
+
+    try:
+        cursor.execute("CREATE TABLE IF NOT EXISTS blacklist (name TEXT PRIMARY KEY)")
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Fehler beim Erstellen der Blacklist-Tabelle: {e}")
+
     finally:
         conn.close()
 
@@ -194,13 +205,21 @@ def get_patient_leistungen_for_template(patient_id):
     conn.close()
     return leistungen
 
-def get_all_stammdaten_dict():
+def get_all_stammdaten_dict(archived=False):
     """Holt alle Stammdaten aus der DB und gibt sie als Liste und Dict zurück."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT kurzname, beschreibung, standard_betrag FROM stammdaten_leistungen ORDER BY kurzname")
+    
+    # NEU: Abhängig vom Flag archivierte oder aktive laden
+    if archived:
+        query = "SELECT kurzname, beschreibung, standard_betrag FROM stammdaten_leistungen WHERE is_archived = 1 ORDER BY kurzname"
+    else:
+        query = "SELECT kurzname, beschreibung, standard_betrag FROM stammdaten_leistungen WHERE is_archived = 0 ORDER BY kurzname"
+        
+    cursor.execute(query)
     results = cursor.fetchall()
     conn.close()
+    
     stammdaten_list = [f"{r[0]} - {r[1]}" for r in results]
     stammdaten_dict = {item: r[2] for item, r in zip(stammdaten_list, results)}
     return stammdaten_list, stammdaten_dict
@@ -709,7 +728,7 @@ class HonorarGeneratorApp:
         self.root = root
         self.root = root
         self.root.title("LeprendiX")
-        self.root.geometry("900x750")
+        self.root.geometry("1050x780")
                 
         self.patient_data = None  
         self.stammdaten_betraege = {} 
@@ -788,6 +807,9 @@ class HonorarGeneratorApp:
                     except Exception as e:
                         logging.error(f"Fehler beim Binden von Switch-Hotkey '{k}': {e}")
         
+        # NEU: Kontextmenü für Textfelder einrichten
+        self._setup_context_menu()
+
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def on_closing(self):
@@ -804,6 +826,33 @@ class HonorarGeneratorApp:
                 except Exception as e:
                     logging.error(f"[AutoBackup] Fehler: {e}")
         self.root.destroy()
+
+    def _setup_context_menu(self):
+        """Bindet das Rechtsklick-Menü an alle Text-Widgets."""
+        for widget_class in ["Entry", "TEntry", "Text"]:
+            self.root.bind_class(widget_class, "<Button-3>", self._show_context_menu)
+
+    def refresh_all_stammdaten_ui(self):
+        """Refreshes all UI components that display master data for services."""
+        logging.info("Refreshing Stammdaten UI...")
+        try:
+            self.update_stammdaten_list()
+            self.load_leistung_stammdaten_buttons()
+            self.set_status("Stammdaten-Anzeige wurde aktualisiert.", 2000)
+        except Exception as e:
+            logging.error(f"Error refreshing stammdaten UI: {e}")
+            messagebox.showerror("Fehler", f"Fehler beim Aktualisieren der Stammdaten-Anzeige: {e}")
+
+    def _show_context_menu(self, event):
+        """Zeigt ein Kontextmenü mit Kopieren/Einfügen."""
+        try:
+            event.widget.focus_set()
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="Kopieren", command=lambda: event.widget.event_generate("<<Copy>>"))
+            menu.add_command(label="Einfügen", command=lambda: event.widget.event_generate("<<Paste>>"))
+            menu.tk_popup(event.x_root, event.y_root)
+        except Exception:
+            pass
 
     def set_status(self, message, duration=4000):
         """Setzt eine Nachricht in der Statusleiste, die nach 'duration' ms verschwindet."""
@@ -823,11 +872,13 @@ class HonorarGeneratorApp:
         default_data = {
             'rechnung_jahr': str(now.year),
             'rechnung_monat': str(now.month).zfill(2),
-            'rechnung_folgenummer': '0' # Start bei 0
+            'rechnung_folgenummer': '0', # Start bei 0
+            'last_invoice_path': '',
+            'last_invoice_patient_id': ''
         }
         
         try:
-            cursor.execute("SELECT key, value FROM einstellungen WHERE key IN ('rechnung_jahr', 'rechnung_monat', 'rechnung_folgenummer')")
+            cursor.execute("SELECT key, value FROM einstellungen WHERE key IN ('rechnung_jahr', 'rechnung_monat', 'rechnung_folgenummer', 'last_invoice_path', 'last_invoice_patient_id')")
             for key, value in cursor.fetchall():
                 data[key] = value
             
@@ -962,6 +1013,9 @@ class HonorarGeneratorApp:
         # NEUER BUTTON: Generieren und Sofort Drucken
         ttk.Button(btn_frame, text="✅ Speichern & Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
         
+        # NEU: Button zum Widerrufen der letzten Honorarnote
+        ttk.Button(btn_frame, text="Honorarnote Wiederrufen", command=self.revoke_last_invoice, style='Danger.TButton').pack(side=tk.LEFT, padx=10)
+        
         # --- Honorarnoten-Folgenummer (NEU) ---
         folgenummer_frame = ttk.LabelFrame(tab, text="Honorar-Folgenummer (BHAG-Nr.)")
         folgenummer_frame.grid(row=4, column=0, columnspan=3, padx=10, pady=5, sticky="ew")
@@ -1005,7 +1059,9 @@ class HonorarGeneratorApp:
     def open_status_checker(self):
         from patient_status_checker import PatientStatusApp
         checker_window = tk.Toplevel(self.root)
-        app = PatientStatusApp(checker_window, selection_callback=self.load_patient_from_checker)
+        app = PatientStatusApp(checker_window, 
+                               selection_callback=self.load_patient_from_checker,
+                               archive_callback=self.refresh_all_stammdaten_ui) # Pass callback
         
     def load_patient_from_checker(self, patient_id):
         # Setze ID in Suchfeld
@@ -1172,10 +1228,14 @@ class HonorarGeneratorApp:
         try:
             output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum, ueberweisung=ueberweisung)
             
+            # NEU: Pfad und Patient-ID der letzten Rechnung speichern
+            self._update_invoice_sequence_data('last_invoice_path', output_path)
+            self._update_invoice_sequence_data('last_invoice_patient_id', patient_id)
+
             # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
             _update_invoiced_status(patient_id, 1)
 
-            messagebox.showinfo("Erfolg", f"Honorarnote erfolgreich erstellt!\nGespeichert unter: {output_path}")
+            self.set_status(f"Honorarnote erstellt: {output_path}")
             
             # Öffnen der Datei nach Generierung
             if sys.platform.startswith('win'):
@@ -1214,7 +1274,10 @@ class HonorarGeneratorApp:
             output_path = fill_template(self.patient_data[0], self.patient_data, template_data, add_gemeinde_block, ausstellungs_datum, ueberweisung=ueberweisung)
             add_gemeinde_block = self.add_gemeinde_block_var.get()
             
-            
+            # NEU: Pfad und Patient-ID der letzten Rechnung speichern
+            self._update_invoice_sequence_data('last_invoice_path', output_path)
+            self._update_invoice_sequence_data('last_invoice_patient_id', self.patient_data[0])
+
             # 2. Versuche, sie sofort zu drucken
             success, message = print_document_silently(output_path)
             
@@ -1222,7 +1285,7 @@ class HonorarGeneratorApp:
                 # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
                 _update_invoiced_status(self.patient_data[0], 1)
                 
-                messagebox.showinfo("Druckerfolg", f"Honorarnote erstellt und erfolgreich gedruckt.\n{message}")
+                self.set_status(f"Honorarnote gedruckt. {message}")
                 # TODO: Hier Funktion zum Markieren der Leistungen als "abgerechnet" aufrufen
                 
             else:
@@ -1242,6 +1305,53 @@ class HonorarGeneratorApp:
             import traceback
             messagebox.showerror("Fehler", f"Fehler bei Generierung/Druck: {e}")
             traceback.print_exc()
+
+    def revoke_last_invoice(self):
+        """
+        Widerruft die letzte erstellte Honorarnote.
+        - Löscht die Datei.
+        - Setzt die Rechnungsnummer zurück.
+        - Setzt den Patientenstatus auf 'offen' (Rot).
+        """
+        self.invoice_sequence_data = self._get_invoice_sequence_data()
+        last_invoice_path = self.invoice_sequence_data.get('last_invoice_path')
+        last_patient_id = self.invoice_sequence_data.get('last_invoice_patient_id')
+        
+        if not last_invoice_path or not os.path.exists(last_invoice_path):
+            messagebox.showwarning("Fehler", "Keine zu widerrufende Honorarnote gefunden oder Datei existiert nicht mehr.")
+            return
+
+        if not messagebox.askyesno("Bestätigung", f"Soll die letzte Honorarnote wirklich widerrufen werden?\n\nDatei: {os.path.basename(last_invoice_path)}\n\nDiese Aktion löscht die Datei, setzt die Folgenummer zurück und markiert den Patienten als 'offen'."):
+            return
+
+        try:
+            # 1. Datei löschen
+            os.remove(last_invoice_path)
+            logging.info(f"Honorarnote-Datei gelöscht: {last_invoice_path}")
+
+            # 2. Folgenummer dekrementieren
+            current_folgenummer = int(self.invoice_sequence_data.get('rechnung_folgenummer', '0'))
+            new_folgenummer = max(0, current_folgenummer - 1)
+            
+            self._update_invoice_sequence_data('rechnung_folgenummer', str(new_folgenummer))
+            self.invoice_sequence_data['rechnung_folgenummer'] = str(new_folgenummer)
+            self.invoice_seq_var.set(str(new_folgenummer).zfill(3))
+            
+            # 3. Pfad und Patienten-ID in DB löschen
+            self._update_invoice_sequence_data('last_invoice_path', '')
+            self._update_invoice_sequence_data('last_invoice_patient_id', '')
+
+            # 4. Patientenstatus zurücksetzen (auf 0 = Rot/Offen)
+            if last_patient_id:
+                _update_invoiced_status(int(last_patient_id), 0)
+                logging.info(f"Patientenstatus für ID {last_patient_id} auf 'offen' zurückgesetzt.")
+
+            messagebox.showinfo("Erfolg", "Die letzte Honorarnote wurde widerrufen.")
+
+        except Exception as e:
+            logging.error(f"Fehler beim Widerrufen der Honorarnote: {e}")
+            messagebox.showerror("Fehler", f"Ein Fehler ist aufgetreten:\n{e}")
+
 
     def _get_ort_for_plz(self, plz):
         """Gibt den Ortsnamen für eine PLZ zurück (Basis-Datenbank für NÖ/Wien)."""
@@ -1280,6 +1390,73 @@ class HonorarGeneratorApp:
             if ort:
                 self.patient_entries["Ort"].delete(0, tk.END)
                 self.patient_entries["Ort"].insert(0, ort)
+                # NEU: Löst die Routenberechnung aus, nachdem der Ort automatisch ausgefüllt wurde
+                self._start_distance_calculation()
+
+    def _start_distance_calculation(self, event=None):
+        """Startet die Distanzberechnung in einem separaten Thread."""
+        self.distance_label.config(text="wird geladen...")
+        thread = threading.Thread(target=self._perform_distance_calculation)
+        thread.daemon = True
+        thread.start()
+
+    def _perform_distance_calculation(self):
+        """Berechnet die Routen-Distanz und aktualisiert das GUI-Label."""
+        try:
+            street = self.patient_entries["Straße"].get().strip()
+            housenumber = self.patient_entries["Hausnummer"].get().strip()
+            plz = self.patient_entries["PLZ"].get().strip()
+            city = self.patient_entries["Ort"].get().strip()
+
+            if not all([street, housenumber, plz, city]):
+                self.root.after(0, lambda: self.distance_label.config(text=""))
+                return
+
+            patient_address = f"{street} {housenumber}, {plz} {city}, Austria"
+            fixed_address = CONFIG.get("FIXED_ADDRESS")
+
+            if not fixed_address:
+                self.root.after(0, lambda: self.distance_label.config(text="Fixe Adresse fehlt"))
+                return
+
+            geolocator = Nominatim(user_agent="leprendix-distance-calculator")
+            
+            location1 = geolocator.geocode(patient_address, timeout=10)
+            if not location1:
+                self.root.after(0, lambda: self.distance_label.config(text="Patienten-Adresse ungültig"))
+                return
+
+            location2 = geolocator.geocode(fixed_address, timeout=10)
+            if not location2:
+                self.root.after(0, lambda: self.distance_label.config(text="Fixe Adresse ungültig"))
+                return
+
+            coords1 = (location1.longitude, location1.latitude)
+            coords2 = (location2.longitude, location2.latitude)
+            
+            url = f"http://router.project-osrm.org/route/v1/driving/{coords1[0]},{coords1[1]};{coords2[0]},{coords2[1]}"
+            
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if data['code'] == 'Ok':
+                distance_meters = data['routes'][0]['distance']
+                distance_km = distance_meters / 1000
+                self.root.after(0, lambda: self.distance_label.config(text=f"ca. {distance_km:.1f} km"))
+            else:
+                self.root.after(0, lambda: self.distance_label.config(text="Route nicht gefunden"))
+
+        except (requests.exceptions.RequestException, GeocoderTimedOut, GeocoderUnavailable) as e:
+            self.root.after(0, lambda: self.distance_label.config(text="API Fehler"))
+            logging.error(f"Fehler bei der Distanzberechnung: {e}")
+        except Exception as e:
+            self.root.after(0, lambda: self.distance_label.config(text="Fehler"))
+            logging.error(f"Unerwarteter Fehler bei der Distanzberechnung: {e}")
+
+
+
 
     # --- 2. Patienten Verwalten Tab (Hinzufügen und Bearbeiten) ---
     def setup_patient_tab(self, tab):
@@ -1307,6 +1484,17 @@ class HonorarGeneratorApp:
             entry.grid(row=i + 1, column=1, padx=5, pady=5, sticky='we')
             self.patient_entries[field] = entry
 
+            # NEU: Event-Binding für Adressfelder
+            if field in ["Straße", "Hausnummer", "PLZ", "Ort"]:
+                entry.bind("<FocusOut>", self._start_distance_calculation)
+
+        # NEU: Label für die Distanzanzeige
+        self.distance_label = ttk.Label(tab, text="", foreground="blue")
+        # Positionieren neben dem Kilometergeld-Feld
+        km_geld_row = fields.index("Kilometergeld (€)") + 1
+        self.distance_label.grid(row=km_geld_row, column=2, padx=5, pady=5, sticky='w')
+
+
         # NEU: Auto-Fill Ort bei PLZ Eingabe
         self.patient_entries["PLZ"].bind("<KeyRelease>", self.autofill_ort)
 
@@ -1329,6 +1517,26 @@ class HonorarGeneratorApp:
         
         # Leere Zeile für Abstand
         ttk.Label(tab, text="").grid(row=len(fields) + 4, column=0, columnspan=2, pady=5)
+
+        # --- NEU: Liste für neue Patienten (Rechte Seite) ---
+        ttk.Separator(tab, orient='vertical').grid(row=0, column=3, rowspan=20, sticky='ns', padx=10)
+        
+        right_frame = ttk.Frame(tab)
+        right_frame.grid(row=0, column=4, rowspan=20, sticky='n', padx=5, pady=5)
+        
+        ttk.Label(right_frame, text="Neue Patienten (Teamup Check)", font=("Segoe UI", 10, "bold")).pack(pady=(0, 10))
+        
+        ttk.Button(right_frame, text="Prüfen", command=self.check_new_patients).pack(pady=5, fill='x')
+        
+        self.new_patients_listbox = tk.Listbox(right_frame, width=40, height=25)
+        self.new_patients_listbox.pack(side=tk.LEFT, fill='both', expand=True)
+        
+        sb = ttk.Scrollbar(right_frame, orient='vertical', command=self.new_patients_listbox.yview)
+        sb.pack(side=tk.RIGHT, fill='y')
+        self.new_patients_listbox.config(yscrollcommand=sb.set)
+        
+        self.new_patients_listbox.bind('<Double-1>', self._copy_new_patient_name)
+        self.new_patients_listbox.bind('<Button-3>', self._show_new_patients_context_menu)
 
     def open_archive_manager(self):
         """Öffnet ein Fenster zum Suchen und Reaktivieren von archivierten Patienten."""
@@ -1371,6 +1579,10 @@ class HonorarGeneratorApp:
                 conn = sqlite3.connect(DATABASE_NAME)
                 cursor = conn.cursor()
                 cursor.execute("UPDATE patienten SET is_archived = 0 WHERE id = ?", (pid,))
+                
+                # NEU: Dazugehörige Stammdatenleistung ebenfalls reaktivieren
+                cursor.execute("UPDATE stammdaten_leistungen SET is_archived = 0 WHERE kurzname=?", (nn,))
+                
                 conn.commit()
                 conn.close()
                 
@@ -1388,9 +1600,141 @@ class HonorarGeneratorApp:
                 
                 archive_win.destroy()
                 self.search_patients() # Hauptliste aktualisieren
+                self.refresh_all_stammdaten_ui() # NEU: Stammdaten-UI aktualisieren
 
         lb.bind("<Double-1>", lambda e: reactivate())
         ttk.Button(archive_win, text="Ausgewählten Patienten Reaktivieren", command=reactivate).pack(pady=10)
+
+    def check_new_patients(self):
+        """
+        Holt Teamup-Events des gewählten Monats und vergleicht sie mit der DB.
+        Events, deren Titel keinen bekannten Nachnamen enthalten, werden gelistet.
+        """
+        mode = CONFIG.get('AUTO_DATE_SELECTOR', 'Auto')
+        
+        if mode == 'Manual':
+            start_date = CONFIG.get('MANUAL_DATE_START', '')
+            end_date = CONFIG.get('MANUAL_DATE_END', '')
+            if not start_date or not end_date:
+                messagebox.showerror("Fehler", "Manueller Datumsbereich ist nicht konfiguriert (siehe Einstellungen).")
+                return
+        else:
+            try:
+                month = int(self.selected_invoice_month.get())
+                year = int(self.selected_invoice_year.get())
+                
+                start_date = f"{year}-{month:02d}-01"
+                last_day = calendar.monthrange(year, month)[1]
+                end_date = f"{year}-{month:02d}-{last_day}"
+                
+            except ValueError:
+                messagebox.showerror("Fehler", "Ungültiges Datum ausgewählt.")
+                return
+
+        self.set_status("Lade Teamup-Daten und vergleiche mit Datenbank...", 0)
+        self.root.update_idletasks()
+
+        events = search_teamup_events("", start_date=start_date, end_date=end_date)
+        
+        if not events:
+            self.new_patients_listbox.delete(0, tk.END)
+            self.new_patients_listbox.insert(tk.END, "Keine Termine gefunden.")
+            self.set_status("Keine Termine im Zeitraum gefunden.")
+            return
+
+        conn = sqlite3.connect(DATABASE_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT nachname FROM patienten WHERE is_archived = 0 OR is_archived IS NULL")
+        db_lastnames = [r[0].strip().lower() for r in cursor.fetchall() if r[0] and r[0].strip()]
+        
+        # Blacklist laden
+        cursor.execute("SELECT name FROM blacklist")
+        blacklist_terms = [r[0].strip().lower() for r in cursor.fetchall() if r[0]]
+        
+        conn.close()
+
+        unknown_patients = []
+        
+        for title, date_str, _, _ in events:
+            title_lower = title.lower()
+            
+            if any(term in title_lower for term in blacklist_terms):
+                continue
+
+            is_known = False
+            
+            for db_name in db_lastnames:
+                if db_name in title_lower:
+                    is_known = True
+                    break
+            
+            if not is_known:
+                unknown_patients.append(f"{date_str}: {title}")
+
+        self.new_patients_listbox.delete(0, tk.END)
+        if unknown_patients:
+            for entry in unknown_patients:
+                self.new_patients_listbox.insert(tk.END, entry)
+            self.set_status(f"{len(unknown_patients)} potenzielle neue Patienten gefunden.")
+        else:
+            self.new_patients_listbox.insert(tk.END, "Alle Patienten bekannt.")
+            self.set_status("Alle Termine konnten zugeordnet werden.")
+
+    def _copy_new_patient_name(self, event):
+        """Kopiert den Namen aus der Liste in das Nachname-Feld."""
+        selection = self.new_patients_listbox.curselection()
+        if selection:
+            text = self.new_patients_listbox.get(selection[0])
+            if ": " in text:
+                name_part = text.split(": ", 1)[1]
+            else:
+                name_part = text
+            
+            self.patient_entries["Nachname"].delete(0, tk.END)
+            self.patient_entries["Nachname"].insert(0, name_part)
+
+    def _show_new_patients_context_menu(self, event):
+        """Zeigt Kontextmenü für die Liste neuer Patienten."""
+        try:
+            index = self.new_patients_listbox.nearest(event.y)
+            if index == -1: return
+            
+            self.new_patients_listbox.selection_clear(0, tk.END)
+            self.new_patients_listbox.selection_set(index)
+            self.new_patients_listbox.activate(index)
+            
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="Kopieren", command=lambda: self._copy_new_patient_to_clipboard(index))
+            menu.add_command(label="Zu Blacklist hinzufügen", command=lambda: self._blacklist_new_patient(index))
+            menu.tk_popup(event.x_root, event.y_root)
+        except Exception:
+            pass
+
+    def _copy_new_patient_to_clipboard(self, index):
+        text = self.new_patients_listbox.get(index)
+        name_part = text.split(": ", 1)[1] if ": " in text else text
+        self.root.clipboard_clear()
+        self.root.clipboard_append(name_part)
+        self.set_status("Name in Zwischenablage kopiert.")
+
+    def _blacklist_new_patient(self, index):
+        text = self.new_patients_listbox.get(index)
+        name_part = text.split(": ", 1)[1] if ": " in text else text
+            
+        term = simpledialog.askstring("Blacklist", "Begriff für Blacklist eingeben (z.B. 'Meeting', 'Urlaub'):", initialvalue=name_part, parent=self.root)
+        
+        if term:
+            conn = sqlite3.connect(DATABASE_NAME)
+            cursor = conn.cursor()
+            try:
+                cursor.execute("INSERT OR IGNORE INTO blacklist (name) VALUES (?)", (term.strip(),))
+                conn.commit()
+                self.set_status(f"'{term}' zur Blacklist hinzugefügt.")
+                self.check_new_patients()
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Fehler beim Speichern: {e}")
+            finally:
+                conn.close()
 
     def search_and_load_patient(self):
         # ... (Funktion bleibt unverändert)
@@ -1878,6 +2222,7 @@ class HonorarGeneratorApp:
         ttk.Label(desc_frame, text="Beschreibung:").pack(side=tk.LEFT, anchor='n', padx=(0,5))
         self.description_text = tk.Text(desc_frame, height=3, width=60, font=("Segoe UI", 10))
         self.description_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.main_description_text = self.description_text # Backup für Restore
         desc_scroll = ttk.Scrollbar(desc_frame, command=self.description_text.yview)
         desc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.description_text.config(yscrollcommand=desc_scroll.set)
@@ -1888,9 +2233,11 @@ class HonorarGeneratorApp:
         ttk.Label(manual_frame, text="Manuelle Betragseingabe (€):").pack(side=tk.LEFT, padx=(0,5))
         self.amount_entry = ttk.Entry(manual_frame, width=10)
         self.amount_entry.pack(side=tk.LEFT, padx=(0,15))
+        self.main_amount_entry = self.amount_entry # Backup für Restore
         self.amount_entry.insert(0, "0.00")
         
         self.add_leistung_button = ttk.Button(manual_frame, text="Leistung Speichern", command=self.add_leistung_gui)
+        self.main_add_leistung_button = self.add_leistung_button # Backup für Restore
         self.add_leistung_button.pack(side=tk.LEFT, padx=10)
         ttk.Button(manual_frame, text="Editor Leeren", command=self.clear_editor).pack(side=tk.LEFT, padx=10)
 
@@ -1930,8 +2277,18 @@ class HonorarGeneratorApp:
         self.summary_label.grid(row=7, column=0, columnspan=3, padx=5, pady=5, sticky='w')
 
         # Zeile 8: Treeview
+        tree_frame = ttk.Frame(tab)
+        tree_frame.grid(row=8, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
+
         columns = ('ID', 'Datum', 'Von', 'Bis', 'Beschreibung', 'Betrag')
-        self.leistung_tree = ttk.Treeview(tab, columns=columns, show='headings', selectmode='browse')
+        self.leistung_tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='browse')
+        
+        tree_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.leistung_tree.yview)
+        self.leistung_tree.configure(yscrollcommand=tree_scroll.set)
+        
+        self.leistung_tree.pack(side=tk.LEFT, fill='both', expand=True)
+        tree_scroll.pack(side=tk.RIGHT, fill='y')
+
         for col in columns:
             self.leistung_tree.heading(col, text=col)
         
@@ -1942,7 +2299,6 @@ class HonorarGeneratorApp:
         self.leistung_tree.column('Bis', width=60, anchor='center')
         self.leistung_tree.column('Beschreibung', width=300, anchor='w')
         self.leistung_tree.column('Betrag', width=120, anchor='e')
-        self.leistung_tree.grid(row=8, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
 
         
         tab.grid_rowconfigure(8, weight=1)
@@ -1977,6 +2333,7 @@ class HonorarGeneratorApp:
         self.editor_window.title("Manuelle Leistungseingabe / Editor")
         self.editor_window.geometry("700x450")
         self.editor_window.attributes("-topmost", True)
+        self.editor_window.protocol("WM_DELETE_WINDOW", self._close_manual_editor_window)
         
         # 3.1 Loader (Stammdaten in Editor laden)
         loader_frame = ttk.Frame(self.editor_window)
@@ -2012,6 +2369,17 @@ class HonorarGeneratorApp:
         self.add_leistung_button = ttk.Button(manual_frame, text="Leistung Speichern", command=self.add_leistung_gui)
         self.add_leistung_button.pack(side=tk.LEFT, padx=10)
         ttk.Button(manual_frame, text="Editor Leeren", command=self.clear_editor).pack(side=tk.LEFT, padx=10)
+
+    def _close_manual_editor_window(self):
+        if hasattr(self, 'editor_window') and self.editor_window:
+            if self.editor_window.winfo_exists():
+                self.editor_window.destroy()
+            self.editor_window = None
+        
+        # Referenzen auf Hauptfenster-Widgets wiederherstellen
+        if hasattr(self, 'main_description_text'): self.description_text = self.main_description_text
+        if hasattr(self, 'main_amount_entry'): self.amount_entry = self.main_amount_entry
+        if hasattr(self, 'main_add_leistung_button'): self.add_leistung_button = self.main_add_leistung_button
 
     def clear_editor(self):
         self.description_text.delete("1.0", tk.END)
@@ -2070,14 +2438,23 @@ class HonorarGeneratorApp:
             return
 
         # --- 2. DATUMSBERECHNUNG FÜR FILTER ---
-        try:
-            month = int(self.selected_invoice_month.get())
-            year = int(self.selected_invoice_year.get())
-            first_day = f"{year}-{month:02d}-01"
-            last_day_num = calendar.monthrange(year, month)[1]
-            last_day = f"{year}-{month:02d}-{last_day_num}"
-        except Exception:
-            first_day, last_day = None, None
+        mode = CONFIG.get('AUTO_DATE_SELECTOR', 'Auto')
+        first_day, last_day = None, None
+
+        if mode == 'Manual':
+            first_day = CONFIG.get('MANUAL_DATE_START', '')
+            last_day = CONFIG.get('MANUAL_DATE_END', '')
+            if not first_day or not last_day:
+                first_day, last_day = None, None
+        else:
+            try:
+                month = int(self.selected_invoice_month.get())
+                year = int(self.selected_invoice_year.get())
+                first_day = f"{year}-{month:02d}-01"
+                last_day_num = calendar.monthrange(year, month)[1]
+                last_day = f"{year}-{month:02d}-{last_day_num}"
+            except Exception:
+                first_day, last_day = None, None
 
         # NEU: Berechne UI-Defaults für die Anzeige (falls None, Standard +/- 30 Tage)
         ui_start_date = first_day
@@ -2447,6 +2824,9 @@ class HonorarGeneratorApp:
             if hasattr(self, 'description_text') and self.description_text.winfo_exists():
                 self.description_text.delete("1.0", tk.END) # Textbox leeren
             self.update_leistung_list()
+            
+            # Editor schließen, wenn er offen ist
+            self._close_manual_editor_window()
         elif success_count == 0 and not use_manual_override:
             messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (Prüfen Sie, ob Stammdaten fehlen).")
 
@@ -2464,7 +2844,7 @@ class HonorarGeneratorApp:
         if total_success_count > 0:
             # Speichere die aktuelle Auswahl für diesen Patienten
             save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
-            messagebox.showinfo("Erfolg", f"{total_success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
+            self.set_status(f"{total_success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
             self.update_leistung_list()
             self.root.focus_force()
         # Keine MessageBox bei 0, da das System das intern loggen kann.
@@ -2490,7 +2870,7 @@ class HonorarGeneratorApp:
         if insertion_success_count > 0:
             # Speichere die aktuelle Auswahl für diesen Patienten
             save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
-            messagebox.showinfo("Erfolg", f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
+            self.set_status(f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
             self.update_leistung_list()
             self.root.focus_force()
         else:
@@ -2536,7 +2916,8 @@ class HonorarGeneratorApp:
         
         # Setze den Button zurück, falls nichts ausgewählt ist
         if not self.selected_leistung_id:
-            self.add_leistung_button.config(text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
+            if hasattr(self, 'add_leistung_button') and self.add_leistung_button.winfo_exists():
+                self.add_leistung_button.config(text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
 
 
     def load_leistung_for_edit(self):
@@ -2589,7 +2970,7 @@ class HonorarGeneratorApp:
         
         
         # NEU: Beim Bearbeiten alle Buttons abwählen, da der Betrag manuell gesetzt wird
-        self._reset_leistung_selection() 
+        # self._reset_leistung_selection() 
         self.use_km_money_var.set(True) # Reset auf Standard (da KM-Geld aus Anzeige herausgerechnet wurde)
 
         # Button-Funktion auf Update umstellen
@@ -2633,13 +3014,16 @@ class HonorarGeneratorApp:
             """, (datum_db, time_from_str, time_to_str, beschreibung, end_betrag, leistung_id))
             conn.commit()
 
-            messagebox.showinfo("Erfolg", f"Leistung ID {leistung_id} erfolgreich aktualisiert.")
+            self.set_status(f"Leistung ID {leistung_id} erfolgreich aktualisiert.")
             self.update_leistung_list()
             
             # Setze den Button zurück auf Hinzufügen-Modus
             self.add_leistung_button.config(text="Leistung Hinzufügen (Manuell/Auswahl)", command=self.add_leistung_gui)
             self.selected_leistung_id = None
             self.description_text.delete("1.0", tk.END)
+            
+            # Editor schließen, wenn er offen ist
+            self._close_manual_editor_window()
             
         except ValueError as e:
             messagebox.showerror("Fehler", f"Ungültiges Datums-, Zeit- oder Betragsformat: {e}")
@@ -2755,11 +3139,13 @@ class HonorarGeneratorApp:
         self.stammdaten_listbox.config(yscrollcommand=list_scroll.set)
         
         self.stammdaten_listbox.bind('<<ListboxSelect>>', self.select_stammdaten_from_list)
+        self.stammdaten_listbox.bind('<Button-3>', self._show_stammdaten_context_menu)
 
         # --- Controls (Unten) ---
         control_frame = ttk.Frame(tab)
         control_frame.pack(fill='x', padx=10, pady=10)
         ttk.Button(control_frame, text="🗑️ Ausgewählte Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT)
+        ttk.Button(control_frame, text="📁 Ausgewählte Leistung Archivieren", command=self.archive_stammdaten).pack(side=tk.LEFT, padx=10)
 
         self.update_stammdaten_list()
 
@@ -2778,6 +3164,38 @@ class HonorarGeneratorApp:
             self.stammdaten_listbox.insert(tk.END, f"{item} (Standard: €{betrag:.2f})")
             
         self.load_leistung_stammdaten_buttons() # Update auch die Buttons
+
+    def _show_stammdaten_context_menu(self, event):
+        """Zeigt Kontextmenü für Stammdaten-Liste (nur Kopieren)."""
+        try:
+            index = self.stammdaten_listbox.nearest(event.y)
+            if index == -1: return
+            
+            # Selektiere die Zeile unter der Maus
+            self.stammdaten_listbox.selection_clear(0, tk.END)
+            self.stammdaten_listbox.selection_set(index)
+            self.stammdaten_listbox.activate(index)
+            
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="Kopieren", command=lambda: self._copy_stammdaten_description(index))
+            menu.tk_popup(event.x_root, event.y_root)
+        except Exception:
+            pass
+
+    def _copy_stammdaten_description(self, index):
+        try:
+            item_text = self.stammdaten_listbox.get(index)
+            # Format: "Kurzname - Beschreibung (Standard: €...)"
+            full_desc = item_text.split(' (Standard: ')[0]
+            parts = full_desc.split(' - ', 1)
+            beschreibung = parts[1] if len(parts) > 1 else ""
+            
+            if beschreibung:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(beschreibung)
+                self.set_status(f"Beschreibung kopiert: {beschreibung}")
+        except Exception:
+            pass
 
     def select_stammdaten_from_list(self, event):
         # ... (Rest der Klasse bleibt unverändert)
@@ -2851,6 +3269,29 @@ class HonorarGeneratorApp:
             messagebox.showerror("Fehler", f"Datenbankfehler: {e}")
             
         conn.close()
+
+    def archive_stammdaten(self):
+        """Archiviert die ausgewählte Stammdatenleistung."""
+        selection = self.stammdaten_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Achtung", "Bitte wählen Sie eine Leistung aus der Liste aus.")
+            return
+
+        item_text = self.stammdaten_listbox.get(selection[0])
+        kurzname = item_text.split(' - ')[0]
+
+        if messagebox.askyesno("Bestätigen", f"Sind Sie sicher, dass Sie die Stammdatenleistung '{kurzname}' archivieren möchten?\nSie wird aus der aktiven Liste entfernt."):
+            conn = sqlite3.connect(DATABASE_NAME)
+            cursor = conn.cursor()
+            try:
+                cursor.execute("UPDATE stammdaten_leistungen SET is_archived = 1 WHERE kurzname = ?", (kurzname,))
+                conn.commit()
+                messagebox.showinfo("Erfolg", f"Stammdatenleistung '{kurzname}' erfolgreich archiviert.")
+                self.update_stammdaten_list()
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Fehler beim Archivieren: {e}")
+            finally:
+                conn.close()
 
     def delete_stammdaten(self):
 # ... (Rest der Klasse bleibt unverändert)
