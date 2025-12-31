@@ -292,6 +292,14 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/migrate_legacy.py;."
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "geopy"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "geopy"
   }
  ],
  "nonPyinstallerOptions": {
