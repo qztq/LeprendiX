@@ -323,10 +323,27 @@ class NeonTraceSplash:
             dl_win.update()
             self.create_db_backup(parent=dl_win)
             
-            lbl.config(text="Starte Installer...")
+            lbl.config(text="Installiere Update...")
             dl_win.update()
             time.sleep(1)
-            subprocess.Popen([save_path])
+            
+            # Batch-Skript erstellen für nahtloses Update (Warten -> Installieren -> Neustart)
+            bat_path = os.path.join(os.getcwd(), "update_runner.bat")
+            # Nur im kompilierten Zustand neu starten, um Dev-Loops zu vermeiden
+            app_exe = sys.executable if getattr(sys, 'frozen', False) else None
+            
+            with open(bat_path, "w") as bat:
+                bat.write("@echo off\n")
+                bat.write("timeout /t 1 /nobreak > NUL\n") # Nur kurz warten, Installer übernimmt das Timing mit Splash
+                bat.write(f'"{save_path}" /S\n')           # Installer SILENT ausführen
+                if app_exe:
+                    bat.write(f'start "" "{app_exe}"\n')   # App neu starten
+                bat.write(f'del "{save_path}"\n')          # Installer aufräumen
+                bat.write('del "%~f0"\n')                  # Batch-Skript selbst löschen
+
+            # Batch-Datei komplett versteckt ausführen (CREATE_NO_WINDOW = 0x08000000)
+            subprocess.Popen(["cmd.exe", "/C", bat_path], creationflags=0x08000000)
+            
             self.root.destroy()
             sys.exit()
         except Exception as e:

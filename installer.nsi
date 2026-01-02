@@ -13,7 +13,7 @@
 
   ; Name der Applikation und der Installer-Datei
   Name "LeprendiX"
-  OutFile "LeprendiX_Installer_v${APP_VERSION}.exe"
+  OutFile "LeprendiX_Win64.exe"
   
   ; Standard-Installationsverzeichnis (AppData Local für Schreibzugriff ohne Admin)
   InstallDir "$LOCALAPPDATA\LeprendiX"
@@ -166,10 +166,22 @@ SectionEnd
 ; Splash Screen (Optional)
 
 Function .onInit
+  ; Splash Screen anzeigen (überbrückt die Wartezeit visuell)
+  ; Erfordert 'splash.bmp' im selben Ordner wie das .nsi Skript beim Kompilieren
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\splash.bmp "splash.bmp"
+  ; Syntax: delay(ms) fadein(ms) fadeout(ms) keycolor(-1=aus) datei
+  AdvSplash::show 2000 600 400 -1 $PLUGINSDIR\splash
+
+  ; HINWEIS: Im Silent-Mode (/S) werden alle MUI-Seiten automatisch übersprungen.
+  ; Wichtig ist nur, dass hier in .onInit keine 'MessageBox' ohne 'IfSilent'-Check steht.
+
   ; Laufende Instanzen beenden, um Dateikonflikte zu vermeiden
   nsExec::Exec 'taskkill /F /IM "LeprendiX.exe"'
   Pop $0 ; Rückgabewert vom Stack entfernen
-  Sleep 1000 ; Kurz warten, damit das System die Dateizugriffe freigibt
+  
+  ; Wartezeit leicht erhöht, um sicherzustellen, dass das Dateisystem den Lock freigibt
+  Sleep 1500 
 FunctionEnd
 
 ;--------------------------------
