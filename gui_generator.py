@@ -58,6 +58,13 @@ def _ensure_status_column():
     """
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
+    
+    # Check if table exists to avoid crash on first run
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patienten'")
+    if not cursor.fetchone():
+        conn.close()
+        return
+
     try:
         # Versuche, die Spalte zu lesen
         cursor.execute("SELECT invoiced_since_reset FROM patienten LIMIT 1")

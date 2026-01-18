@@ -347,6 +347,10 @@ def create_main():
     # --- SETUP WIZARD CHECK (Startet nur bei neuer Version/Erstinstallation) ---
     setup_wizard.check_and_run_setup(root)
     
+    # Reload credentials in case they were created by the setup wizard
+    global USER_CREDS
+    USER_CREDS = load_credentials()
+    
     root.title("LeprendiX - Control Center")
     root.geometry("1150x850")
     root.configure(bg=COLOR_PRIMARY)
@@ -408,10 +412,39 @@ def create_main():
         if not USER_CREDS:
             messagebox.showerror("Fehler", "Datei 'credentials.dat' fehlt!")
             return
-        if u_ent.get() == USER_CREDS.get("user") and p_ent.get() == USER_CREDS.get("password"):
-            launch_application(root)
-        else:
+
+        # 1. Credentials prüfen
+        if u_ent.get() != USER_CREDS.get("user") or p_ent.get() != USER_CREDS.get("password"):
             messagebox.showerror("Fehler", "Logindaten inkorrekt.")
+            return
+            
+        # 2. Datenbank prüfen
+        db_path = os.path.join(BASE_DIR, "patienten.db")
+        db_ready = False
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path)
+                cur = conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patienten'")
+                if cur.fetchone():
+                    db_ready = True
+                conn.close()
+            except:
+                pass
+        
+        if not db_ready:
+            if messagebox.askyesno("Datenbank Setup", "Die Datenbank wurde noch nicht eingerichtet.\nMöchten Sie die Datenbank jetzt erstellen?"):
+                try:
+                    setup_script = resource_path("db_setup.py")
+                    runpy.run_path(setup_script, run_name="__main__")
+                    messagebox.showinfo("Erfolg", "Datenbank wurde erfolgreich erstellt.")
+                except Exception as e:
+                    messagebox.showerror("Fehler", f"Setup fehlgeschlagen:\n{e}")
+                    return
+            else:
+                return
+
+        launch_application(root)
 
     tk.Button(login_f, text="ANMELDEN & STARTEN", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 11, "bold"),
               relief="flat", cursor="hand2", padx=20, pady=10, command=do_login).pack(fill="x")

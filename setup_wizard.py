@@ -3,6 +3,7 @@ from tkinter import ttk, filedialog, messagebox
 import json
 import os
 import sys
+import pickle
 from config_loader import CONFIG
 
 # Design-Konstanten (passend zu LeprendiX)
@@ -33,13 +34,29 @@ class SetupWizard(tk.Toplevel):
         self.current_version = current_version
         self.current_step = 0
         
+        # Determine base path and check for credentials
+        if getattr(sys, 'frozen', False):
+            self.base_path = os.path.dirname(sys.executable)
+        else:
+            self.base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        self.cred_file = os.path.join(self.base_path, "credentials.dat")
+        self.needs_creds = not os.path.exists(self.cred_file)
+        self.new_creds = {"user": "", "password": ""}
+        
         self.steps = [
             self.create_welcome_step,
+        ]
+        
+        if self.needs_creds:
+            self.steps.append(self.create_credentials_step)
+            
+        self.steps.extend([
             self.create_paths_step,
             self.create_api_step,
             self.create_defaults_step,
             self.create_finish_step
-        ]
+        ])
         
         # Header
         header = tk.Frame(self, bg=COLOR_SECONDARY, height=60)
@@ -104,6 +121,24 @@ class SetupWizard(tk.Toplevel):
         
         tk.Label(self.container, text=msg, font=("Segoe UI", 11), bg=COLOR_PRIMARY, fg=COLOR_TEXT, wraplength=550, justify="center").pack(pady=20)
 
+    def create_credentials_step(self):
+        tk.Label(self.container, text="Admin-Konto erstellen", font=("Segoe UI", 16, "bold"), bg=COLOR_PRIMARY, fg="white").pack(pady=(0, 20))
+        tk.Label(self.container, text="Bitte legen Sie einen Benutzer und ein Passwort fest.", font=("Segoe UI", 10), bg=COLOR_PRIMARY, fg="#bdc3c7").pack(pady=(0, 20))
+        
+        self.add_cred_input("Benutzername:", "user")
+        self.add_cred_input("Passwort:", "password", show="*")
+
+    def add_cred_input(self, label, key, show=None):
+        frame = tk.Frame(self.container, bg=COLOR_PRIMARY)
+        frame.pack(fill="x", pady=8)
+        tk.Label(frame, text=label, bg=COLOR_PRIMARY, fg=COLOR_TEXT, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
+        
+        var = tk.StringVar(value=self.new_creds.get(key, ""))
+        entry = tk.Entry(frame, textvariable=var, bg=COLOR_SECONDARY, fg="white", relief="flat", font=("Consolas", 10), show=show)
+        entry.pack(fill="x", ipady=5, pady=2)
+        
+        var.trace_add("write", lambda *args: self.new_creds.update({key: var.get()}))
+
     def create_paths_step(self):
         tk.Label(self.container, text="1. Speicherorte", font=("Segoe UI", 16, "bold"), bg=COLOR_PRIMARY, fg="white").pack(pady=(0, 20))
         tk.Label(self.container, text="Wo sollen Daten gespeichert werden?", font=("Segoe UI", 10), bg=COLOR_PRIMARY, fg="#bdc3c7").pack(pady=(0, 20))
@@ -166,18 +201,25 @@ class SetupWizard(tk.Toplevel):
                  font=("Segoe UI", 11), bg=COLOR_PRIMARY, fg=COLOR_TEXT, wraplength=500, justify="center").pack(pady=20)
 
     def finish(self):
+        # Validate credentials if needed
+        if self.needs_creds:
+            if not self.new_creds.get("user") or not self.new_creds.get("password"):
+                messagebox.showwarning("Fehler", "Bitte Benutzername und Passwort festlegen.")
+                return
+
         self.config_data["LAST_SETUP_VERSION"] = self.current_version
         CONFIG.update(self.config_data)
         
         try:
-            if getattr(sys, 'frozen', False):
-                base_path = os.path.dirname(sys.executable)
-            else:
-                base_path = os.path.dirname(os.path.abspath(__file__))
-            config_file = os.path.join(base_path, 'config.json')
+            config_file = os.path.join(self.base_path, 'config.json')
             
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.config_data, f, indent=4)
+            
+            if self.needs_creds:
+                with open(self.cred_file, "wb") as f:
+                    pickle.dump(self.new_creds, f)
+                    
             self.destroy()
         except Exception as e:
             messagebox.showerror("Fehler", f"Konnte Konfiguration nicht speichern: {e}")

@@ -80,14 +80,6 @@ def check_system_integrity():
     if not os.path.exists("version.txt"):
         errors.append(("version.txt fehlt", "Die Datei 'version.txt' konnte nicht gefunden werden.\nLösung: Erstellen Sie eine Datei 'version.txt' mit dem Inhalt '1.0.0' im Programmordner oder installieren Sie das Programm neu."))
 
-    # 2. patienten.db
-    if not os.path.exists("patienten.db"):
-        errors.append(("patienten.db fehlt", "Die Datenbank 'patienten.db' fehlt.\nLösung: \n- Bei Neuinstallation: Führen Sie das 'Datenbank Setup' (db_setup.py) manuell aus.\n- Andernfalls: Stellen Sie ein Backup wieder her."))
-
-    # 3. credentials.dat
-    if not os.path.exists("credentials.dat"):
-        errors.append(("credentials.dat fehlt", "Die Login-Datei 'credentials.dat' fehlt.\nLösung: Bitte fordern Sie die Zugangsdaten erneut an oder führen Sie das Admin-Setup aus."))
-
     if errors:
         root = tk.Tk()
         root.withdraw()
@@ -335,9 +327,7 @@ class NeonTraceSplash:
             with open(bat_path, "w") as bat:
                 bat.write("@echo off\n")
                 bat.write("timeout /t 1 /nobreak > NUL\n") # Nur kurz warten, Installer übernimmt das Timing mit Splash
-                bat.write(f'"{save_path}" /S\n')           # Installer SILENT ausführen
-                if app_exe:
-                    bat.write(f'start "" "{app_exe}"\n')   # App neu starten
+                bat.write(f'"{save_path}"\n')              # Installer SICHTBAR ausführen
                 bat.write(f'del "{save_path}"\n')          # Installer aufräumen
                 bat.write('del "%~f0"\n')                  # Batch-Skript selbst löschen
 
