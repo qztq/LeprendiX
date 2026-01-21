@@ -4,13 +4,9 @@ import json
 import os
 import sys
 import pickle
-from config_loader import CONFIG
-
-# Design-Konstanten (passend zu LeprendiX)
-COLOR_PRIMARY = "#2c3e50"
-COLOR_SECONDARY = "#34495e"
-COLOR_ACCENT = "#27ae60"
-COLOR_TEXT = "#ecf0f1"
+from leprendix.core.config_loader import CONFIG
+from leprendix.core.paths import CREDENTIALS_PATH, CONFIG_PATH, VERSION_PATH, PROJECT_ROOT
+from .theme import COLOR_PRIMARY, COLOR_SECONDARY, COLOR_ACCENT, COLOR_TEXT
 
 class SetupWizard(tk.Toplevel):
     def __init__(self, parent, current_version):
@@ -34,14 +30,7 @@ class SetupWizard(tk.Toplevel):
         self.current_version = current_version
         self.current_step = 0
         
-        # Determine base path and check for credentials
-        if getattr(sys, 'frozen', False):
-            self.base_path = os.path.dirname(sys.executable)
-        else:
-            self.base_path = os.path.dirname(os.path.abspath(__file__))
-            
-        self.cred_file = os.path.join(self.base_path, "credentials.dat")
-        self.needs_creds = not os.path.exists(self.cred_file)
+        self.needs_creds = not os.path.exists(CREDENTIALS_PATH)
         self.new_creds = {"user": "", "password": ""}
         
         self.steps = [
@@ -211,13 +200,11 @@ class SetupWizard(tk.Toplevel):
         CONFIG.update(self.config_data)
         
         try:
-            config_file = os.path.join(self.base_path, 'config.json')
-            
-            with open(config_file, 'w', encoding='utf-8') as f:
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(self.config_data, f, indent=4)
             
             if self.needs_creds:
-                with open(self.cred_file, "wb") as f:
+                with open(CREDENTIALS_PATH, "wb") as f:
                     pickle.dump(self.new_creds, f)
                     
             self.destroy()
@@ -226,14 +213,8 @@ class SetupWizard(tk.Toplevel):
 
 def check_and_run_setup(root):
     try:
-        # Pfad sicher auflösen (für EXE und Skript)
-        if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
-        else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            
-        version_file = os.path.join(base_path, "version.txt")
-        with open(version_file, "r") as f:
+        # Use VERSION_PATH from core.paths
+        with open(VERSION_PATH, "r") as f:
             current_version = f.read().strip()
     except:
         current_version = "1.0.0"

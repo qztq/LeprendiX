@@ -7,11 +7,7 @@ import time
 import logging
 import tkinter as tk
 from tkinter import ttk
-
-def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+from leprendix.core.paths import PROJECT_ROOT
 
 class MigrationGUI:
     def __init__(self):
@@ -43,7 +39,7 @@ class MigrationGUI:
         self.root.mainloop()
 
     def run_migration(self):
-        log_file = os.path.join(get_base_path(), "migration_log.txt")
+        log_file = os.path.join(PROJECT_ROOT, "migration_log.txt")
         logging.basicConfig(filename=log_file, level=logging.INFO, format='%(asctime)s: %(message)s')
         logging.info("Migration gestartet (Admin Mode).")
 
@@ -53,7 +49,7 @@ class MigrationGUI:
                 return
 
             old_dir = os.path.join(prog_files, "LeprendiX")
-            new_dir = get_base_path()
+            new_dir = PROJECT_ROOT
             
             if not os.path.exists(old_dir):
                 logging.info("Alter Ordner nicht gefunden. Abbruch.")
@@ -119,7 +115,7 @@ class MigrationGUI:
             if getattr(sys, 'frozen', False):
                 subprocess.Popen([sys.executable] + params)
             else:
-                start_script = os.path.join(get_base_path(), "start.py")
+                start_script = os.path.join(PROJECT_ROOT, "start.py")
                 subprocess.Popen([sys.executable, start_script] + params)
             
         except Exception as e:

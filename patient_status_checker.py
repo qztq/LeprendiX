@@ -4,7 +4,8 @@ import sqlite3
 import os
 import shutil
 import json
-from config_loader import CONFIG
+from leprendix.core.config_loader import CONFIG
+from leprendix.core.paths import DB_PATH
 
 class PatientStatusApp:
     def __init__(self, master, selection_callback=None, archive_callback=None):
@@ -76,8 +77,7 @@ class PatientStatusApp:
             os.makedirs(archive_dir)
 
     def _ensure_status_column(self):
-        db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
-        conn = sqlite3.connect(db_name)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT invoiced_since_reset FROM patienten LIMIT 1")
@@ -124,8 +124,7 @@ class PatientStatusApp:
             self.tree.delete(item)
             
         try:
-            db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
-            conn = sqlite3.connect(db_name)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("SELECT id, vorname, nachname, invoiced_since_reset FROM patienten WHERE (is_archived IS NULL OR is_archived = 0) ORDER BY nachname, vorname")
             
@@ -148,8 +147,7 @@ class PatientStatusApp:
         full_name = self.tree.item(patient_id, 'values')[1]
         
         try:
-            db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
-            conn = sqlite3.connect(db_name)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("SELECT vorname, nachname FROM patienten WHERE id=?", (patient_id,))
             res = cursor.fetchone()
@@ -221,8 +219,7 @@ class PatientStatusApp:
     def reset_all_statuses(self):
         if not messagebox.askyesno("Reset", "Alle auf ROT setzen?"):
             return
-        db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
-        conn = sqlite3.connect(db_name)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("UPDATE patienten SET invoiced_since_reset = 0")
         conn.commit()

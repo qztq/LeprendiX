@@ -2,7 +2,6 @@ import subprocess
 import sys
 import os
 import threading
-import runpy
 import pickle
 import tkinter as tk
 import sqlite3
@@ -19,58 +18,34 @@ import logging
 import tempfile
 import traceback # Für Crash-Handling
 
-def get_base_path():
-    """ Ermittelt den Pfad zum Ordner, in dem die EXE oder das Skript liegt """
-    if getattr(sys, 'frozen', False):
-        # Pfad der EXE im "One Directory" Modus
-        return os.path.dirname(sys.executable)
-    else:
-        # Pfad im Editor
-        return os.path.dirname(os.path.abspath(__file__))
+# --- LeprendiX Imports ---
+from leprendix.core.paths import (
+    PROJECT_ROOT, LOG_FILE, LOG_DIR, CREDENTIALS_PATH, GITHUB_TOKEN,
+    LOGO_PATH, DB_PATH, CONFIG_PATH, BACKUPS_DIR, VERSION_PATH
+)
+from leprendix.core.config_loader import CONFIG
+from leprendix import app as gui_generator_module
+from leprendix.db import setup as db_setup_module
+from leprendix.gui import patient_status_checker
+from leprendix.utils import crash_handler
+from leprendix.gui import setup_wizard
+from leprendix.gui.theme import COLOR_PRIMARY, COLOR_SECONDARY, COLOR_ACCENT, COLOR_TEXT, COLOR_HIGHLIGHT
+from leprendix.gui.control_center import CollapsiblePane
 
-BASE_DIR = get_base_path()
-os.chdir(BASE_DIR)
-
-def resource_path(relative_path):
-    """ Hilfsfunktion für interne Ressourcen (wie Logos im _MEIPASS) """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = BASE_DIR
-    return os.path.join(base_path, relative_path)
-
-
-from config_loader import CONFIG
-import gui_generator
-import patient_status_checker
-import crash_handler
-import setup_wizard
+os.chdir(PROJECT_ROOT)
 
 # --- LOGGING SETUP ---
 def setup_logging():
-    # Use a user-writable directory for logs to avoid PermissionError
-    app_name = "LeprendiX"
-    if sys.platform == "win32":
-        base_path = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
-    else:
-        base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
-    
-    log_dir = os.path.join(base_path, app_name, "logs")
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "leprendix.log")
-    except Exception:
-        log_file = os.path.join(tempfile.gettempdir(), "leprendix.log")
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(module)s: %(message)s",
         handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.FileHandler(LOG_FILE, encoding='utf-8'),
             logging.StreamHandler(sys.stdout)
         ]
     )
-    logging.info(f"=== LeprendiX gestartet (Log: {log_file}) ===")
+    logging.info(f"=== LeprendiX gestartet (Log: {LOG_FILE}) ===")
 
 # --- WATCHDOG KLASSE (FREEZE DETECTION) ---
 class AppWatchdog:
@@ -132,27 +107,18 @@ class AppWatchdog:
         # Prozess hart beenden (os._exit killt sofort, sys.exit wirft nur Exception)
         os._exit(1)
 
-# --- KONFIGURATION & DESIGN ---
-COLOR_PRIMARY = "#2c3e50"
-COLOR_SECONDARY = "#34495e"
-COLOR_ACCENT = "#27ae60"
-COLOR_TEXT = "#ecf0f1"
-COLOR_HIGHLIGHT = "#3498db"
-LOGO_PATH = resource_path("logo.png")
-
 # --- GITHUB CONFIG FOR RELEASE NOTES ---
 GITHUB_USER = "qztq"
 REPO_NAME = "LeprendiX"
 RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases"
-GITHUB_TOKEN = CONFIG.get("GITHUB_TOKEN", "")
 
 
 # --- CREDENTIALS LADEN ---
 def load_credentials():
-    cred_path = os.path.join(BASE_DIR, "credentials.dat")
-    if os.path.exists(cred_path):
+    # CREDENTIALS_PATH is now the single source of truth
+    if os.path.exists(CREDENTIALS_PATH):
         try:
-            with open(cred_path, "rb") as f:
+            with open(CREDENTIALS_PATH, "rb") as f:
                 return pickle.load(f)
         except:
             return None
@@ -289,7 +255,7 @@ def launch_application(root):
         
         # Hauptanwendung (Generator) starten
         gen_root = tk.Tk()
-        app_gen = gui_generator.HonorarGeneratorApp(gen_root)
+        app_gen = gui_generator_module.HonorarGeneratorApp(gen_root)
         
         gen_root.mainloop()
 
@@ -300,34 +266,9 @@ def launch_application(root):
     root.after(2000, finalize_start)
     root.mainloop()
 
-class CollapsiblePane(tk.Frame):
-    """Eine aufklappbare Frame-Komponente für Einstellungen."""
-    def __init__(self, parent, title, expanded=False, bg_color=COLOR_PRIMARY):
-        super().__init__(parent, bg=bg_color)
-        self.columnconfigure(0, weight=1)
-        self._variable = tk.BooleanVar(value=expanded)
-        self._title = title
-        self._bg = bg_color
-        
-        self._button = tk.Button(self, text=f"{'▼' if expanded else '▶'} {title}", 
-                                 command=self._toggle, relief="flat", 
-                                 bg=COLOR_SECONDARY, fg="white", 
-                                 font=("Segoe UI", 12, "bold"), anchor="w", padx=10, pady=5)
-        self._button.grid(row=0, column=0, sticky="ew", pady=(5,0))
-        
-        self.frame = tk.Frame(self, bg=self._bg)
-        if expanded:
-            self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-            
-    def _toggle(self):
-        if self._variable.get():
-            self.frame.grid_remove()
-            self._variable.set(False)
-            self._button.configure(text=f"▶ {self._title}")
-        else:
-            self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-            self._variable.set(True)
-            self._button.configure(text=f"▼ {self._title}")
+# =====================================================================
+#  UI Components for Control Center
+#  (These could be moved to a new file: leprendix/gui/control_center.py)
 
 # --- HAUPTFENSTER ---
 def create_main():
@@ -419,11 +360,10 @@ def create_main():
             return
             
         # 2. Datenbank prüfen
-        db_path = os.path.join(BASE_DIR, "patienten.db")
         db_ready = False
-        if os.path.exists(db_path):
+        if os.path.exists(DB_PATH):
             try:
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(DB_PATH)
                 cur = conn.cursor()
                 cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patienten'")
                 if cur.fetchone():
@@ -435,8 +375,7 @@ def create_main():
         if not db_ready:
             if messagebox.askyesno("Datenbank Setup", "Die Datenbank wurde noch nicht eingerichtet.\nMöchten Sie die Datenbank jetzt erstellen?"):
                 try:
-                    setup_script = resource_path("db_setup.py")
-                    runpy.run_path(setup_script, run_name="__main__")
+                    db_setup_module.setup_database()
                     messagebox.showinfo("Erfolg", "Datenbank wurde erfolgreich erstellt.")
                 except Exception as e:
                     messagebox.showerror("Fehler", f"Setup fehlgeschlagen:\n{e}")
@@ -507,8 +446,7 @@ def create_main():
     def do_setup():
         if USER_CREDS and db_p_ent.get() == USER_CREDS.get("password"):
             try:
-                setup_script = resource_path("db_setup.py")
-                runpy.run_path(setup_script, run_name="__main__")
+                db_setup_module.setup_database()
                 messagebox.showinfo("Erfolg", "Datenbank bereit.")
             except Exception as e: 
                 messagebox.showerror("Fehler", f"Setup fehlgeschlagen:\n{e}")
@@ -543,7 +481,7 @@ def create_main():
                 path_var.set(new_path)
                 # 2. In JSON speichern
                 try:
-                    with open("config.json", "w", encoding="utf-8") as f:
+                    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                         json.dump(CONFIG, f, indent=4)
                     messagebox.showinfo("Gespeichert", f"{label_text} wurde aktualisiert.")
                 except Exception as e:
@@ -572,7 +510,7 @@ def create_main():
         def save_val():
             CONFIG[config_key] = var.get().strip()
             try:
-                with open("config.json", "w", encoding="utf-8") as f:
+                with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                     json.dump(CONFIG, f, indent=4)
                 messagebox.showinfo("Gespeichert", f"{label_text} gespeichert.")
             except Exception as e:
@@ -622,7 +560,7 @@ def create_main():
         CONFIG["MANUAL_DATE_START"] = manual_start_var.get()
         CONFIG["MANUAL_DATE_END"] = manual_end_var.get()
         try:
-            with open("config.json", "w", encoding="utf-8") as f:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(CONFIG, f, indent=4)
             messagebox.showinfo("Gespeichert", "Datumseinstellungen gespeichert.")
         except Exception as e:
@@ -650,10 +588,9 @@ def create_main():
 
     def refresh_blacklist():
         bl_listbox.delete(0, tk.END)
-        db_path = os.path.join(BASE_DIR, "patienten.db")
-        if os.path.exists(db_path):
+        if os.path.exists(DB_PATH):
             try:
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute("CREATE TABLE IF NOT EXISTS blacklist (name TEXT PRIMARY KEY)")
                 cursor.execute("SELECT name FROM blacklist ORDER BY name")
@@ -671,9 +608,8 @@ def create_main():
         
         item = bl_listbox.get(selection[0])
         if messagebox.askyesno("Löschen", f"Soll '{item}' wirklich aus der Blacklist entfernt werden?"):
-            db_path = os.path.join(BASE_DIR, "patienten.db")
             try:
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM blacklist WHERE name = ?", (item,))
                 conn.commit()
@@ -714,10 +650,9 @@ def create_main():
 
     def refresh_backups():
         backup_listbox.delete(0, tk.END)
-        backup_dir = os.path.join(BASE_DIR, "backups")
-        if os.path.exists(backup_dir):
+        if os.path.exists(BACKUPS_DIR):
             try:
-                files = sorted([f for f in os.listdir(backup_dir) if f.endswith(".db")], reverse=True)
+                files = sorted([f for f in os.listdir(BACKUPS_DIR) if f.endswith(".db")], reverse=True)
                 for f in files:
                     backup_listbox.insert(tk.END, f)
             except Exception as e:
@@ -725,18 +660,15 @@ def create_main():
 
     def create_backup():
         db_path = os.path.join(BASE_DIR, "patienten.db")
-        if not os.path.exists(db_path):
+        if not os.path.exists(DB_PATH):
             messagebox.showerror("Fehler", "Datenbank nicht gefunden.")
             return
         
-        backup_dir = os.path.join(BASE_DIR, "backups")
-        os.makedirs(backup_dir, exist_ok=True)
-        
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backup_dir, f"patienten_backup_{timestamp}.db")
+        backup_path = os.path.join(BACKUPS_DIR, f"patienten_backup_{timestamp}.db")
         
         try:
-            shutil.copy2(db_path, backup_path)
+            shutil.copy2(DB_PATH, backup_path)
             messagebox.showinfo("Backup", f"Backup erfolgreich erstellt:\n{backup_path}")
             refresh_backups()
         except Exception as e:
@@ -749,38 +681,29 @@ def create_main():
             return
         
         filename = backup_listbox.get(selection[0])
-        backup_path = os.path.join(BASE_DIR, "backups", filename)
-        db_path = os.path.join(BASE_DIR, "patienten.db")
+        backup_path = os.path.join(BACKUPS_DIR, filename)
         
         if messagebox.askyesno("Wiederherstellen", f"ACHTUNG: Möchten Sie die Datenbank wirklich auf den Stand von '{filename}' zurücksetzen?\n\nAlle Änderungen seit diesem Backup gehen verloren!"):
             try:
-                shutil.copy2(backup_path, db_path)
+                shutil.copy2(backup_path, DB_PATH)
                 messagebox.showinfo("Erfolg", "Datenbank wurde erfolgreich wiederhergestellt.")
             except Exception as e:
                 messagebox.showerror("Fehler", f"Wiederherstellung fehlgeschlagen: {e}")
 
     def open_app_dir():
         try:
-            os.startfile(BASE_DIR) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', BASE_DIR])
+            os.startfile(PROJECT_ROOT) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', PROJECT_ROOT])
         except Exception as e:
             messagebox.showerror("Fehler", f"Konnte Ordner nicht öffnen: {e}")
 
     def open_log_dir():
-        app_name = "LeprendiX"
-        if sys.platform == "win32":
-            base_path = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
-        else:
-            base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
-        
-        log_dir = os.path.join(base_path, app_name, "logs")
-        
-        if os.path.exists(log_dir):
+        if os.path.exists(LOG_DIR):
             try:
-                os.startfile(log_dir) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', log_dir])
+                os.startfile(LOG_DIR) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', LOG_DIR])
             except Exception as e:
                 messagebox.showerror("Fehler", f"Konnte Log-Ordner nicht öffnen: {e}")
         else:
-            messagebox.showinfo("Info", f"Log-Ordner existiert noch nicht:\n{log_dir}")
+            messagebox.showinfo("Info", f"Log-Ordner existiert noch nicht:\n{LOG_DIR}")
 
     btn_frame = tk.Frame(cat4.frame, bg=COLOR_PRIMARY)
     btn_frame.pack(pady=5)
@@ -796,7 +719,7 @@ def create_main():
     cat5.pack(fill="x", pady=5, padx=5)
     
     try:
-        with open("version.txt", "r") as f:
+        with open(VERSION_PATH, "r") as f:
             ver = f.read().strip()
     except:
         ver = "Unbekannt (Dev)"
@@ -1003,16 +926,13 @@ def create_main():
         watchdog.stop() # Watchdog stoppen, um False Positives beim Beenden zu vermeiden
         # Automatisches Backup beim Schließen
         if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
-            db_path = os.path.join(BASE_DIR, "patienten.db")
-            if os.path.exists(db_path):
+            if os.path.exists(DB_PATH):
                 try:
-                    backup_dir = os.path.join(BASE_DIR, "backups")
-                    os.makedirs(backup_dir, exist_ok=True)
                     # Wir behalten nur die letzten 5 Auto-Backups, um Platz zu sparen? 
                     # Hier erstmal einfaches Backup mit Timestamp
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    backup_path = os.path.join(backup_dir, f"autobackup_{timestamp}.db")
-                    shutil.copy2(db_path, backup_path)
+                    backup_path = os.path.join(BACKUPS_DIR, f"autobackup_{timestamp}.db")
+                    shutil.copy2(DB_PATH, backup_path)
                     print(f"[AutoBackup] Backup erstellt: {backup_path}")
                 except Exception as e:
                     print(f"[AutoBackup] Fehler: {e}")
@@ -1024,6 +944,6 @@ def create_main():
 
 if __name__ == "__main__":
     if "--crash-handler" in sys.argv:
-        crash_handler.main()
+        crash_handler.main() # Called as separate process
     else:
         create_main()

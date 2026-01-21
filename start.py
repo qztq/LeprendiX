@@ -11,9 +11,9 @@ import socket
 import shutil
 import glob
 import ctypes
-from config_loader import CONFIG
-import crash_handler
-import migrate_legacy
+from leprendix.core.config_loader import CONFIG
+from leprendix.utils import crash_handler
+from leprendix.utils import migrate_legacy
 
 # Sofort den Crash-Handler aktivieren, um Fehler beim Start/Splash abzufangen
 crash_handler.install_exception_handler()
@@ -444,12 +444,12 @@ class NeonTraceSplash:
 
 if __name__ == "__main__":
     if "--crash-handler" in sys.argv:
-        crash_handler.main()
+        crash_handler.main() # This is called as a separate process
         sys.exit(0)
         
     # Check für Migrations-Modus (Admin-Prozess)
     if "--migrate-cleanup" in sys.argv:
-        migrate_legacy.perform_cleanup()
+        migrate_legacy.perform_cleanup() # This is called as a separate process
         sys.exit(0)
 
     if not check_single_instance():

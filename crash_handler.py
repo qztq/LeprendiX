@@ -10,18 +10,9 @@ import traceback
 import logging
 import tempfile
 # Design-Konstanten (passend zu LeprendiX)
-COLOR_PRIMARY = "#2c3e50"
-COLOR_SECONDARY = "#34495e"
-COLOR_ACCENT = "#e74c3c" # Rot für Fehler
-COLOR_TEXT = "#ecf0f1"
-
-def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-BASE_DIR = get_base_path()
+from leprendix.core.paths import PROJECT_ROOT, LOGO_PATH
+from leprendix.gui.theme import COLOR_PRIMARY, COLOR_SECONDARY, COLOR_TEXT
+COLOR_ACCENT = "#e74c3c" # Red for errors
 
 def get_crash_file():
     app_name = "LeprendiX"
@@ -51,9 +42,9 @@ def restart_program(root):
         sys.exit(0)
     
     # Versuche start.py zu finden (Launcher)
-    script_to_run = os.path.join(BASE_DIR, "start.py")
+    script_to_run = os.path.join(PROJECT_ROOT, "start.py")
     if not os.path.exists(script_to_run):
-        script_to_run = os.path.join(BASE_DIR, "main.py")
+        script_to_run = os.path.join(PROJECT_ROOT, "main.py")
     
     if os.path.exists(script_to_run):
         try:
@@ -143,9 +134,8 @@ def main():
 
     # Icon laden falls vorhanden
     try:
-        icon_path = os.path.join(BASE_DIR, "logo.png")
-        if os.path.exists(icon_path):
-            img = tk.PhotoImage(file=icon_path)
+        if os.path.exists(LOGO_PATH):
+            img = tk.PhotoImage(file=LOGO_PATH)
             root.iconphoto(False, img)
     except:
         pass

@@ -1,0 +1,6 @@
+# leprendix/gui/theme.py
+COLOR_PRIMARY = "#2c3e50"
+COLOR_SECONDARY = "#34495e"
+COLOR_ACCENT = "#27ae60"
+COLOR_TEXT = "#ecf0f1"
+COLOR_HIGHLIGHT = "#3498db"

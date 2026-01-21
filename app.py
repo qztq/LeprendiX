@@ -3,9 +3,8 @@ from tkinter import ttk, messagebox, simpledialog
 import sqlite3
 import datetime
 from typing import Self
-from docx import Document
 import os
-import requests 
+import requests
 import subprocess 
 import sys
 import shutil
@@ -15,720 +14,25 @@ from docx.shared import Inches, Pt, Twips
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 import logging
 import threading
-from config_loader import CONFIG
+from leprendix.core.config_loader import CONFIG
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
-
-
-
-# --- HELPER FUNCTIONS FOR PATH RESOLUTION ---
-def resolve_data_path(relative_path):
-    """Resolves path for writable data (next to exe or source dir)."""
-    if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, relative_path)
-
-def resolve_resource_path(relative_path):
-    """Resolves path for read-only resources (bundled in exe or source dir)."""
-    # 1. Try bundled path (PyInstaller)
-    if hasattr(sys, '_MEIPASS'):
-        bundled_path = os.path.join(sys._MEIPASS, relative_path)
-        if os.path.exists(bundled_path):
-            return bundled_path
-    # 2. Fallback to data path
-    return resolve_data_path(relative_path)
-
-# --- KONFIGURATION ---
-DATABASE_NAME = resolve_data_path('patienten.db')
-TEMPLATE_FILE = resolve_resource_path('honorar_vorlage.docx') 
+from leprendix.core.paths import DB_PATH, TEMPLATE_PATH, BACKUPS_DIR
+from leprendix.db import queries
+from leprendix.services.os_utils import print_document_silently
+from leprendix.services.teamup import search_teamup_events
+from leprendix.services.doc_generator import fill_template
+from leprendix.gui.patient_status_checker import PatientStatusApp
 
 
 def start_gui():
     root = tk.Tk()
     app = HonorarGeneratorApp(root)
     root.mainloop()
-    
 
-def _ensure_status_column():
-    """
-    Stellt sicher, dass die Spalte 'invoiced_since_reset' in der patienten-Tabelle existiert.
-    Wird einmal beim Start aufgerufen.
-    """
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    # Check if table exists to avoid crash on first run
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patienten'")
-    if not cursor.fetchone():
-        conn.close()
-        return
-
-    try:
-        # Versuche, die Spalte zu lesen
-        cursor.execute("SELECT invoiced_since_reset FROM patienten LIMIT 1")
-    except sqlite3.OperationalError:
-        # Wenn die Spalte nicht existiert, füge sie hinzu
-        cursor.execute("ALTER TABLE patienten ADD COLUMN invoiced_since_reset INTEGER DEFAULT 0")
-        conn.commit()
-        logging.info("Spalte 'invoiced_since_reset' in patienten-Tabelle hinzugefügt.")
-
-    try:
-        cursor.execute("SELECT last_selected_kurznamen FROM patienten LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE patienten ADD COLUMN last_selected_kurznamen TEXT DEFAULT ''")
-        conn.commit()
-        logging.info("Spalte 'last_selected_kurznamen' zur patienten-Tabelle hinzugefügt.")
-    
-    
-    try:
-        cursor.execute("SELECT is_archived FROM patienten LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
-        conn.commit()
-        logging.info("Spalte 'is_archived' zur patienten-Tabelle hinzugefügt.")
-
-    try:
-        cursor.execute("CREATE TABLE IF NOT EXISTS blacklist (name TEXT PRIMARY KEY)")
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Fehler beim Erstellen der Blacklist-Tabelle: {e}")
-
-    finally:
-        conn.close()
-
-def _update_invoiced_status(patient_id, status=1):
-    """Setzt den Status eines Patienten auf 1 (Grün/Abgerechnet) oder 0 (Rot/Offen)."""
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE patienten SET invoiced_since_reset = ? WHERE id = ?", (status, patient_id))
-        conn.commit()
-        logging.info(f"Patient {patient_id} Honorarnoten-Status auf {status} gesetzt.")
-    except Exception as e:
-        logging.error(f"FEHLER beim Status-Update für Patient {patient_id}: {e}")
-    finally:
-        conn.close()
-        
-# Sicherstellen, dass die Spalte beim Start existiert
-_ensure_status_column()
-
-def print_document_silently(file_path):
-    """
-    Versucht, die angegebene Datei direkt an den Standarddrucker zu senden.
-    """
-    if not os.path.exists(file_path):
-        return False, "Datei zum Drucken nicht gefunden."
-
-    try:
-        if sys.platform.startswith('win'):
-            # Windows: Nutzt den 'print' Verb des Dateityps (oft dialoglos)
-            os.startfile(file_path, 'print')
-            return True, "Druckauftrag an Windows-Standarddrucker gesendet."
-            
-        elif sys.platform.startswith('darwin') or sys.platform.startswith('linux'):
-            # macOS/Linux: Nutzt 'lpr' (kann auf einigen Systemen einen Dialog auslösen)
-            subprocess.run(['lpr', file_path], check=True)
-            return True, "Druckauftrag via lpr (Linux/macOS) gesendet."
-            
-        else:
-            return False, f"Automatisches Drucken wird auf dem Betriebssystem '{sys.platform}' nicht unterstützt."
-            
-    except subprocess.CalledProcessError as e:
-        return False, f"Fehler beim LPR-Druckbefehl: {e}"
-    except Exception as e:
-        return False, f"Fehler beim direkten Drucken: {e}"
-
-def get_patient_data(search_name):
-    """Sucht Patienten und gibt ID und alle Adressfelder (inkl. Kilometergeld und letzte Leistungen) zurück."""
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    search_term = f'%{search_name}%'
-    # Wichtig: last_selected_kurznamen ist Spalte 13 (Index 12)
-    # Wichtig: invoiced_since_reset ist Spalte 14 (Index 13), wird hier nicht benötigt, aber später
-    
-    query = """
-    SELECT id, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, last_selected_kurznamen
-    FROM patienten 
-    WHERE (nachname LIKE ? OR vorname LIKE ?) AND (is_archived IS NULL OR is_archived = 0)
-    """
-    params = [search_term, search_term]
-    
-    if search_name.isdigit():
-        query += " OR (id = ? AND (is_archived IS NULL OR is_archived = 0))"
-        params.append(search_name)
-        
-    cursor.execute(query, params)
-    results = cursor.fetchall()
-    conn.close()
-    return results
-
-def save_last_selected_leistungen(patient_id, kurznamen_set):
-    """Speichert die Liste der zuletzt ausgewählten Kurznamen für einen Patienten in der DB."""
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    # Konvertiere das Set in einen String
-    kurznamen_str = ','.join(sorted(list(kurznamen_set)))
-    try:
-        cursor.execute("""
-        UPDATE patienten 
-        SET last_selected_kurznamen = ?
-        WHERE id = ?
-        """, (kurznamen_str, patient_id))
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Fehler beim Speichern der letzten Leistungen für Patient {patient_id}: {e}")
-    finally:
-        conn.close()
-
-def get_patient_leistungen(patient_id):
-    """Holt alle NICHT ABGERECHNETEN Leistungen für die GUI-Anzeige."""
-    # TODO: Muss später um 'WHERE abgerechnet_am IS NULL' erweitert werden
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag 
-    FROM leistungen 
-    WHERE patient_id = ? 
-    ORDER BY datum ASC, uhrzeit_von ASC
-    """, (patient_id,))
-    leistungen = cursor.fetchall()
-    conn.close()
-    return leistungen
-
-def get_patient_leistungen_for_template(patient_id):
-    """Holt NICHT ABGERECHNETE Leistungen (ohne ID) für die Word-Generierung."""
-    # TODO: Muss später um 'WHERE abgerechnet_am IS NULL' erweitert werden
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-    SELECT datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag 
-    FROM leistungen 
-    WHERE patient_id = ? 
-    ORDER BY datum ASC, uhrzeit_von ASC
-    """, (patient_id,))
-    leistungen = cursor.fetchall()
-    conn.close()
-    return leistungen
-
-def get_all_stammdaten_dict(archived=False):
-    """Holt alle Stammdaten aus der DB und gibt sie als Liste und Dict zurück."""
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    # NEU: Abhängig vom Flag archivierte oder aktive laden
-    if archived:
-        query = "SELECT kurzname, beschreibung, standard_betrag FROM stammdaten_leistungen WHERE is_archived = 1 ORDER BY kurzname"
-    else:
-        query = "SELECT kurzname, beschreibung, standard_betrag FROM stammdaten_leistungen WHERE is_archived = 0 ORDER BY kurzname"
-        
-    cursor.execute(query)
-    results = cursor.fetchall()
-    conn.close()
-    
-    stammdaten_list = [f"{r[0]} - {r[1]}" for r in results]
-    stammdaten_dict = {item: r[2] for item, r in zip(stammdaten_list, results)}
-    return stammdaten_list, stammdaten_dict
-
-def search_teamup_events(search_term, start_date=None, end_date=None, mode='standard'):
-    """
-    Sucht Teamup-Kalendereinträge basierend auf dem Titel/Notizen.
-    """
-    
-    # Lade Konfiguration dynamisch
-    api_key = CONFIG.get('TEAMUP_API_KEY', '')
-    calendar_id = CONFIG.get('TEAMUP_CALENDAR_ID', '')
-    
-    clean_api_key = api_key.strip()
-    base_url = f"https://api.teamup.com/{calendar_id}/events"
-    
-    headers = {
-        'Teamup-Token': clean_api_key, 
-        'Accept': 'application/json'
-    }
-    
-    # BEGRENZUNG DES ZEITRAUMS
-    if start_date is None:
-        start_date = (datetime.date.today() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
-    if end_date is None:
-        end_date = (datetime.date.today() + datetime.timedelta(days=30)).strftime('%Y-%m-%d')
-        
-    params = {
-        'startDate': start_date,
-        'endDate': end_date
-    }
-    
-    try:
-        response = requests.get(base_url, headers=headers, params=params)
-        response.raise_for_status()  
-        
-        data = response.json()
-        
-        matching_events = []
-        term = search_term.lower()
-
-        for event in data.get('events', []):
-            title = event.get('title', '')
-            notes = event.get('notes', '')
-            is_match = False
-
-            if mode == 'gemeinde':
-                # Suche nach Nachname UND (1x, 2x, 3x, 4x, 5x im Titel)
-                t_low = title.lower()
-                has_name = term in t_low or term in notes.lower()
-                has_x = any(x in t_low for x in ["1x", "2x", "3x", "4x", "5x"])
-                
-                if has_name and has_x:
-                    is_match = True
-            else:
-                if term in title.lower() or term in notes.lower():
-                    is_match = True
-            
-            if is_match:
-                
-                start_iso = event.get('start_dt')
-                end_iso = event.get('end_dt')
-                
-                if start_iso and end_iso:
-                    start_iso_clean = start_iso.replace('Z', '+00:00')
-                    end_iso_clean = end_iso.replace('Z', '+00:00')
-                    
-                    start_dt = datetime.datetime.fromisoformat(start_iso_clean)
-                    end_dt = datetime.datetime.fromisoformat(end_iso_clean)
-                    
-                    event_tuple = (
-                        title, 
-                        start_dt.strftime('%d.%m.%Y'),
-                        start_dt.strftime('%H:%M'),
-                        end_dt.strftime('%H:%M')
-                    )
-                    matching_events.append(event_tuple)
-                    
-        return matching_events
-        
-    except requests.exceptions.HTTPError as e:
-        error_details = response.text if hasattr(response, 'text') else str(e)
-        messagebox.showerror("API Fehler", f"HTTP-Fehler beim Abruf der Teamup-Daten: {e}\nDetails: {error_details}")
-        return []
-    except Exception as e:
-        messagebox.showerror("Fehler", f"Teamup API-Fehler: {e}")
-        return []
-
-def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_block, ausstellungs_datum, ueberweisung=True): 
-    """Füllt die Word-Vorlage mit den Patientendaten und Leistungen und speichert sie."""
-    
-    # Imports müssen am Anfang der Datei sein, aber wir stellen sicher, dass Pt verfügbar ist
-    from docx.shared import Pt 
-    from docx.enum.text import WD_UNDERLINE 
-    import os
-    import datetime
-    from docx import Document
-    
-    # --- Einrückungs-Konstanten ---
-    LEISTUNG_INDENT_SIZE = Pt(70)  
-    SPACE_AFTER_LEISTUNG_BLOCK = Pt(12) 
-
-    # ... (Datenextraktion bleibt unverändert) ...
-    # Unpacking für 13 Elemente (ohne ueberweisung in DB)
-    _, vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort, anrede, versicherungsnummer, diagnose, kilometergeld, _ = patient_data_tuple
-    
-    # Annahme: get_patient_leistungen_for_template, TEMPLATE_FILE, OUTPUT_FOLDER sind hier verfügbar
-    leistungen_liste = get_patient_leistungen_for_template(patient_id)
-    
-    heute = ausstellungs_datum # Verwendet das übergebene Datum
-    
-    # Sicherheitscheck: Falls ueberweisung None ist, Standard auf True setzen
-    if ueberweisung is None:
-        ueberweisung = True
-    logging.info(f"Generiere Rechnung. Überweisung-Modus: {ueberweisung}")
-
-    try:
-        document = Document(TEMPLATE_FILE)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Die Vorlagendatei '{TEMPLATE_FILE}' wurde nicht gefunden.")
-    
-    total_betrag = 0.0
-    
-    if not document.paragraphs:
-        raise ValueError("Word-Vorlage enthält keine Paragraphen.")
-
-    invoice_number_paragraph = document.paragraphs[0]
-            
-    # Statische Platzhalter
-    replacements = {
-        '{{Rechnungsnummer}}': template_data['BHAG_NUMMER'], 
-        '{{Anrede}}': anrede, 
-        '{{Nachname}}': nachname,
-        '{{Vorname}}': vorname,
-        '{{Straße}}': strasse,
-        '{{Hausnummer}}': hausnummer,
-        '{{Adresszusatz}}': adresszusatz or '',
-        '{{Postleitzahl}}': plz,
-        '{{Stadt}}': ort,
-        '{{Versicherungsnummer}}': versicherungsnummer,
-        '{{Datum_Austellung}}': heute,
-        '{{Diagnose}}': diagnose
-    }
-    
-    # --- 0. Globale Formatierung (Vorbereitung und HONORARNOTE Sonderfall) ---
-    
-    HONORARNOTE_PARAGRAPH = None
-    ORT_DATUM_PARAGRAPH = None
-    DIAGNOSE_PLACEHOLDER_PARAGRAPH = None 
-    
-    for i, p in enumerate(document.paragraphs):
-        
-        if 'H O N O R A R N O T E' in p.text:
-            HONORARNOTE_PARAGRAPH = p
-            
-        if 'Mödling, {{Datum_Austellung}}' in p.text:
-            ORT_DATUM_PARAGRAPH = p
-            
-        if '{{Diagnose}}' in p.text:
-            DIAGNOSE_PLACEHOLDER_PARAGRAPH = p
-            
-        # Setze die Standardgröße 12pt global
-        for run in p.runs:
-            run.font.size = Pt(12) 
-            
-    # Spezielle Formatierung für HONORARNOTE anwenden
-    if HONORARNOTE_PARAGRAPH:
-        for run in HONORARNOTE_PARAGRAPH.runs:
-            run.font.size = Pt(18)
-        HONORARNOTE_PARAGRAPH.paragraph_format.space_after = Pt(10) 
-        HONORARNOTE_PARAGRAPH.paragraph_format.space_before = Pt(0) 
-        HONORARNOTE_PARAGRAPH.paragraph_format.line_spacing = 1.0 
-
-
-    # --- 1. Rechnungsnummer ersetzen und Gemeinde-Block einfügen ---
-    
-    if '{{Rechnungsnummer}}' in invoice_number_paragraph.text:
-        invoice_number_paragraph.text = invoice_number_paragraph.text.replace('{{Rechnungsnummer}}', template_data['BHAG_NUMMER'])
-        del replacements['{{Rechnungsnummer}}']
-        
-    if add_gemeinde_block:
-        # 1. Ziel-Index festlegen (direkt unter der Rechnungsnummer)
-        target_index = 1 
-        try:
-            target_p = document.paragraphs[target_index]
-        except IndexError:
-            target_p = document.paragraphs[-1]
-
-        # 2. Einen neuen Absatz genau dort einfügen
-        new_p = target_p.insert_paragraph_before()
-        new_p.paragraph_format.line_spacing = 1.0
-        new_p.paragraph_format.space_before = Pt(0)
-        new_p.paragraph_format.space_after = Pt(0)
-
-        # 3. Den Inhalt zusammenbauen:
-        # Eine Leerzeile oben (\n)
-        # Dann die Adresse
-        # Dann vier Leerzeilen unten (\n\n\n\n)
-        full_text = (
-            "\n\n\n" +
-            "Gemeinde Wiener Neudorf\n" +
-            "Europaplatz 2\n" +
-            "2351 Wiener Neudorf" +
-            "\n\n\n\n\n"
-        )
-
-        # 4. Den Text dem Absatz hinzufügen und fett/12pt machen
-        run = new_p.add_run(full_text)
-        run.bold = True
-        run.font.size = Pt(12)
-
-    # --- 2. Dynamische Leistungsblock-Logik und restliche Ersetzung (mit Seitenumbruch-Schutz) ---
-    
-    start_tag = '{{LEISTUNGSBLOCK_START}}'
-    end_tag = '{{LEISTUNGSBLOCK_ENDE}}'
-    
-    block_start_paragraph = None
-    block_end_paragraph = None
-    block_paragraphs = []
-    
-    in_block = False 
-    
-    # Text-Ersetzung und Block-Suche in einem Durchlauf
-    for p in document.paragraphs:
-        
-        if p is HONORARNOTE_PARAGRAPH or p is invoice_number_paragraph or p is DIAGNOSE_PLACEHOLDER_PARAGRAPH:
-            continue
-            
-        # Statische Platzhalter ersetzen
-        for key, value in replacements.items():
-            if key in p.text:
-                p.text = p.text.replace(key, value)
-        
-        # Block-Logik: Musterblock finden
-        if start_tag in p.text:
-            block_start_paragraph = p
-            in_block = True
-            continue
-        
-        if end_tag in p.text:
-            block_end_paragraph = p
-            break
-            
-        if in_block:
-            block_paragraphs.append(p)
-
-    # Generieren des gesamten Leistungs-Textes
-    gesamt_leistungs_text = ""
-    
-    if block_start_paragraph and block_end_paragraph:
-        
-        template_text = '\n'.join([p.text for p in block_paragraphs])
-        
-        for datum_db, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag in leistungen_liste: 
-            
-            datum_formatiert = datetime.datetime.strptime(datum_db, '%Y-%m-%d').strftime('%d.%m.%Y')
-            datum_uhrzeit_text = f"{datum_formatiert}, von {uhrzeit_von} bis {uhrzeit_bis}" 
-            
-            summe_leistung = einzelbetrag 
-            total_betrag += summe_leistung
-            
-            full_description = beschreibung
-            if ' - ' in full_description:
-                 full_description = full_description.split(' - ', 1)[-1] 
-            
-            leistung_block = template_text.replace('{{LEISTUNG_DATUM}}', datum_uhrzeit_text)
-            leistung_block = leistung_block.replace('{{LEISTUNG_BESCHREIBUNG}}', full_description) 
-            leistung_block = leistung_block.replace('{{LEISTUNG_SUMME}}', f"€ {summe_leistung:.2f}")
-            
-            # Trennlinie hinzufügen, um später den Abstand zu setzen
-            leistung_block += '[[ENDE_BLOCK]]' + '\n\n' 
-            
-            gesamt_leistungs_text += leistung_block 
-            
-        if gesamt_leistungs_text:
-            
-            current_line_is_leistung = False
-            lines_of_last_block = [] # Speichert die Zeilen des letzten vollständigen Blocks
-            
-            for zeile in gesamt_leistungs_text.split('\n'):
-                content = zeile.strip() 
-                
-                if not content:
-                    continue
-
-                is_end_block_marker = '[[ENDE_BLOCK]]' in content
-                
-                # Wir sammeln die Zeilen des aktuellen Blocks, um später keep_with_next zu setzen
-                if not is_end_block_marker:
-                    lines_of_last_block.append(content)
-
-
-                if content.startswith("Leistung:"):
-                    current_line_is_leistung = True
-                elif content.startswith("Datum:") or content.startswith("Betrag:"):
-                    current_line_is_leistung = False
-                
-                
-                # Fügen Sie den Paragraphen ein
-                if content:
-                    
-                    # Wenn wir den Ende-Marker des Blocks sehen, ignorieren wir ihn für den Inhalt
-                    if is_end_block_marker:
-                        content = content.replace('[[ENDE_BLOCK]]', '').strip()
-                        if not content:
-                            continue
-
-                    p_new = block_start_paragraph.insert_paragraph_before(content)
-                    
-                    # Allgemeine Formatierung
-                    p_new.paragraph_format.space_before = Pt(0)
-                    p_new.paragraph_format.space_after = Pt(0)
-                    p_new.paragraph_format.line_spacing = 1.0
-                    
-                    for run in p_new.runs:
-                        run.font.size = Pt(12)
-                    
-                    # Korrektur für Leistungs-Einzug (hängender Einzug)
-                    if current_line_is_leistung:
-                        p_new.paragraph_format.left_indent = LEISTUNG_INDENT_SIZE      
-                        p_new.paragraph_format.first_line_indent = -LEISTUNG_INDENT_SIZE 
-
-                    
-                    # 💥 NEUE LOGIK FÜR SEITENUMBRUCH-SCHUTZ:
-                    # Der Schutz muss für alle Zeilen eines Blocks aktiviert werden, AUSSER für die letzte Zeile.
-                    if not is_end_block_marker:
-                        # Setze Keep_with_next für alle Zeilen, die nicht die letzte Zeile des Blocks sind.
-                        p_new.paragraph_format.keep_with_next = True
-                    else:
-                        # Für die letzte Zeile (mit dem ENDE_BLOCK Marker) setzen wir es auf False
-                        p_new.paragraph_format.keep_with_next = False
-                        
-                        # Setze Abstand nach dem Leistungsblock (nach "Betrag:")
-                        p_new.paragraph_format.space_after = SPACE_AFTER_LEISTUNG_BLOCK
-                        
-                        # Setze den Block zurück für den nächsten Durchgang
-                        lines_of_last_block = []
-
-
-            # Entferne die alten Platzhalter-Paragraphen
-            block_start_paragraph.text = '' 
-            for p in block_paragraphs:
-                p._element.getparent().remove(p._element)
-            block_end_paragraph.text = ''
-        else:
-             block_start_paragraph.text = '' 
-             for p in block_paragraphs:
-                 p._element.getparent().remove(p._element)
-             block_end_paragraph.text = ''
-
-
-    # Ersetzen des Gesamtbetrags
-    total_betrag_str = f"{total_betrag:.2f}"
-    
-    for p in document.paragraphs:
-        
-        if '{{Gesamt_Betrag}}' in p.text:
-            
-            original_text = p.text
-            p.text = '' 
-            
-            parts = original_text.split('{{Gesamt_Betrag}}')
-            
-            run_label = p.add_run(parts[0]) 
-            run_label.bold = True
-            run_label.font.size = Pt(12)
-            
-            run_value = p.add_run(total_betrag_str) 
-            run_value.bold = True
-            run_value.font.underline = WD_UNDERLINE.DOUBLE 
-            run_value.font.size = Pt(12)
-            
-            if len(parts) > 1 and parts[1]:
-                run_after = p.add_run(parts[1])
-                run_after.bold = True 
-                run_after.font.size = Pt(12)
-        
-        elif 'Gesamt:' in p.text:
-            for run in p.runs:
-                run.bold = True
-                run.font.size = Pt(12)
-
-    
-    # --- 3. Letzte Zeilenabstands-Korrektur (Finaler Sweep) ---
-    for p in document.paragraphs:
-        if p is not HONORARNOTE_PARAGRAPH:
-            p.paragraph_format.space_before = Pt(0)
-            if p.paragraph_format.space_after is None: 
-                p.paragraph_format.space_after = Pt(0)
-            p.paragraph_format.line_spacing = 1.0
-
-    # --- 3b. Überweisungstext Logik (NEU) ---
-    # Wenn Überweisung = NEIN (0), ersetze den Bank-Block durch "Betrag dankend erhalten!"
-    if not ueberweisung:
-        for p in document.paragraphs:
-            # Suche nach dem Standard-Text aus der Vorlage
-            if "Bitte überweisen Sie den Betrag" in p.text:
-                p.text = "" # Text löschen
-                run = p.add_run("Betrag dankend erhalten!")
-                run.bold = True
-                run.font.size = Pt(12)
-            # Falls IBAN/BIC in eigenen Paragraphen stehen oder Reste davon da sind
-            if "BIC GIBA" in p.text or "IBAN AT73" in p.text:
-                p.text = ""
-
-
-    # --- 4. Leerzeilen an den gewünschten Stellen einfügen (Post-Processing) ---
-    
-    def insert_empty_line(target_p):
-        """Fügt eine leere Zeile (Paragraph) VOR dem Ziel-Paragraph ein."""
-        # Korrigierte Logik, da insert_paragraph_after nicht existiert
-        try:
-            p_new = target_p.insert_paragraph_before('')
-            
-            p_new.paragraph_format.space_before = Pt(0)
-            p_new.paragraph_format.space_after = Pt(0)
-            p_new.paragraph_format.line_spacing = 1.0
-            p_new.add_run('').font.size = Pt(12) 
-            
-        except (ValueError, IndexError, AttributeError):
-            pass
-
-    # Wichtig: Die Leerzeilen werden jetzt VOR dem Paragraphen eingefügt.
-    # Wenn Sie eine Leerzeile NACH dem Paragraphen wünschen, müssen Sie
-    # den nächsten Paragraphen finden und DIESEM die Leerzeile VORANSTELLEN.
-    
-    # Hier verwenden wir die einfache Methode, die Leerzeile VOR dem Block einzufügen
-    if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
-        insert_empty_line(DIAGNOSE_PLACEHOLDER_PARAGRAPH)
-        
-    if HONORARNOTE_PARAGRAPH:
-        # Fügt eine Leerzeile VOR der Honorarnote ein (was nicht gewünscht ist).
-        # Lassen Sie dies am besten weg, da die Abstände (space_after) am Anfang
-        # des Dokuments besser gesteuert werden sollten.
-        pass # insert_empty_line(HONORARNOTE_PARAGRAPH)
-        
-    if ORT_DATUM_PARAGRAPH:
-        insert_empty_line(ORT_DATUM_PARAGRAPH)
-
-    
-    # 💥 --- 5. Final Diagnosis Format Override (DIE ULTIMATIVE KORREKTUR!) --- 💥
-    if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
-        
-        target_p = DIAGNOSE_PLACEHOLDER_PARAGRAPH
-        p_element = target_p._element
-        
-        diagnosis_label = "Diagnose:   "
-        diagnosis_value = replacements.get('{{Diagnose}}', diagnose)
-        
-        # 1. Neuen Paragraphen VOR dem alten Platzhalter einfügen
-        p_new = target_p.insert_paragraph_before('')
-        
-        # 2. Formatierung für den Paragraphen festlegen (Abstände und neutraler Stil)
-        p_new.paragraph_format.left_indent = Pt(0)      
-        p_new.paragraph_format.first_line_indent = Pt(0) 
-        p_new.paragraph_format.space_before = Pt(0)
-        p_new.paragraph_format.space_after = Pt(0)
-        p_new.paragraph_format.line_spacing = 1.0
-        
-        # 3. Text in zwei Runs einfügen und formatieren
-        
-        # Run für das Label ("Diagnose: ")
-        run_label = p_new.add_run(diagnosis_label)
-        run_label.bold = True
-        run_label.font.size = Pt(12)
-        
-        # Run für den Wert (die Diagnose)
-        run_value = p_new.add_run(diagnosis_value)
-        run_value.bold = True 
-        run_value.font.size = Pt(12) 
-        
-        # 4. Den alten Platzhalter-Paragraphen KOMPLETT aus dem Dokument entfernen
-        p_element.getparent().remove(p_element)
-        
-        # Setze den Platzhalter auf den neuen Paragraphen, um die Leerzeile in Schritt 4 zu erhalten
-        DIAGNOSE_PLACEHOLDER_PARAGRAPH = p_new
-        
-    # --- 6. Footer Zusammenhalten (Keep With Next) ---
-    # Verhindert, dass der Block ab "Gesamt:" durch einen Seitenumbruch getrennt wird.
-    footer_started = False
-    for i, p in enumerate(document.paragraphs):
-        if 'Gesamt:' in p.text:
-            footer_started = True
-        
-        if footer_started:
-            # keep_with_next für alle Zeilen bis zur vorletzten setzen
-            if i < len(document.paragraphs) - 1:
-                p.paragraph_format.keep_with_next = True
-
-
-    # --- Speichern des Dokuments ---
-    patient_folder_name = f"{nachname} {vorname}"
-    
-    output_folder = os.path.expanduser(CONFIG.get('PATIENT_BASE_DIR'))
-    patient_output_path = os.path.join(output_folder, patient_folder_name)
-    os.makedirs(patient_output_path, exist_ok=True)
-    
-    output_filename = f"Honorarnote Krankenkasse {template_data['BHAG_NUMMER']}.docx"
-    output_path = os.path.join(patient_output_path, output_filename)
-
-    document.save(output_path)
-    return output_path
+# =====================================================================
+#  MAIN APPLICATION CLASS
+# =====================================================================
 
 class HonorarGeneratorApp:
     def __init__(self, root):
@@ -821,14 +125,12 @@ class HonorarGeneratorApp:
 
     def on_closing(self):
         if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
-            if os.path.exists(DATABASE_NAME):
+            if os.path.exists(DB_PATH):
                 try:
-                    base_dir = os.path.dirname(DATABASE_NAME)
-                    backup_dir = os.path.join(base_dir, "backups")
-                    os.makedirs(backup_dir, exist_ok=True)
+                    os.makedirs(BACKUPS_DIR, exist_ok=True)
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    backup_path = os.path.join(backup_dir, f"autobackup_{timestamp}.db")
-                    shutil.copy2(DATABASE_NAME, backup_path)
+                    backup_path = os.path.join(BACKUPS_DIR, f"autobackup_{timestamp}.db")
+                    shutil.copy2(DB_PATH, backup_path)
                     logging.info(f"[AutoBackup] Backup erstellt: {backup_path}")
                 except Exception as e:
                     logging.error(f"[AutoBackup] Fehler: {e}")
@@ -870,7 +172,7 @@ class HonorarGeneratorApp:
    
     def _get_invoice_sequence_data(self):
         """Holt die aktuelle Folgenummer, Jahr und Monat aus der Einstellungen-Tabelle."""
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         data = {}
         now = datetime.datetime.now()
@@ -901,7 +203,7 @@ class HonorarGeneratorApp:
 
     def _update_invoice_sequence_data(self, key, value):
         """Aktualisiert oder fügt einen Wert in der Einstellungen-Tabelle ein."""
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             # Versucht, den Wert zu aktualisieren (UPDATE OR IGNORE ist sicherer)
@@ -1239,8 +541,8 @@ class HonorarGeneratorApp:
             self._update_invoice_sequence_data('last_invoice_path', output_path)
             self._update_invoice_sequence_data('last_invoice_patient_id', patient_id)
 
-            # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
-            _update_invoiced_status(patient_id, 1)
+            # Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
+            queries.update_invoiced_status(patient_id, 1)
 
             self.set_status(f"Honorarnote erstellt: {output_path}")
             
@@ -1289,8 +591,8 @@ class HonorarGeneratorApp:
             success, message = print_document_silently(output_path)
             
             if success:
-                # NEU: Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
-                _update_invoiced_status(self.patient_data[0], 1)
+                # Setze den Status des Patienten auf "abgerechnet" (1 = Grün)
+                queries.update_invoiced_status(self.patient_data[0], 1)
                 
                 self.set_status(f"Honorarnote gedruckt. {message}")
                 # TODO: Hier Funktion zum Markieren der Leistungen als "abgerechnet" aufrufen
@@ -1350,7 +652,7 @@ class HonorarGeneratorApp:
 
             # 4. Patientenstatus zurücksetzen (auf 0 = Rot/Offen)
             if last_patient_id:
-                _update_invoiced_status(int(last_patient_id), 0)
+                queries.update_invoiced_status(int(last_patient_id), 0)
                 logging.info(f"Patientenstatus für ID {last_patient_id} auf 'offen' zurückgesetzt.")
 
             messagebox.showinfo("Erfolg", "Die letzte Honorarnote wurde widerrufen.")
@@ -1476,7 +778,6 @@ class HonorarGeneratorApp:
         ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
         ttk.Button(search_frame, text="Felder leeren", command=self.reset_patient_form).grid(row=0, column=3, padx=5, pady=5)
         ttk.Button(search_frame, text="♻️ Archiv durchsuchen", command=self.open_archive_manager).grid(row=0, column=4, padx=5, pady=5)
-        
         self.patient_id_to_edit = None
 
         fields = [
@@ -1564,7 +865,7 @@ class HonorarGeneratorApp:
         lb.config(yscrollcommand=scroll.set)
         
         # Daten laden
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT id, vorname, nachname FROM patienten WHERE is_archived = 1 ORDER BY nachname")
         archived_patients = cursor.fetchall()
@@ -1583,7 +884,7 @@ class HonorarGeneratorApp:
             
             if messagebox.askyesno("Reaktivieren", f"Möchten Sie '{folder_name}' reaktivieren?\nDer Ordner wird aus dem Archiv zurückverschoben."):
                 # 1. DB Update
-                conn = sqlite3.connect(DATABASE_NAME)
+                conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
                 cursor.execute("UPDATE patienten SET is_archived = 0 WHERE id = ?", (pid,))
                 
@@ -1649,7 +950,7 @@ class HonorarGeneratorApp:
             self.set_status("Keine Termine im Zeitraum gefunden.")
             return
 
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT nachname FROM patienten WHERE is_archived = 0 OR is_archived IS NULL")
         db_lastnames = [r[0].strip().lower() for r in cursor.fetchall() if r[0] and r[0].strip()]
@@ -1731,7 +1032,7 @@ class HonorarGeneratorApp:
         term = simpledialog.askstring("Blacklist", "Begriff für Blacklist eingeben (z.B. 'Meeting', 'Urlaub'):", initialvalue=name_part, parent=self.root)
         
         if term:
-            conn = sqlite3.connect(DATABASE_NAME)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             try:
                 cursor.execute("INSERT OR IGNORE INTO blacklist (name) VALUES (?)", (term.strip(),))
@@ -1752,7 +1053,7 @@ class HonorarGeneratorApp:
             messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff ein.")
             return
             
-        results = get_patient_data(search_term) 
+        results = queries.get_patient_data(search_term) 
         
         if not results:
             self.reset_patient_form()
@@ -1930,7 +1231,7 @@ class HonorarGeneratorApp:
             messagebox.showerror("Fehler", "Kilometergeld muss eine gültige Zahl sein.")
             return
 
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         try:
@@ -2011,7 +1312,7 @@ class HonorarGeneratorApp:
     
     def _delete_patient_from_db(self, patient_id):
         """Löscht den Patienten und seine Leistungen aus der Datenbank."""
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             # 1. Alle Leistungen löschen (WICHTIG für Datenintegrität)
@@ -2051,7 +1352,7 @@ class HonorarGeneratorApp:
     # --- HILFSFUNKTIONEN FÜR LEISTUNGEN --- 
     def _delete_all_patient_leistungen(self, patient_id):
         """Löscht ALLE Leistungen des angegebenen Patienten ohne GUI-Interaktion."""
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             cursor.execute("DELETE FROM leistungen WHERE patient_id = ?", (patient_id,))
@@ -2096,7 +1397,7 @@ class HonorarGeneratorApp:
 
     def add_leistung_to_db(self, patient_id, datum_str, time_from, time_to, kurzname, standard_betrag, manual_betrag, use_manual_override, km_geld, custom_description=None):
         """Fügt eine einzelne Leistung in die DB ein."""
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
             datum_db = datetime.datetime.strptime(datum_str, '%d.%m.%Y').strftime('%Y-%m-%d')
@@ -2126,7 +1427,7 @@ class HonorarGeneratorApp:
 
     def _insert_multiple_leistungen(self, patient_id, events_list):
         """Fügt mehrere Leistungen aus Teamup-Einträgen in die DB ein."""
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         total_success_count = 0
         if self.use_km_money_var.get():
@@ -2350,7 +1651,7 @@ class HonorarGeneratorApp:
         self.stammdaten_combo.pack(side=tk.LEFT, padx=5)
         
         # Populate combo
-        stammdaten_list, _ = get_all_stammdaten_dict()
+        stammdaten_list, _ = queries.get_all_stammdaten_dict()
         self.stammdaten_combo['values'] = stammdaten_list
         
         ttk.Button(loader_frame, text="In Editor übernehmen", command=self.load_description_from_combo).pack(side=tk.LEFT, padx=5)
@@ -2673,7 +1974,7 @@ class HonorarGeneratorApp:
     def load_leistung_stammdaten_buttons(self):
 # ... (Rest der Klasse bleibt unverändert)
         """Lädt die Stammdaten und befüllt den Button-Bereich."""
-        stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
+        stammdaten_list, stammdaten_dict = queries.get_all_stammdaten_dict()
         self.stammdaten_betraege = stammdaten_dict 
         
         # Update Combobox im Editor
@@ -2731,7 +2032,7 @@ class HonorarGeneratorApp:
         self._reset_leistung_selection()
 
         patient_id = self.patient_data[0]
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         # 2. Letzte Auswahl abrufen (Index 12)
@@ -2822,7 +2123,7 @@ class HonorarGeneratorApp:
                     success_count += 1
             
             # Speichere die aktuelle Auswahl für diesen Patienten
-            save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
+            queries.save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
 
 
         if success_count > 0:
@@ -2850,7 +2151,7 @@ class HonorarGeneratorApp:
 
         if total_success_count > 0:
             # Speichere die aktuelle Auswahl für diesen Patienten
-            save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
+            queries.save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
             self.set_status(f"{total_success_count} Leistung(en) für Patient {self.patient_data[2]} erfolgreich hinzugefügt.")
             self.update_leistung_list()
             self.root.focus_force()
@@ -2876,7 +2177,7 @@ class HonorarGeneratorApp:
 
         if insertion_success_count > 0:
             # Speichere die aktuelle Auswahl für diesen Patienten
-            save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
+            queries.save_last_selected_leistungen(patient_id, self.selected_leistungs_kurznamen)
             self.set_status(f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
             self.update_leistung_list()
             self.root.focus_force()
@@ -2893,7 +2194,7 @@ class HonorarGeneratorApp:
             return
 
         patient_id = self.patient_data[0]
-        leistungen = get_patient_leistungen(patient_id)
+        leistungen = queries.get_patient_leistungen(patient_id)
 
         self.leistung_tree.delete(*self.leistung_tree.get_children())
         total_sum = 0.0
@@ -2935,7 +2236,7 @@ class HonorarGeneratorApp:
             return
 
         leistung_id = self.selected_leistung_id
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("""
         SELECT datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag 
@@ -3007,7 +2308,7 @@ class HonorarGeneratorApp:
             if len(time_from_str) < 5 or len(time_to_str) < 5 or ":" not in time_from_str:
                 raise ValueError("Uhrzeit muss im Format HH:MM angegeben werden.")
 
-            conn = sqlite3.connect(DATABASE_NAME)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             
             # Aktualisiere die Beschreibung, da es sich nun um eine manuelle Bearbeitung handelt
@@ -3047,7 +2348,7 @@ class HonorarGeneratorApp:
 
         leistung_id = self.selected_leistung_id
         if messagebox.askyesno("Bestätigen", f"Sind Sie sicher, dass Sie die Leistung ID {leistung_id} löschen möchten?"):
-            conn = sqlite3.connect(DATABASE_NAME)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             try:
                 cursor.execute("DELETE FROM leistungen WHERE id = ?", (leistung_id,))
@@ -3165,7 +2466,7 @@ class HonorarGeneratorApp:
         # ... (Rest der Klasse bleibt unverändert)
         """Aktualisiert die Liste der Stammdaten."""
         self.stammdaten_listbox.delete(0, tk.END)
-        stammdaten_list, stammdaten_dict = get_all_stammdaten_dict()
+        stammdaten_list, stammdaten_dict = queries.get_all_stammdaten_dict()
         for item in stammdaten_list:
             betrag = stammdaten_dict[item]
             self.stammdaten_listbox.insert(tk.END, f"{item} (Standard: €{betrag:.2f})")
@@ -3244,7 +2545,7 @@ class HonorarGeneratorApp:
             messagebox.showwarning("Achtung", "Betrag muss eine gültige Zahl sein.")
             return
 
-        conn = sqlite3.connect(DATABASE_NAME)
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         try:
@@ -3288,7 +2589,7 @@ class HonorarGeneratorApp:
         kurzname = item_text.split(' - ')[0]
 
         if messagebox.askyesno("Bestätigen", f"Sind Sie sicher, dass Sie die Stammdatenleistung '{kurzname}' archivieren möchten?\nSie wird aus der aktiven Liste entfernt."):
-            conn = sqlite3.connect(DATABASE_NAME)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             try:
                 cursor.execute("UPDATE stammdaten_leistungen SET is_archived = 1 WHERE kurzname = ?", (kurzname,))
@@ -3312,7 +2613,7 @@ class HonorarGeneratorApp:
         kurzname = item_text.split(' - ')[0]
 
         if messagebox.askyesno("Bestätigen", f"Sind Sie sicher, dass Sie die Stammdatenleistung '{kurzname}' löschen möchten?"):
-            conn = sqlite3.connect(DATABASE_NAME)
+            conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             try:
                 cursor.execute("DELETE FROM stammdaten_leistungen WHERE kurzname = ?", (kurzname,))

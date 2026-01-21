@@ -3,24 +3,16 @@ import sqlite3
 import os
 import sys
 
-def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-DATABASE_NAME = os.path.join(get_base_path(), 'patienten.db')
+from leprendix.core.paths import DB_PATH
 
 def setup_database():
     """
     Erstellt die notwendigen SQLite-Tabellen (patienten, leistungen, stammdaten_leistungen).
     Fügt die neue Spalte 'kilometergeld' und 'last_selected_kurznamen' in die patienten-Tabelle ein.
     """
-    
-    conn = sqlite3.connect(DATABASE_NAME)
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
-    print(f"Datenbank wird eingerichtet oder aktualisiert: {DATABASE_NAME}")
+    print(f"Datenbank wird eingerichtet oder aktualisiert: {DB_PATH}")
 
     # 1. Patienten-Tabelle erstellen (mit neuer Spalte kilometergeld und last_selected_kurznamen)
     cursor.execute("""
@@ -123,8 +115,8 @@ def setup_database():
 if __name__ == "__main__":
     # Löschen Sie diese Zeile, wenn Sie NICHT jedes Mal eine komplett neue DB erstellen möchten!
     # try:
-    #     os.remove(DATABASE_NAME)
-    #     print(f"Vorherige Datenbank '{DATABASE_NAME}' gelöscht.")
+    #     os.remove(DB_PATH)
+    #     print(f"Vorherige Datenbank '{DB_PATH}' gelöscht.")
     # except FileNotFoundError:
     #     pass
         
