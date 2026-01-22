@@ -1561,27 +1561,93 @@ class HonorarGeneratorApp:
 
     def _process_scan_data(self, data):
         """Verarbeitet die empfangenen Daten im GUI-Thread."""
-        if hasattr(self, 'scan_dialog') and self.scan_dialog.winfo_exists():
-            self.scan_dialog.destroy()
+        if not hasattr(self, 'scan_dialog') or not self.scan_dialog.winfo_exists():
+            return
+
+        if "error" in data:
+            messagebox.showerror("Scan Fehler", data["error"], parent=self.scan_dialog)
+            return
+
+        # 1. Dialog Inhalt löschen (QR Code entfernen)
+        for widget in self.scan_dialog.winfo_children():
+            widget.destroy()
+            
+        self.scan_dialog.title("Scan Ergebnis - Überprüfung")
+        self.scan_dialog.geometry("500x650")
         
-        messagebox.showinfo("Scan Empfangen", "Daten vom Mobilgerät empfangen!")
+        main_frame = ttk.Frame(self.scan_dialog, padding=10)
+        main_frame.pack(fill='both', expand=True)
         
-        # Mapping von OCR-Keys zu GUI-Keys
+        ttk.Label(main_frame, text="Erkannte Daten (Bitte prüfen):", font=("Segoe UI", 12, "bold")).pack(pady=(0, 10))
+        
+        # Scrollable Frame für die Felder
+        canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Mapping definieren
         mapping = {
             "Vorname": "Vorname",
             "Nachname": "Nachname",
-            "PLZ": "PLZ"
+            "Versicherungsnummer": "Versicherungsnummer",
+            "Diagnose": "Diagnose",
+            "Straße": "Straße",
+            "Hausnummer": "Hausnummer",
+            "PLZ": "PLZ",
+            "Ort": "Ort"
         }
         
-        for k, v in data.items():
-            if k in mapping and v:
-                entry_key = mapping[k]
-                if entry_key in self.patient_entries:
-                    self.patient_entries[entry_key].delete(0, tk.END)
-                    self.patient_entries[entry_key].insert(0, v)
+        self.scan_entries = {}
         
+        for json_key, gui_label in mapping.items():
+            row = ttk.Frame(scrollable_frame)
+            row.pack(fill='x', pady=2)
+            ttk.Label(row, text=f"{gui_label}:", width=20).pack(side='left')
+            
+            entry = ttk.Entry(row)
+            entry.pack(side='left', fill='x', expand=True)
+            
+            # Daten einfüllen, falls vorhanden
+            if json_key in data:
+                entry.insert(0, data[json_key])
+                
+            self.scan_entries[gui_label] = entry
+            
         if "raw_text" in data:
-            logging.info(f"OCR Raw Text: {data['raw_text']}")
+            expander = ttk.Labelframe(scrollable_frame, text="Rohdaten (OCR)", padding=5)
+            expander.pack(fill='x', pady=10)
+            txt = tk.Text(expander, height=8, width=40, font=("Consolas", 8))
+            txt.pack(fill='both')
+            txt.insert("1.0", data["raw_text"])
+
+        # Buttons
+        btn_frame = ttk.Frame(self.scan_dialog, padding=10)
+        btn_frame.pack(fill='x')
+        
+        def do_import():
+            # Daten in das Hauptformular übertragen
+            for field, entry_widget in self.scan_entries.items():
+                val = entry_widget.get().strip()
+                if val and field in self.patient_entries:
+                    self.patient_entries[field].delete(0, tk.END)
+                    self.patient_entries[field].insert(0, val)
+            
+            messagebox.showinfo("Import", "Daten wurden in das Formular übernommen.")
+            self.scan_dialog.destroy()
+            
+        ttk.Button(btn_frame, text="❌ Verwerfen", command=self.scan_dialog.destroy).pack(side='left')
+        ttk.Button(btn_frame, text="✅ Daten übernehmen", command=do_import).pack(side='right')
 
     def open_scan_dialog(self):
         self.setup_mobile_server()

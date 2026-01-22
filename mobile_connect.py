@@ -6,6 +6,8 @@ import secrets
 import logging
 from flask import Flask, request, jsonify
 from PIL import Image
+import requests
+import io
 
 # Optional OCR support
 try:
@@ -103,35 +105,84 @@ class MobileServer:
             return jsonify({"status": "error", "message": str(e)}), 500
 
     def process_image(self, image):
-        """Performs basic OCR and keyword extraction."""
-        if not OCR_AVAILABLE:
-            return {"raw_text": "OCR not available on server.", "info": "Install pytesseract for text extraction."}
+        """Performs OCR using OCR.space API (Free) with fallback to local Tesseract."""
+        extracted_text = ""
         
+        # 1. Try OCR.space API (Free)
         try:
-            text = pytesseract.image_to_string(image, lang='deu+eng')
-            data = {"raw_text": text}
+            # Convert image to bytes for upload
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format='PNG')
+            img_byte_arr.seek(0)
+
+            payload = {
+                'apikey': 'helloworld', # Free demo key. For production, get a free key at ocr.space
+                'language': 'ger',
+                'isOverlayRequired': False
+            }
+            files = {
+                'file': ('scan.png', img_byte_arr, 'image/png')
+            }
+            
+            logging.info("Sending image to OCR.space API...")
+            response = requests.post('https://api.ocr.space/parse/image', 
+                                     files=files, 
+                                     data=payload, 
+                                     timeout=15)
+            
+            result = response.json()
+            
+            if result.get('IsErroredOnProcessing') == False:
+                parsed_results = result.get('ParsedResults')
+                if parsed_results:
+                    extracted_text = parsed_results[0].get('ParsedText', '')
+                    logging.info("OCR API success.")
+            else:
+                logging.warning(f"OCR API Error: {result.get('ErrorMessage')}")
+                
+        except Exception as e:
+            logging.error(f"OCR API Request failed: {e}")
+
+        # 2. Fallback to local Tesseract
+        if not extracted_text:
+            if OCR_AVAILABLE:
+                logging.info("Falling back to local Tesseract OCR...")
+                try:
+                    extracted_text = pytesseract.image_to_string(image, lang='deu+eng')
+                except Exception as e:
+                    logging.error(f"Local Tesseract failed: {e}")
+            else:
+                return {"error": "Kein Text erkannt. (API fehlgeschlagen & Tesseract nicht installiert)"}
+        
+        if not extracted_text:
+             return {"error": "Leeres Ergebnis vom OCR Scan."}
+
+        # 3. Parse Data
+        try:
+            data = {"raw_text": extracted_text}
             
             # Very basic keyword extraction logic
-            lines = text.split('\n')
+            lines = extracted_text.split('\n')
             for line in lines:
                 clean_line = line.strip()
                 if not clean_line: continue
                 
                 lower_line = clean_line.lower()
                 
-                # Heuristic parsing
-                if "vorname" in lower_line:
-                    parts = clean_line.split(":")
-                    if len(parts) > 1: data["Vorname"] = parts[1].strip()
-                
-                elif "nachname" in lower_line or "name" in lower_line:
-                    parts = clean_line.split(":")
-                    if len(parts) > 1: data["Nachname"] = parts[1].strip()
-                
-                elif "plz" in lower_line or "postleitzahl" in lower_line:
-                    import re
-                    match = re.search(r'\d{4}', clean_line)
-                    if match: data["PLZ"] = match.group(0)
+                # Heuristic parsing (Key: Value)
+                if ":" in clean_line:
+                    parts = clean_line.split(":", 1)
+                    key = parts[0].strip().lower()
+                    val = parts[1].strip()
+
+                    if "vorname" in key: data["Vorname"] = val
+                    elif "nachname" in key or "name" == key: data["Nachname"] = val
+                    elif "diagnose" in key: data["Diagnose"] = val
+                    elif "versicherungsnummer" in key or "svnr" in key: data["Versicherungsnummer"] = val
+                    elif "plz" in key: data["PLZ"] = val
+                    elif "ort" in key: data["Ort"] = val
+                    elif "straße" in key or "strasse" in key: data["Straße"] = val
+                    elif "hausnummer" in key: data["Hausnummer"] = val
             
             return data
         except Exception as e:
