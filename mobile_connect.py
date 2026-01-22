@@ -20,9 +20,10 @@ except ImportError:
     logging.warning("pytesseract not installed. OCR functionality will be limited.")
 
 class MobileServer:
-    def __init__(self, callback_function):
+    def __init__(self, callback_function, status_callback=None):
         self.app = Flask(__name__)
         self.callback = callback_function
+        self.status_callback = status_callback
         self.token = secrets.token_hex(16)
         self.port = 5000
         self.host_ip = self.get_local_ip()
@@ -107,6 +108,9 @@ class MobileServer:
             
         file = request.files['image']
         
+        if self.status_callback:
+            self.status_callback("Bild empfangen. Verarbeite...")
+
         try:
             image = Image.open(file.stream)
             extracted_data = self.process_image(image)

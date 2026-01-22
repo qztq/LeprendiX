@@ -1552,8 +1552,16 @@ class HonorarGeneratorApp:
     def setup_mobile_server(self):
         """Initialisiert und startet den Mobile-Server, falls noch nicht geschehen."""
         if not self.mobile_server:
-            self.mobile_server = mobile_connect.MobileServer(self.on_scan_received)
+            self.mobile_server = mobile_connect.MobileServer(self.on_scan_received, self.on_scan_status)
             self.mobile_server.start()
+
+    def on_scan_status(self, message):
+        """Callback für Status-Updates vom Server."""
+        self.root.after(0, lambda: self._update_scan_status(message))
+
+    def _update_scan_status(self, message):
+        if hasattr(self, 'scan_status_label') and self.scan_status_label.winfo_exists():
+            self.scan_status_label.config(text=message, foreground="blue")
 
     def on_scan_received(self, data):
         """Callback vom Server-Thread. Plant GUI-Update im Main-Thread."""
@@ -1669,9 +1677,15 @@ class HonorarGeneratorApp:
         ttk.Label(info_frame, text=f"IP:Port:  {self.mobile_server.host_ip}:{self.mobile_server.port}", font=("Consolas", 11, "bold")).pack()
         ttk.Label(info_frame, text=f"Token:    {self.mobile_server.token}", font=("Consolas", 10)).pack()
         
-        ttk.Button(self.scan_dialog, text="📸 Scan am Handy auslösen", command=self.mobile_server.trigger_scan).pack(pady=5)
+        def trigger_scan_action():
+            self.mobile_server.trigger_scan()
+            if hasattr(self, 'scan_status_label') and self.scan_status_label.winfo_exists():
+                self.scan_status_label.config(text="Scan angefordert! Bitte App prüfen...", foreground="blue")
+
+        ttk.Button(self.scan_dialog, text="📸 Scan am Handy auslösen", command=trigger_scan_action).pack(pady=5)
         
-        ttk.Label(self.scan_dialog, text="Warte auf Scan...", font=("Segoe UI", 10, "italic")).pack(pady=10)
+        self.scan_status_label = ttk.Label(self.scan_dialog, text="Warte auf Scan...", font=("Segoe UI", 10, "italic"))
+        self.scan_status_label.pack(pady=10)
         ttk.Button(self.scan_dialog, text="Abbrechen", command=self.scan_dialog.destroy).pack(pady=10)
 
     def open_archive_manager(self):
