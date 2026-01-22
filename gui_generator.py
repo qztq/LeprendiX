@@ -1,7 +1,8 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, Image, ImageTk
+from tkinter import ttk, messagebox, simpledialog
 import sqlite3
 import datetime
+from PIL import Image, ImageTk
 from typing import Self
 from docx import Document
 import os
@@ -1592,7 +1593,7 @@ class HonorarGeneratorApp:
         ttk.Label(self.scan_dialog, text="Scannen Sie den Code oder geben Sie die Daten manuell ein:", wraplength=350, justify="center").pack(pady=10)
         
         pil_img = self.mobile_server.get_qr_image().resize((300, 300), Image.Resampling.LANCZOS)
-        self.qr_photo = ImageTk.PhotoImage(pil_img)
+        self.qr_photo = ImageTk.PhotoImage(pil_img, master=self.scan_dialog)
         ttk.Label(self.scan_dialog, image=self.qr_photo).pack(pady=10)
         
         # NEU: Text-Anzeige für manuelle Eingabe in Flet App

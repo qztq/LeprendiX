@@ -288,6 +288,50 @@
   {
    "optionDest": "collect_submodules",
    "value": "geopy"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "pytesseract"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "flet"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "qrcode"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "pyzbar"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "flask"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "flet"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "pytesseract"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "pyzbar"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "qrcode"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "flask"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/mobile_connect.py;."
   }
  ],
  "nonPyinstallerOptions": {
