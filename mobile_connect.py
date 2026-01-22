@@ -1,0 +1,138 @@
+import threading
+import socket
+import qrcode
+import os
+import secrets
+import logging
+from flask import Flask, request, jsonify
+from PIL import Image
+
+# Optional OCR support
+try:
+    import pytesseract
+    # If tesseract is not in PATH, set it here:
+    # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    logging.warning("pytesseract not installed. OCR functionality will be limited.")
+
+class MobileServer:
+    def __init__(self, callback_function):
+        self.app = Flask(__name__)
+        self.callback = callback_function
+        self.token = secrets.token_hex(16)
+        self.port = 5000
+        self.host_ip = self.get_local_ip()
+        self.server_thread = None
+        self.running = False
+        
+        # Routes
+        self.app.add_url_rule('/upload', 'upload', self.handle_upload, methods=['POST'])
+        self.app.add_url_rule('/verify', 'verify', self.handle_verify, methods=['POST'])
+
+    def get_local_ip(self):
+        """Determines the local network IP address."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # Connect to a public DNS server to determine outgoing interface
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def start(self):
+        """Starts the Flask server in a background thread."""
+        if not self.running:
+            self.running = True
+            self.server_thread = threading.Thread(target=self._run_flask, daemon=True)
+            self.server_thread.start()
+            logging.info(f"Mobile Server started on {self.host_ip}:{self.port}")
+
+    def _run_flask(self):
+        # Suppress standard Flask logging to keep console clean
+        log = logging.getLogger('werkzeug')
+        log.setLevel(logging.ERROR)
+        # Run on 0.0.0.0 to be accessible from the network
+        self.app.run(host='0.0.0.0', port=self.port, use_reloader=False)
+
+    def get_qr_image(self):
+        """Generates a QR code containing IP, Port, and Session Token."""
+        # Format: IP:PORT|TOKEN
+        data = f"{self.host_ip}:{self.port}|{self.token}"
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(data)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        return img
+
+    def handle_verify(self):
+        """Endpoint for the app to verify the QR code token."""
+        try:
+            req_data = request.json
+            req_token = req_data.get('token')
+            if req_token == self.token:
+                return jsonify({"status": "ok", "message": "Connected to LeprendiX"})
+            return jsonify({"status": "error", "message": "Invalid Token"}), 403
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+
+    def handle_upload(self):
+        """Endpoint to receive the scanned image."""
+        if 'token' not in request.form or request.form['token'] != self.token:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+            
+        if 'image' not in request.files:
+            return jsonify({"status": "error", "message": "No image part"}), 400
+            
+        file = request.files['image']
+        
+        try:
+            image = Image.open(file.stream)
+            extracted_data = self.process_image(image)
+            
+            # Notify GUI via callback (runs in Flask thread)
+            if self.callback:
+                self.callback(extracted_data)
+                
+            return jsonify({"status": "success", "data": extracted_data})
+        except Exception as e:
+            logging.error(f"Error processing scan: {e}")
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    def process_image(self, image):
+        """Performs basic OCR and keyword extraction."""
+        if not OCR_AVAILABLE:
+            return {"raw_text": "OCR not available on server.", "info": "Install pytesseract for text extraction."}
+        
+        try:
+            text = pytesseract.image_to_string(image, lang='deu+eng')
+            data = {"raw_text": text}
+            
+            # Very basic keyword extraction logic
+            lines = text.split('\n')
+            for line in lines:
+                clean_line = line.strip()
+                if not clean_line: continue
+                
+                lower_line = clean_line.lower()
+                
+                # Heuristic parsing
+                if "vorname" in lower_line:
+                    parts = clean_line.split(":")
+                    if len(parts) > 1: data["Vorname"] = parts[1].strip()
+                
+                elif "nachname" in lower_line or "name" in lower_line:
+                    parts = clean_line.split(":")
+                    if len(parts) > 1: data["Nachname"] = parts[1].strip()
+                
+                elif "plz" in lower_line or "postleitzahl" in lower_line:
+                    import re
+                    match = re.search(r'\d{4}', clean_line)
+                    if match: data["PLZ"] = match.group(0)
+            
+            return data
+        except Exception as e:
+            return {"error": str(e)}
