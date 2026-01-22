@@ -1669,6 +1669,8 @@ class HonorarGeneratorApp:
         ttk.Label(info_frame, text=f"IP:Port:  {self.mobile_server.host_ip}:{self.mobile_server.port}", font=("Consolas", 11, "bold")).pack()
         ttk.Label(info_frame, text=f"Token:    {self.mobile_server.token}", font=("Consolas", 10)).pack()
         
+        ttk.Button(self.scan_dialog, text="📸 Scan am Handy auslösen", command=self.mobile_server.trigger_scan).pack(pady=5)
+        
         ttk.Label(self.scan_dialog, text="Warte auf Scan...", font=("Segoe UI", 10, "italic")).pack(pady=10)
         ttk.Button(self.scan_dialog, text="Abbrechen", command=self.scan_dialog.destroy).pack(pady=10)
 

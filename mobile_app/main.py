@@ -1,5 +1,7 @@
 import flet as ft
 import requests
+import threading
+import time
 
 # Global state to hold connection details
 APP_STATE = {
@@ -8,7 +10,7 @@ APP_STATE = {
 }
 
 def main(page: ft.Page):
-    page.title = "LeprendiX Scanner"
+    page.title = "LeprendiX Mobile"
     page.theme_mode = ft.ThemeMode.DARK
     page.vertical_alignment = ft.MainAxisAlignment.CENTER
 
@@ -74,11 +76,22 @@ def main(page: ft.Page):
         elif page.route == "/upload":
             
             status_text = ft.Text("Ready to scan document", size=16)
+            scan_button = ft.ElevatedButton("Take Photo / Select Image", height=50)
+            
+            # Preview UI elements
+            preview_image = ft.Image(src="", visible=False, height=400, fit=ft.ImageFit.CONTAIN)
+            confirm_row = ft.Row(visible=False, alignment=ft.MainAxisAlignment.CENTER, spacing=20)
             
             def on_dialog_result(e: ft.FilePickerResultEvent):
                 if e.files:
                     path = e.files[0].path
-                    upload_file(path)
+                    # Show preview instead of uploading immediately
+                    preview_image.src = path
+                    preview_image.visible = True
+                    confirm_row.visible = True
+                    scan_button.visible = False
+                    status_text.value = "Review Image"
+                    page.update()
 
             # FilePicker handles Camera/Gallery on mobile
             file_picker = ft.FilePicker(on_result=on_dialog_result)
@@ -87,6 +100,8 @@ def main(page: ft.Page):
 
             def on_scan_click(e):
                 file_picker.pick_files(allow_multiple=False, file_type=ft.FilePickerFileType.IMAGE)
+            
+            scan_button.on_click = on_scan_click
 
             def upload_file(filepath):
                 status_text.value = "Uploading..."
@@ -102,6 +117,10 @@ def main(page: ft.Page):
                     if resp.status_code == 200:
                         status_text.value = "Upload Successful! Check Desktop."
                         status_text.color = "green"
+                        # Reset UI after successful upload
+                        preview_image.visible = False
+                        confirm_row.visible = False
+                        scan_button.visible = True
                     else:
                         status_text.value = f"Server Error: {resp.text}"
                         status_text.color = "red"
@@ -110,6 +129,36 @@ def main(page: ft.Page):
                     status_text.color = "red"
                 page.update()
 
+            def on_confirm(e):
+                if preview_image.src:
+                    upload_file(preview_image.src)
+
+            def on_cancel(e):
+                preview_image.visible = False
+                confirm_row.visible = False
+                scan_button.visible = True
+                status_text.value = "Cancelled."
+                page.update()
+
+            confirm_btn = ft.IconButton(icon=ft.icons.CHECK_CIRCLE, icon_color="green", icon_size=60, on_click=on_confirm, tooltip="Send to PC")
+            cancel_btn = ft.IconButton(icon=ft.icons.CANCEL, icon_color="red", icon_size=60, on_click=on_cancel, tooltip="Retake")
+            confirm_row.controls = [cancel_btn, confirm_btn]
+
+            # Polling Logic for Desktop Trigger
+            def poll_server():
+                while True:
+                    if page.route != "/upload": break
+                    try:
+                        url = f"{APP_STATE['server_url']}/status?token={APP_STATE['token']}"
+                        r = requests.get(url, timeout=2)
+                        if r.status_code == 200 and r.json().get("scan_requested"):
+                            on_scan_click(None)
+                    except:
+                        pass
+                    time.sleep(1)
+            
+            threading.Thread(target=poll_server, daemon=True).start()
+
             page.views.append(
                 ft.View(
                     "/upload",
@@ -117,8 +166,10 @@ def main(page: ft.Page):
                         ft.AppBar(title=ft.Text("Scan Document"), bgcolor=ft.colors.SURFACE_VARIANT),
                         ft.Container(
                             content=ft.Column([
-                                ft.Icon(name=ft.icons.DOCUMENT_SCANNER, size=100),
-                                ft.ElevatedButton("Take Photo / Select Image", on_click=on_scan_click, height=50),
+                                ft.Icon(name=ft.icons.DOCUMENT_SCANNER, size=50),
+                                scan_button,
+                                preview_image,
+                                confirm_row,
                                 status_text,
                                 ft.ElevatedButton("Disconnect", on_click=lambda _: page.go("/"), color="red")
                             ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),

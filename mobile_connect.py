@@ -28,10 +28,12 @@ class MobileServer:
         self.host_ip = self.get_local_ip()
         self.server_thread = None
         self.running = False
+        self.scan_requested = False
         
         # Routes
         self.app.add_url_rule('/upload', 'upload', self.handle_upload, methods=['POST'])
         self.app.add_url_rule('/verify', 'verify', self.handle_verify, methods=['POST'])
+        self.app.add_url_rule('/status', 'status', self.handle_status, methods=['GET'])
 
     def get_local_ip(self):
         """Determines the local network IP address."""
@@ -80,6 +82,20 @@ class MobileServer:
             return jsonify({"status": "error", "message": "Invalid Token"}), 403
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 400
+
+    def handle_status(self):
+        """Endpoint for mobile app to check status/commands."""
+        token = request.args.get('token')
+        if token != self.token:
+             return jsonify({"status": "error", "message": "Unauthorized"}), 403
+        
+        response = {"scan_requested": self.scan_requested}
+        if self.scan_requested:
+            self.scan_requested = False # Reset after reading
+        return jsonify(response)
+
+    def trigger_scan(self):
+        self.scan_requested = True
 
     def handle_upload(self):
         """Endpoint to receive the scanned image."""
