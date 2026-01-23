@@ -5,19 +5,7 @@ import os
 import secrets
 import logging
 from flask import Flask, request, jsonify
-from PIL import Image
-import requests
-import io
-
-# Optional OCR support
-try:
-    import pytesseract
-    # If tesseract is not in PATH, set it here:
-    # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
-    logging.warning("pytesseract not installed. OCR functionality will be limited.")
+import json
 
 class MobileServer:
     def __init__(self, callback_function, status_callback=None):
@@ -99,111 +87,56 @@ class MobileServer:
         self.scan_requested = True
 
     def handle_upload(self):
-        """Endpoint to receive the scanned image."""
+        """Endpoint to receive the scanned data from the mobile app."""
         if 'token' not in request.form or request.form['token'] != self.token:
             return jsonify({"status": "error", "message": "Unauthorized"}), 403
-            
-        if 'image' not in request.files:
-            return jsonify({"status": "error", "message": "No image part"}), 400
-            
-        file = request.files['image']
-        
+
+        if 'data' not in request.form:
+            return jsonify({"status": "error", "message": "No data part in form"}), 400
+
         if self.status_callback:
-            self.status_callback("Bild empfangen. Verarbeite...")
+            self.status_callback("Daten empfangen. Verarbeite...")
 
         try:
-            image = Image.open(file.stream)
-            extracted_data = self.process_image(image)
-            
-            # Notify GUI via callback (runs in Flask thread)
+            # The data is a JSON string in a form field
+            json_data_str = request.form['data']
+            scanned_data = json.loads(json_data_str)
+
+            # Map the received keys to the keys expected by the GUI
+            gui_data = {
+                "Vorname": scanned_data.get("vorname"),
+                "Nachname": scanned_data.get("nachname"),
+                "Versicherungsnummer": scanned_data.get("vsnr"),
+                "Diagnose": scanned_data.get("diagnose"),
+                "PLZ": scanned_data.get("plz"),
+                "Ort": scanned_data.get("ort")
+            }
+
+            # Splitting street and house number from "strasse"
+            street_full = scanned_data.get("strasse", "")
+            last_space_index = street_full.rfind(' ')
+            if last_space_index != -1:
+                street = street_full[:last_space_index].strip()
+                housenumber = street_full[last_space_index+1:].strip()
+                # A simple check if the last part is a number or contains a number
+                if any(char.isdigit() for char in housenumber):
+                    gui_data["Straße"] = street
+                    gui_data["Hausnummer"] = housenumber
+                else: # if no number, it's all street
+                    gui_data["Straße"] = street_full
+                    gui_data["Hausnummer"] = ""
+            else:
+                gui_data["Straße"] = street_full
+                gui_data["Hausnummer"] = ""
+
+            # Notify GUI via callback
             if self.callback:
-                self.callback(extracted_data)
-                
-            return jsonify({"status": "success", "data": extracted_data})
+                self.callback(gui_data)
+
+            return jsonify({"status": "success", "data": gui_data})
+        except json.JSONDecodeError:
+            logging.error(f"Invalid JSON received: {request.form.get('data')}")
+            return jsonify({"status": "error", "message": "Invalid JSON in data part"}), 400
         except Exception as e:
-            logging.error(f"Error processing scan: {e}")
+            logging.error(f"Error processing scan data: {e}")
             return jsonify({"status": "error", "message": str(e)}), 500
-
-    def process_image(self, image):
-        """Performs OCR using OCR.space API (Free) with fallback to local Tesseract."""
-        extracted_text = ""
-        
-        # 1. Try OCR.space API (Free)
-        try:
-            # Convert image to bytes for upload
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='PNG')
-            img_byte_arr.seek(0)
-
-            payload = {
-                'apikey': 'helloworld', # Free demo key. For production, get a free key at ocr.space
-                'language': 'ger',
-                'isOverlayRequired': False
-            }
-            files = {
-                'file': ('scan.png', img_byte_arr, 'image/png')
-            }
-            
-            logging.info("Sending image to OCR.space API...")
-            response = requests.post('https://api.ocr.space/parse/image', 
-                                     files=files, 
-                                     data=payload, 
-                                     timeout=15)
-            
-            result = response.json()
-            
-            if result.get('IsErroredOnProcessing') == False:
-                parsed_results = result.get('ParsedResults')
-                if parsed_results:
-                    extracted_text = parsed_results[0].get('ParsedText', '')
-                    logging.info("OCR API success.")
-            else:
-                logging.warning(f"OCR API Error: {result.get('ErrorMessage')}")
-                
-        except Exception as e:
-            logging.error(f"OCR API Request failed: {e}")
-
-        # 2. Fallback to local Tesseract
-        if not extracted_text:
-            if OCR_AVAILABLE:
-                logging.info("Falling back to local Tesseract OCR...")
-                try:
-                    extracted_text = pytesseract.image_to_string(image, lang='deu+eng')
-                except Exception as e:
-                    logging.error(f"Local Tesseract failed: {e}")
-            else:
-                return {"error": "Kein Text erkannt. (API fehlgeschlagen & Tesseract nicht installiert)"}
-        
-        if not extracted_text:
-             return {"error": "Leeres Ergebnis vom OCR Scan."}
-
-        # 3. Parse Data
-        try:
-            data = {"raw_text": extracted_text}
-            
-            # Very basic keyword extraction logic
-            lines = extracted_text.split('\n')
-            for line in lines:
-                clean_line = line.strip()
-                if not clean_line: continue
-                
-                lower_line = clean_line.lower()
-                
-                # Heuristic parsing (Key: Value)
-                if ":" in clean_line:
-                    parts = clean_line.split(":", 1)
-                    key = parts[0].strip().lower()
-                    val = parts[1].strip()
-
-                    if "vorname" in key: data["Vorname"] = val
-                    elif "nachname" in key or "name" == key: data["Nachname"] = val
-                    elif "diagnose" in key: data["Diagnose"] = val
-                    elif "versicherungsnummer" in key or "svnr" in key: data["Versicherungsnummer"] = val
-                    elif "plz" in key: data["PLZ"] = val
-                    elif "ort" in key: data["Ort"] = val
-                    elif "straße" in key or "strasse" in key: data["Straße"] = val
-                    elif "hausnummer" in key: data["Hausnummer"] = val
-            
-            return data
-        except Exception as e:
-            return {"error": str(e)}

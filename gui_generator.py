@@ -3,7 +3,6 @@ from tkinter import ttk, messagebox, simpledialog
 import sqlite3
 import datetime
 from PIL import Image, ImageTk
-from typing import Self
 from docx import Document
 import os
 import requests 
@@ -11,8 +10,7 @@ import subprocess
 import sys
 import shutil
 from docx.enum.text import WD_UNDERLINE
-from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
-from docx.shared import Inches, Pt, Twips
+from docx.shared import Pt
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 import logging
 import threading
@@ -1576,34 +1574,6 @@ class HonorarGeneratorApp:
             messagebox.showerror("Scan Fehler", data["error"], parent=self.scan_dialog)
             return
 
-        # 1. Dialog Inhalt löschen (QR Code entfernen)
-        for widget in self.scan_dialog.winfo_children():
-            widget.destroy()
-            
-        self.scan_dialog.title("Scan Ergebnis - Überprüfung")
-        self.scan_dialog.geometry("500x650")
-        
-        main_frame = ttk.Frame(self.scan_dialog, padding=10)
-        main_frame.pack(fill='both', expand=True)
-        
-        ttk.Label(main_frame, text="Erkannte Daten (Bitte prüfen):", font=("Segoe UI", 12, "bold")).pack(pady=(0, 10))
-        
-        # Scrollable Frame für die Felder
-        canvas = tk.Canvas(main_frame)
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
         # Mapping definieren
         mapping = {
             "Vorname": "Vorname",
@@ -1616,46 +1586,20 @@ class HonorarGeneratorApp:
             "Ort": "Ort"
         }
         
-        self.scan_entries = {}
-        
+        # Daten in das Hauptformular übertragen
         for json_key, gui_label in mapping.items():
-            row = ttk.Frame(scrollable_frame)
-            row.pack(fill='x', pady=2)
-            ttk.Label(row, text=f"{gui_label}:", width=20).pack(side='left')
-            
-            entry = ttk.Entry(row)
-            entry.pack(side='left', fill='x', expand=True)
-            
-            # Daten einfüllen, falls vorhanden
-            if json_key in data:
-                entry.insert(0, data[json_key])
-                
-            self.scan_entries[gui_label] = entry
-            
-        if "raw_text" in data:
-            expander = ttk.Labelframe(scrollable_frame, text="Rohdaten (OCR)", padding=5)
-            expander.pack(fill='x', pady=10)
-            txt = tk.Text(expander, height=8, width=40, font=("Consolas", 8))
-            txt.pack(fill='both')
-            txt.insert("1.0", data["raw_text"])
-
-        # Buttons
-        btn_frame = ttk.Frame(self.scan_dialog, padding=10)
-        btn_frame.pack(fill='x')
+            val = data.get(json_key)
+            if val is not None:
+                val = str(val).strip()
+                if gui_label in self.patient_entries:
+                    self.patient_entries[gui_label].delete(0, tk.END)
+                    self.patient_entries[gui_label].insert(0, val)
         
-        def do_import():
-            # Daten in das Hauptformular übertragen
-            for field, entry_widget in self.scan_entries.items():
-                val = entry_widget.get().strip()
-                if val and field in self.patient_entries:
-                    self.patient_entries[field].delete(0, tk.END)
-                    self.patient_entries[field].insert(0, val)
-            
-            messagebox.showinfo("Import", "Daten wurden in das Formular übernommen.")
-            self.scan_dialog.destroy()
-            
-        ttk.Button(btn_frame, text="❌ Verwerfen", command=self.scan_dialog.destroy).pack(side='left')
-        ttk.Button(btn_frame, text="✅ Daten übernehmen", command=do_import).pack(side='right')
+        # Trigger distance calculation
+        self._start_distance_calculation()
+        
+        self.set_status("Daten erfolgreich importiert.")
+        self.scan_dialog.destroy()
 
     def open_scan_dialog(self):
         self.setup_mobile_server()
@@ -1664,14 +1608,18 @@ class HonorarGeneratorApp:
         self.scan_dialog.title("Mit Mobile App verbinden")
         self.scan_dialog.geometry("400x500")
         
-        ttk.Label(self.scan_dialog, text="Scannen Sie den Code oder geben Sie die Daten manuell ein:", wraplength=350, justify="center").pack(pady=10)
+        # Container for the initial view
+        self.scan_initial_frame = ttk.Frame(self.scan_dialog)
+        self.scan_initial_frame.pack(fill='both', expand=True)
+        
+        ttk.Label(self.scan_initial_frame, text="Scannen Sie den Code oder geben Sie die Daten manuell ein:", wraplength=350, justify="center").pack(pady=10)
         
         pil_img = self.mobile_server.get_qr_image().resize((300, 300), Image.Resampling.LANCZOS)
-        self.qr_photo = ImageTk.PhotoImage(pil_img, master=self.scan_dialog)
-        ttk.Label(self.scan_dialog, image=self.qr_photo).pack(pady=10)
+        self.qr_photo = ImageTk.PhotoImage(pil_img, master=self.scan_initial_frame)
+        ttk.Label(self.scan_initial_frame, image=self.qr_photo).pack(pady=10)
         
         # NEU: Text-Anzeige für manuelle Eingabe in Flet App
-        info_frame = ttk.Frame(self.scan_dialog)
+        info_frame = ttk.Frame(self.scan_initial_frame)
         info_frame.pack(pady=5)
         
         ttk.Label(info_frame, text=f"IP:Port:  {self.mobile_server.host_ip}:{self.mobile_server.port}", font=("Consolas", 11, "bold")).pack()
@@ -1679,14 +1627,26 @@ class HonorarGeneratorApp:
         
         def trigger_scan_action():
             self.mobile_server.trigger_scan()
-            if hasattr(self, 'scan_status_label') and self.scan_status_label.winfo_exists():
-                self.scan_status_label.config(text="Scan angefordert! Bitte App prüfen...", foreground="blue")
+            
+            # Switch to loading view
+            self.scan_initial_frame.destroy()
+            
+            loading_frame = ttk.Frame(self.scan_dialog)
+            loading_frame.pack(fill='both', expand=True, padx=20, pady=20)
+            
+            ttk.Label(loading_frame, text="Request pending...", font=("Segoe UI", 16)).pack(pady=(80, 20))
+            
+            pb = ttk.Progressbar(loading_frame, mode='indeterminate', length=200)
+            pb.pack(pady=10)
+            pb.start(15)
+            
+            ttk.Button(loading_frame, text="Cancel", command=self.scan_dialog.destroy).pack(pady=40)
 
-        ttk.Button(self.scan_dialog, text="📸 Scan am Handy auslösen", command=trigger_scan_action).pack(pady=5)
+        ttk.Button(self.scan_initial_frame, text="Request", command=trigger_scan_action).pack(pady=5)
         
-        self.scan_status_label = ttk.Label(self.scan_dialog, text="Warte auf Scan...", font=("Segoe UI", 10, "italic"))
+        self.scan_status_label = ttk.Label(self.scan_initial_frame, text="Warte auf Scan...", font=("Segoe UI", 10, "italic"))
         self.scan_status_label.pack(pady=10)
-        ttk.Button(self.scan_dialog, text="Abbrechen", command=self.scan_dialog.destroy).pack(pady=10)
+        ttk.Button(self.scan_initial_frame, text="Abbrechen", command=self.scan_dialog.destroy).pack(pady=10)
 
     def open_archive_manager(self):
         """Öffnet ein Fenster zum Suchen und Reaktivieren von archivierten Patienten."""
