@@ -191,15 +191,7 @@
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/config.json;."
-  },
-  {
-   "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/config_loader.py;."
-  },
-  {
-   "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/credentials.dat;."
   },
   {
    "optionDest": "datas",
@@ -232,10 +224,6 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/patient_status_checker.py;."
-  },
-  {
-   "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/patienten.db;."
   },
   {
    "optionDest": "datas",
@@ -300,6 +288,34 @@
   {
    "optionDest": "collect_submodules",
    "value": "geopy"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "qrcode"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "pyzbar"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "flask"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "pyzbar"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "qrcode"
+  },
+  {
+   "optionDest": "collect_submodules",
+   "value": "flask"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/mobile_connect.py;."
   }
  ],
  "nonPyinstallerOptions": {

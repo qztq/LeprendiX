@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import sqlite3
 import datetime
-from typing import Self
+from PIL import Image, ImageTk
 from docx import Document
 import os
 import requests 
@@ -10,14 +10,14 @@ import subprocess
 import sys
 import shutil
 from docx.enum.text import WD_UNDERLINE
-from docx.enum.style import WD_STYLE_TYPE # NEU: Wird für Style-Anpassung benötigt
-from docx.shared import Inches, Pt, Twips
+from docx.shared import Pt
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 import logging
 import threading
 from config_loader import CONFIG
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+import mobile_connect
 
 
 
@@ -742,6 +742,7 @@ class HonorarGeneratorApp:
         self.selected_leistung_id = None 
         self.selected_leistungs_kurznamen = set() # Für die Mehrfachauswahl-Buttons
         self.ttk_style = ttk.Style(master=root) 
+        self.mobile_server = None # Server instance
         
         # NEU: Initialisierung der Folgenummer (BHAG-Logik)
         self.invoice_seq_var = tk.StringVar(master=root) 
@@ -1476,6 +1477,7 @@ class HonorarGeneratorApp:
         ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
         ttk.Button(search_frame, text="Felder leeren", command=self.reset_patient_form).grid(row=0, column=3, padx=5, pady=5)
         ttk.Button(search_frame, text="♻️ Archiv durchsuchen", command=self.open_archive_manager).grid(row=0, column=4, padx=5, pady=5)
+        ttk.Button(search_frame, text="📱 Scan via Mobile", command=self.open_scan_dialog).grid(row=0, column=5, padx=5, pady=5)
         
         self.patient_id_to_edit = None
 
@@ -1544,6 +1546,108 @@ class HonorarGeneratorApp:
         
         self.new_patients_listbox.bind('<Double-1>', self._copy_new_patient_name)
         self.new_patients_listbox.bind('<Button-3>', self._show_new_patients_context_menu)
+
+    def setup_mobile_server(self):
+        """Initialisiert und startet den Mobile-Server, falls noch nicht geschehen."""
+        if not self.mobile_server:
+            self.mobile_server = mobile_connect.MobileServer(self.on_scan_received, self.on_scan_status)
+            self.mobile_server.start()
+
+    def on_scan_status(self, message):
+        """Callback für Status-Updates vom Server."""
+        self.root.after(0, lambda: self._update_scan_status(message))
+
+    def _update_scan_status(self, message):
+        if hasattr(self, 'scan_status_label') and self.scan_status_label.winfo_exists():
+            self.scan_status_label.config(text=message, foreground="blue")
+
+    def on_scan_received(self, data):
+        """Callback vom Server-Thread. Plant GUI-Update im Main-Thread."""
+        self.root.after(0, lambda: self._process_scan_data(data))
+
+    def _process_scan_data(self, data):
+        """Verarbeitet die empfangenen Daten im GUI-Thread."""
+        if not hasattr(self, 'scan_dialog') or not self.scan_dialog.winfo_exists():
+            return
+
+        if "error" in data:
+            messagebox.showerror("Scan Fehler", data["error"], parent=self.scan_dialog)
+            return
+
+        # Mapping definieren
+        mapping = {
+            "Anrede": "Anrede",
+            "Vorname": "Vorname",
+            "Nachname": "Nachname",
+            "Versicherungsnummer": "Versicherungsnummer",
+            "Diagnose": "Diagnose",
+            "Straße": "Straße",
+            "Hausnummer": "Hausnummer",
+            "PLZ": "PLZ",
+            "Ort": "Ort"
+        }
+        
+        # Daten in das Hauptformular übertragen
+        for json_key, gui_label in mapping.items():
+            val = data.get(json_key)
+            if val is not None:
+                val = str(val).strip()
+                if gui_label in self.patient_entries:
+                    self.patient_entries[gui_label].delete(0, tk.END)
+                    self.patient_entries[gui_label].insert(0, val)
+        
+        # Trigger distance calculation
+        self._start_distance_calculation()
+        
+        self.set_status("Daten erfolgreich importiert.")
+        self.scan_dialog.destroy()
+
+    def open_scan_dialog(self):
+        self.setup_mobile_server()
+        
+        self.scan_dialog = tk.Toplevel(self.root)
+        self.scan_dialog.title("Mit Mobile App verbinden")
+        self.scan_dialog.geometry("400x500")
+        
+        # Container for the initial view
+        self.scan_initial_frame = ttk.Frame(self.scan_dialog)
+        self.scan_initial_frame.pack(fill='both', expand=True)
+        
+        ttk.Label(self.scan_initial_frame, text="Scannen Sie den Code oder geben Sie die Daten manuell ein:", wraplength=350, justify="center").pack(pady=10)
+        
+        pil_img = self.mobile_server.get_qr_image().resize((300, 300), Image.Resampling.LANCZOS)
+        self.qr_photo = ImageTk.PhotoImage(pil_img, master=self.scan_initial_frame)
+        ttk.Label(self.scan_initial_frame, image=self.qr_photo).pack(pady=10)
+        
+        # NEU: Text-Anzeige für manuelle Eingabe in Flet App
+        info_frame = ttk.Frame(self.scan_initial_frame)
+        info_frame.pack(pady=5)
+        
+        ttk.Label(info_frame, text=f"IP:Port:  {self.mobile_server.host_ip}:{self.mobile_server.port}", font=("Consolas", 11, "bold")).pack()
+        ttk.Label(info_frame, text=f"Token:    {self.mobile_server.token}", font=("Consolas", 10)).pack()
+        
+        def trigger_scan_action():
+            self.mobile_server.trigger_scan()
+            
+            # Switch to loading view
+            self.scan_initial_frame.destroy()
+            
+            loading_frame = ttk.Frame(self.scan_dialog)
+            loading_frame.pack(fill='both', expand=True, padx=20, pady=20)
+            
+            ttk.Label(loading_frame, text="Request pending...", font=("Segoe UI", 16)).pack(pady=(80, 20))
+            
+            pb = ttk.Progressbar(loading_frame, mode='indeterminate', length=200)
+            pb.pack(pady=10)
+            pb.start(15)
+            
+            ttk.Button(loading_frame, text="Cancel", command=self.scan_dialog.destroy).pack(pady=40)
+
+        ttk.Button(self.scan_initial_frame, text="Request", command=trigger_scan_action).pack(pady=5)
+        
+        self.scan_status_label = ttk.Label(self.scan_initial_frame, text="Warte auf Scan...", font=("Segoe UI", 10, "italic"))
+        self.scan_status_label.pack(pady=10)
+        ttk.Button(self.scan_initial_frame, text="Abbrechen", command=self.scan_dialog.destroy).pack(pady=10)
 
     def open_archive_manager(self):
         """Öffnet ein Fenster zum Suchen und Reaktivieren von archivierten Patienten."""

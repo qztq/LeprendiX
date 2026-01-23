@@ -92,8 +92,8 @@ Section "LeprendiX (Erforderlich)" SecCore
   ; Versuche die Datenbank und Config zu installieren. 
   ; Wenn sie schon da sind, wird dieser Schritt ignoriert (Daten bleiben erhalten).
   ; Pfad anpassen: "output\LeprendiX\patienten.db"
-  File "output\LeprendiX\patienten.db"
-  File "output\LeprendiX\config.json"
+  ; File "output\LeprendiX\patienten.db"
+  ; File "output\LeprendiX\config.json"
   
   ; --- RESTLICHE DATEIEN ---
   ; Ab hier wieder überschreiben erlauben (für Updates der .exe etc.)
@@ -169,7 +169,7 @@ Function .onInit
   ; Splash Screen anzeigen (überbrückt die Wartezeit visuell)
   ; Erfordert 'splash.bmp' im selben Ordner wie das .nsi Skript beim Kompilieren
   InitPluginsDir
-  File /oname=$PLUGINSDIR\splash.bmp "splash.bmp"
+  ; File /oname=$PLUGINSDIR\splash.bmp "splash.bmp"
   ; Syntax: delay(ms) fadein(ms) fadeout(ms) keycolor(-1=aus) datei
   AdvSplash::show 2000 600 400 -1 $PLUGINSDIR\splash
 
