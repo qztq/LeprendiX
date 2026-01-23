@@ -291,14 +291,6 @@
   },
   {
    "optionDest": "hiddenimports",
-   "value": "pytesseract"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "flet"
-  },
-  {
-   "optionDest": "hiddenimports",
    "value": "qrcode"
   },
   {
@@ -308,14 +300,6 @@
   {
    "optionDest": "hiddenimports",
    "value": "flask"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "flet"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "pytesseract"
   },
   {
    "optionDest": "collect_submodules",

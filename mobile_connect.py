@@ -76,14 +76,21 @@ class MobileServer:
         """Endpoint for mobile app to check status/commands."""
         token = request.args.get('token')
         if token != self.token:
+             logging.warning(f"Unauthorized status check. Received: {token}")
              return jsonify({"status": "error", "message": "Unauthorized"}), 403
         
-        response = {"scan_requested": self.scan_requested}
+        response_data = {"scan_requested": self.scan_requested}
         if self.scan_requested:
+            logging.info("Mobile app polled status: Sending scan request!")
             self.scan_requested = False # Reset after reading
-        return jsonify(response)
+            
+        response = jsonify(response_data)
+        # Prevent caching to ensure the app always gets the latest status
+        response.headers.add('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        return response
 
     def trigger_scan(self):
+        logging.info("Scan triggered from GUI. Waiting for mobile app to poll...")
         self.scan_requested = True
 
     def handle_upload(self):
@@ -104,6 +111,7 @@ class MobileServer:
 
             # Map the received keys to the keys expected by the GUI
             gui_data = {
+                "Anrede": scanned_data.get("anrede"),
                 "Vorname": scanned_data.get("vorname"),
                 "Nachname": scanned_data.get("nachname"),
                 "Versicherungsnummer": scanned_data.get("vsnr"),

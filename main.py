@@ -402,7 +402,11 @@ def create_main():
     tk.Label(login_f, text="Benutzername:", fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack(anchor="w")
     u_ent = tk.Entry(login_f, width=30, bg=COLOR_PRIMARY, fg="white", relief="flat", insertbackground="white")
     u_ent.pack(pady=(5, 15), ipady=5)
-    u_ent.insert(0, "bhag")
+    
+    default_user = "bhag"
+    if USER_CREDS and USER_CREDS.get("user"):
+        default_user = USER_CREDS.get("user")
+    u_ent.insert(0, default_user)
 
     tk.Label(login_f, text="Passwort:", fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack(anchor="w")
     p_ent = tk.Entry(login_f, show="*", width=30, bg=COLOR_PRIMARY, fg="white", relief="flat", insertbackground="white")
