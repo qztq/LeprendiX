@@ -20,12 +20,14 @@ class MobileServer:
         self.server_thread = None
         self.running = False
         self.scan_requested = False
+        self.ping_requested = False
         
         # Routes
         self.app.add_url_rule('/upload', 'upload', self.handle_upload, methods=['POST'])
         self.app.add_url_rule('/verify', 'verify', self.handle_verify, methods=['POST'])
         self.app.add_url_rule('/pong', 'pong', self.handle_pong, methods=['POST'])
         self.app.add_url_rule('/status', 'status', self.handle_status, methods=['GET'])
+        self.app.add_url_rule('/report_status', 'report_status', self.handle_report_status, methods=['POST'])
 
     def set_connection_callback(self, callback):
         self.connection_callback = callback
@@ -84,7 +86,9 @@ class MobileServer:
     def handle_pong(self):
         """Endpoint for client to send pong and establish connection."""
         try:
-            req_data = request.json
+            req_data = request.get_json(force=True, silent=True)
+            if not req_data:
+                return jsonify({"status": "error", "message": "Invalid JSON"}), 400
             req_token = req_data.get('token')
             status = req_data.get('status')
             
@@ -103,6 +107,26 @@ class MobileServer:
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 400
 
+    def handle_report_status(self):
+        """Endpoint for client to report status updates (e.g. cancellation)."""
+        try:
+            req_data = request.get_json(force=True, silent=True)
+            if not req_data:
+                return jsonify({"status": "error", "message": "Invalid JSON"}), 400
+            req_token = req_data.get('token')
+            status = req_data.get('status')
+            
+            if req_token == self.token:
+                if status == 'cancelled':
+                    logging.info("Cancellation received via report_status.")
+                    if self.cancel_callback:
+                        self.cancel_callback()
+                    return jsonify({"status": "ok", "message": "Cancelled"})
+                return jsonify({"status": "ok", "message": "Status ignored"})
+            return jsonify({"status": "error", "message": "Invalid Token"}), 403
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+
     def handle_status(self):
         """Endpoint for mobile app to check status/commands."""
         token = request.args.get('token')
@@ -110,9 +134,17 @@ class MobileServer:
              logging.warning(f"Unauthorized status check. Received: {token}")
              return jsonify({"status": "error", "message": "Unauthorized"}), 403
         
+        status_msg = "ping"
+        if self.ping_requested:
+            logging.info("PINGPONG: Sending PINGPONG to client.")
+            status_msg = "PINGPONG"
+            self.ping_requested = False
+            self.scan_requested = True
+            logging.info("PINGPONG: Automatically triggering scan request.")
+
         response_data = {
             "scan_requested": self.scan_requested,
-            "status": "ping"
+            "status": status_msg
         }
         if self.scan_requested:
             logging.info("Mobile app polled status: Sending scan request!")
@@ -126,6 +158,11 @@ class MobileServer:
     def trigger_scan(self):
         logging.info("Scan triggered from GUI. Waiting for mobile app to poll...")
         self.scan_requested = True
+
+    def send_ping(self):
+        """Sets a flag to send PINGPONG status on next poll."""
+        logging.info("PINGPONG: send_ping triggered.")
+        self.ping_requested = True
 
     def handle_upload(self):
         """Endpoint to receive the scanned data from the mobile app."""

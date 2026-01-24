@@ -834,6 +834,7 @@ class HonorarGeneratorApp:
                 except Exception as e:
                     logging.error(f"[AutoBackup] Fehler: {e}")
         self.root.destroy()
+        sys.exit(0)
 
     def _setup_context_menu(self):
         """Bindet das Rechtsklick-Menü an alle Text-Widgets."""
@@ -1468,70 +1469,119 @@ class HonorarGeneratorApp:
 
     # --- 2. Patienten Verwalten Tab (Hinzufügen und Bearbeiten) ---
     def setup_patient_tab(self, tab):
-        search_frame = ttk.Frame(tab)
-        search_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
+        # --- 1. SEARCH AREA (Top) ---
+        search_frame = ttk.LabelFrame(tab, text="Suche & Tools", padding=10)
+        search_frame.grid(row=0, column=0, columnspan=3, padx=10, pady=5, sticky='ew')
         
-        ttk.Label(search_frame, text="Patient suchen/laden:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        self.patient_search_entry = ttk.Entry(search_frame, width=30)
-        self.patient_search_entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
-        ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).grid(row=0, column=2, padx=5, pady=5)
-        ttk.Button(search_frame, text="Felder leeren", command=self.reset_patient_form).grid(row=0, column=3, padx=5, pady=5)
-        ttk.Button(search_frame, text="♻️ Archiv durchsuchen", command=self.open_archive_manager).grid(row=0, column=4, padx=5, pady=5)
-        ttk.Button(search_frame, text="📱 Scan via Mobile", command=self.open_scan_dialog).grid(row=0, column=5, padx=5, pady=5)
+        ttk.Label(search_frame, text="Patient suchen:").pack(side=tk.LEFT, padx=5)
+        self.patient_search_entry = ttk.Entry(search_frame, width=25)
+        self.patient_search_entry.pack(side=tk.LEFT, padx=5)
+        self.patient_search_entry.bind('<Return>', lambda e: self.search_and_load_patient())
+        
+        ttk.Button(search_frame, text="Laden", command=self.search_and_load_patient).pack(side=tk.LEFT, padx=5)
+        ttk.Button(search_frame, text="Felder leeren", command=self.reset_patient_form).pack(side=tk.LEFT, padx=5)
+        
+        # Spacer
+        ttk.Label(search_frame, text="   |   ").pack(side=tk.LEFT)
+        
+        ttk.Button(search_frame, text="♻️ Archiv", command=self.open_archive_manager).pack(side=tk.LEFT, padx=5)
+        ttk.Button(search_frame, text="📱 Mobile Scan", command=self.open_scan_dialog).pack(side=tk.LEFT, padx=5)
         
         self.patient_id_to_edit = None
 
-        fields = [
-            "Anrede", "Vorname", "Nachname", "Versicherungsnummer", 
-            "Straße", "Hausnummer", "Adresszusatz", "PLZ", "Ort", 
-            "Diagnose", "Kilometergeld (€)"
-        ]
+        # --- 2. MAIN CONTENT AREA (Split Left/Right) ---
+        
+        # Left Side: Inputs
+        input_container = ttk.Frame(tab)
+        input_container.grid(row=1, column=0, padx=10, pady=5, sticky='n')
+
+        # Personal Data Group
+        personal_frame = ttk.LabelFrame(input_container, text="Persönliche Daten", padding=10)
+        personal_frame.pack(fill='x', pady=5)
+
         self.patient_entries = {}
-        for i, field in enumerate(fields):
-            ttk.Label(tab, text=f"{field}:").grid(row=i + 1, column=0, padx=5, pady=5, sticky='w')
-            entry = ttk.Entry(tab, width=40)
-            entry.grid(row=i + 1, column=1, padx=5, pady=5, sticky='we')
-            self.patient_entries[field] = entry
+        
+        # Helper to create rows
+        def add_row(parent, label, field_key, row_idx, width=30):
+            ttk.Label(parent, text=f"{label}:").grid(row=row_idx, column=0, padx=5, pady=5, sticky='w')
+            entry = ttk.Entry(parent, width=width)
+            entry.grid(row=row_idx, column=1, padx=5, pady=5, sticky='ew')
+            self.patient_entries[field_key] = entry
+            return entry
 
-            # NEU: Event-Binding für Adressfelder
-            if field in ["Straße", "Hausnummer", "PLZ", "Ort"]:
-                entry.bind("<FocusOut>", self._start_distance_calculation)
+        add_row(personal_frame, "Anrede", "Anrede", 0)
+        add_row(personal_frame, "Vorname", "Vorname", 1)
+        add_row(personal_frame, "Nachname", "Nachname", 2)
+        add_row(personal_frame, "Versicherungsnummer", "Versicherungsnummer", 3)
+        add_row(personal_frame, "Diagnose", "Diagnose", 4)
 
-        # NEU: Label für die Distanzanzeige
-        self.distance_label = ttk.Label(tab, text="", foreground="blue")
-        # Positionieren neben dem Kilometergeld-Feld
-        km_geld_row = fields.index("Kilometergeld (€)") + 1
-        self.distance_label.grid(row=km_geld_row, column=2, padx=5, pady=5, sticky='w')
+        # Address Data Group
+        address_frame = ttk.LabelFrame(input_container, text="Adresse & Abrechnung", padding=10)
+        address_frame.pack(fill='x', pady=5)
 
+        entry_str = add_row(address_frame, "Straße", "Straße", 0)
+        entry_str.bind("<FocusOut>", self._start_distance_calculation)
+        
+        entry_hnr = add_row(address_frame, "Hausnummer", "Hausnummer", 1)
+        entry_hnr.bind("<FocusOut>", self._start_distance_calculation)
+        
+        add_row(address_frame, "Adresszusatz", "Adresszusatz", 2)
+        
+        # Custom Row for PLZ / Ort
+        ttk.Label(address_frame, text="PLZ / Ort:").grid(row=3, column=0, padx=5, pady=5, sticky='w')
+        plz_ort_frame = ttk.Frame(address_frame)
+        plz_ort_frame.grid(row=3, column=1, sticky='w')
+        
+        entry_plz = ttk.Entry(plz_ort_frame, width=8)
+        entry_plz.pack(side=tk.LEFT, padx=(5, 5))
+        self.patient_entries["PLZ"] = entry_plz
+        entry_plz.bind("<KeyRelease>", self.autofill_ort)
+        entry_plz.bind("<FocusOut>", self._start_distance_calculation)
+        
+        entry_ort = ttk.Entry(plz_ort_frame, width=20)
+        entry_ort.pack(side=tk.LEFT, padx=5)
+        self.patient_entries["Ort"] = entry_ort
+        entry_ort.bind("<FocusOut>", self._start_distance_calculation)
 
-        # NEU: Auto-Fill Ort bei PLZ Eingabe
-        self.patient_entries["PLZ"].bind("<KeyRelease>", self.autofill_ort)
+        # KM Geld
+        ttk.Label(address_frame, text="Kilometergeld (€):").grid(row=4, column=0, padx=5, pady=5, sticky='w')
+        km_frame = ttk.Frame(address_frame)
+        km_frame.grid(row=4, column=1, sticky='w')
+        
+        entry_km = ttk.Entry(km_frame, width=10)
+        entry_km.pack(side=tk.LEFT, padx=(5, 10))
+        self.patient_entries["Kilometergeld (€)"] = entry_km
+        
+        self.distance_label = ttk.Label(km_frame, text="", foreground="blue")
+        self.distance_label.pack(side=tk.LEFT)
 
+        # Defaults
         self.patient_entries["Anrede"].insert(0, CONFIG.get('DEFAULT_ANREDE') or "Herr/Frau")
         self.patient_entries["Diagnose"].insert(0, CONFIG.get('DEFAULT_DIAGNOSE') or "Z71")
         self.patient_entries["Kilometergeld (€)"].insert(0, "0.00")
 
-        # Hinzufügen/Aktualisieren Button
-        self.save_patient_button = ttk.Button(tab, text="Patient Hinzufügen", command=self.add_patient_gui)
-        self.save_patient_button.grid(row=len(fields) + 2, column=0, columnspan=2, pady=10)
+        # Action Buttons Area
+        action_frame = ttk.Frame(input_container, padding=10)
+        action_frame.pack(fill='x', pady=10)
         
-        # NEU: Löschen Button
-        self.delete_patient_button = ttk.Button(tab, text="Patient LÖSCHEN", command=self.delete_patient_gui, style='Danger.TButton', state=tk.DISABLED)
-        # NEU: Style für Lösch-Button
-        self.ttk_style.configure('Danger.TButton', foreground='red') 
-        self.delete_patient_button.grid(row=len(fields) + 3, column=0, columnspan=2, pady=5)
+        self.save_patient_button = ttk.Button(action_frame, text="Patient Hinzufügen", command=self.add_patient_gui)
+        self.save_patient_button.pack(side=tk.LEFT, fill='x', expand=True, padx=5)
+        
+        self.delete_patient_button = ttk.Button(action_frame, text="LÖSCHEN", command=self.delete_patient_gui, style='Danger.TButton', state=tk.DISABLED)
+        self.delete_patient_button.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(action_frame, text="📂 Ordner", command=self.open_patient_folder).pack(side=tk.LEFT, padx=5)
 
-        # NEU: Ordner öffnen Button
-        ttk.Button(tab, text="📂 Patienten-Ordner öffnen", command=self.open_patient_folder).grid(row=len(fields) + 3, column=1, pady=5, sticky='e')
-        
-        # Leere Zeile für Abstand
-        ttk.Label(tab, text="").grid(row=len(fields) + 4, column=0, columnspan=2, pady=5)
+        # --- 3. SEPARATOR ---
+        ttk.Separator(tab, orient='vertical').grid(row=1, column=1, sticky='ns', padx=10, pady=10)
 
-        # --- NEU: Liste für neue Patienten (Rechte Seite) ---
-        ttk.Separator(tab, orient='vertical').grid(row=0, column=3, rowspan=20, sticky='ns', padx=10)
-        
+        # --- 4. RIGHT SIDE (Teamup List) ---
         right_frame = ttk.Frame(tab)
-        right_frame.grid(row=0, column=4, rowspan=20, sticky='n', padx=5, pady=5)
+        right_frame.grid(row=1, column=2, sticky='nsew', padx=5, pady=5)
+        
+        # Configure grid weights for resizing
+        tab.columnconfigure(2, weight=1)
+        tab.rowconfigure(1, weight=1)
         
         ttk.Label(right_frame, text="Neue Patienten (Teamup Check)", font=("Segoe UI", 10, "bold")).pack(pady=(0, 10))
         
@@ -1604,6 +1654,7 @@ class HonorarGeneratorApp:
 
     def open_scan_dialog(self):
         self.setup_mobile_server()
+        self.mobile_server.send_ping()
         
         self.scan_dialog = tk.Toplevel(self.root)
         self.scan_dialog.title("Mit Mobile App verbinden")
@@ -1643,7 +1694,7 @@ class HonorarGeneratorApp:
             loading_frame = ttk.Frame(self.scan_dialog)
             loading_frame.pack(fill='both', expand=True, padx=20, pady=20)
             
-            ttk.Label(loading_frame, text="Request pending...", font=("Segoe UI", 16)).pack(pady=(80, 20))
+            ttk.Label(loading_frame, text="Waiting for response...", font=("Segoe UI", 16)).pack(pady=(80, 20))
             
             pb = ttk.Progressbar(loading_frame, mode='indeterminate', length=200)
             pb.pack(pady=10)
@@ -1652,6 +1703,7 @@ class HonorarGeneratorApp:
             ttk.Button(loading_frame, text="Cancel", command=on_close_dialog).pack(pady=40)
 
         def on_mobile_connected():
+            logging.info("Pong received. Switching to loading UI.")
             self.root.after(0, perform_auto_scan)
 
         def on_mobile_cancelled():
@@ -1679,7 +1731,17 @@ class HonorarGeneratorApp:
         archive_win.title("Archivierte Patienten")
         archive_win.geometry("600x500")
         
-        ttk.Label(archive_win, text="Archivierte Patienten (Doppelklick zum Reaktivieren):", font=("Segoe UI", 10, "bold")).pack(pady=10)
+        # --- Search Area ---
+        search_frame = ttk.Frame(archive_win)
+        search_frame.pack(fill='x', padx=10, pady=10)
+        
+        ttk.Label(search_frame, text="Suche:").pack(side=tk.LEFT, padx=(0, 5))
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_var)
+        search_entry.pack(side=tk.LEFT, fill='x', expand=True, padx=(0, 5))
+        search_entry.focus_set()
+        
+        ttk.Label(archive_win, text="Archivierte Patienten (Doppelklick zum Reaktivieren):", font=("Segoe UI", 10, "bold")).pack(pady=(0, 5))
         
         list_frame = ttk.Frame(archive_win)
         list_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -1695,18 +1757,35 @@ class HonorarGeneratorApp:
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
         cursor.execute("SELECT id, vorname, nachname FROM patienten WHERE is_archived = 1 ORDER BY nachname")
-        archived_patients = cursor.fetchall()
+        all_archived_patients = cursor.fetchall()
         conn.close()
         
-        for pid, vn, nn in archived_patients:
-            lb.insert(tk.END, f"{nn} {vn} (ID: {pid})")
+        def update_list(*args):
+            search_term = search_var.get().lower()
+            lb.delete(0, tk.END)
+            for pid, vn, nn in all_archived_patients:
+                full_str = f"{nn} {vn} (ID: {pid})"
+                if search_term in full_str.lower():
+                    lb.insert(tk.END, full_str)
+
+        search_var.trace_add("write", update_list)
+        update_list() # Initial fill
             
         def reactivate():
             sel = lb.curselection()
             if not sel: return
             
-            index = sel[0]
-            pid, vn, nn = archived_patients[index]
+            item_text = lb.get(sel[0])
+            try:
+                pid_str = item_text.rsplit("(ID: ", 1)[1].replace(")", "")
+                pid = int(pid_str)
+            except (IndexError, ValueError):
+                return
+
+            patient_data = next((p for p in all_archived_patients if p[0] == pid), None)
+            if not patient_data: return
+            
+            _, vn, nn = patient_data
             folder_name = f"{nn} {vn}"
             
             if messagebox.askyesno("Reaktivieren", f"Möchten Sie '{folder_name}' reaktivieren?\nDer Ordner wird aus dem Archiv zurückverschoben."):
