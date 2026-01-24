@@ -17,7 +17,7 @@ def get_config():
         "DATABASE_NAME": "patienten.db",
         "PATIENT_BASE_DIR": desktop,
         "ARCHIVE_DIR": os.path.join(desktop, "1Ehemalige Patienten"),
-        "FIXED_ADDRESS": "Triesterstraße 10/4, 2351 Wiener Neudorf",
+        "FIXED_ADDRESS": "",
         "TEAMUP_API_KEY": "",
         "TEAMUP_CALENDAR_ID": "",
         "GITHUB_TOKEN": "",
