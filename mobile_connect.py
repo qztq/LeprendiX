@@ -12,6 +12,8 @@ class MobileServer:
         self.app = Flask(__name__)
         self.callback = callback_function
         self.status_callback = status_callback
+        self.connection_callback = None
+        self.cancel_callback = None
         self.token = secrets.token_hex(16)
         self.port = 5000
         self.host_ip = self.get_local_ip()
@@ -22,7 +24,14 @@ class MobileServer:
         # Routes
         self.app.add_url_rule('/upload', 'upload', self.handle_upload, methods=['POST'])
         self.app.add_url_rule('/verify', 'verify', self.handle_verify, methods=['POST'])
+        self.app.add_url_rule('/pong', 'pong', self.handle_pong, methods=['POST'])
         self.app.add_url_rule('/status', 'status', self.handle_status, methods=['GET'])
+
+    def set_connection_callback(self, callback):
+        self.connection_callback = callback
+
+    def set_cancel_callback(self, callback):
+        self.cancel_callback = callback
 
     def get_local_ip(self):
         """Determines the local network IP address."""
@@ -72,6 +81,28 @@ class MobileServer:
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)}), 400
 
+    def handle_pong(self):
+        """Endpoint for client to send pong and establish connection."""
+        try:
+            req_data = request.json
+            req_token = req_data.get('token')
+            status = req_data.get('status')
+            
+            if req_token == self.token:
+                if status == 'pong':
+                    logging.info("Pong received from client.")
+                    if self.connection_callback:
+                        self.connection_callback()
+                    return jsonify({"status": "ok", "message": "Connected"})
+                elif status == 'cancelled':
+                    logging.info("Cancellation received from client.")
+                    if self.cancel_callback:
+                        self.cancel_callback()
+                    return jsonify({"status": "ok", "message": "Cancelled"})
+            return jsonify({"status": "error", "message": "Invalid Token or Status"}), 403
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+
     def handle_status(self):
         """Endpoint for mobile app to check status/commands."""
         token = request.args.get('token')
@@ -79,7 +110,10 @@ class MobileServer:
              logging.warning(f"Unauthorized status check. Received: {token}")
              return jsonify({"status": "error", "message": "Unauthorized"}), 403
         
-        response_data = {"scan_requested": self.scan_requested}
+        response_data = {
+            "scan_requested": self.scan_requested,
+            "status": "ping"
+        }
         if self.scan_requested:
             logging.info("Mobile app polled status: Sending scan request!")
             self.scan_requested = False # Reset after reading

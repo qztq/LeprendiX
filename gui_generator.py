@@ -1626,7 +1626,15 @@ class HonorarGeneratorApp:
         ttk.Label(info_frame, text=f"IP:Port:  {self.mobile_server.host_ip}:{self.mobile_server.port}", font=("Consolas", 11, "bold")).pack()
         ttk.Label(info_frame, text=f"Token:    {self.mobile_server.token}", font=("Consolas", 10)).pack()
         
+        def on_close_dialog():
+            self.mobile_server.set_connection_callback(None)
+            self.mobile_server.set_cancel_callback(None)
+            self.scan_dialog.destroy()
+            
+        self.scan_dialog.protocol("WM_DELETE_WINDOW", on_close_dialog)
+
         def trigger_scan_action():
+            if not self.scan_initial_frame.winfo_exists(): return
             self.mobile_server.trigger_scan()
             
             # Switch to loading view
@@ -1641,13 +1649,29 @@ class HonorarGeneratorApp:
             pb.pack(pady=10)
             pb.start(15)
             
-            ttk.Button(loading_frame, text="Cancel", command=self.scan_dialog.destroy).pack(pady=40)
+            ttk.Button(loading_frame, text="Cancel", command=on_close_dialog).pack(pady=40)
+
+        def on_mobile_connected():
+            self.root.after(0, perform_auto_scan)
+
+        def on_mobile_cancelled():
+            self.root.after(0, lambda: self.set_status("Vorgang am mobilen Gerät abgebrochen."))
+            self.root.after(0, on_close_dialog)
+
+        def perform_auto_scan():
+            if hasattr(self, 'scan_dialog') and self.scan_dialog.winfo_exists():
+                if hasattr(self, 'scan_initial_frame') and self.scan_initial_frame.winfo_exists():
+                    self.set_status("Mobile App verbunden. Scan wird angefordert...")
+                    trigger_scan_action()
+
+        self.mobile_server.set_connection_callback(on_mobile_connected)
+        self.mobile_server.set_cancel_callback(on_mobile_cancelled)
 
         ttk.Button(self.scan_initial_frame, text="Request", command=trigger_scan_action).pack(pady=5)
         
         self.scan_status_label = ttk.Label(self.scan_initial_frame, text="Warte auf Scan...", font=("Segoe UI", 10, "italic"))
         self.scan_status_label.pack(pady=10)
-        ttk.Button(self.scan_initial_frame, text="Abbrechen", command=self.scan_dialog.destroy).pack(pady=10)
+        ttk.Button(self.scan_initial_frame, text="Abbrechen", command=on_close_dialog).pack(pady=10)
 
     def open_archive_manager(self):
         """Öffnet ein Fenster zum Suchen und Reaktivieren von archivierten Patienten."""

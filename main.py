@@ -587,7 +587,6 @@ def create_main():
 
     create_config_entry(cat2.frame, "Teamup API Key:", "TEAMUP_API_KEY", show_char="*")
     create_config_entry(cat2.frame, "Teamup Calendar ID:", "TEAMUP_CALENDAR_ID")
-    create_config_entry(cat2.frame, "GitHub Token (Updates):", "GITHUB_TOKEN", show_char="*")
 
     # --- KATEGORIE 3: STANDARDWERTE ---
     cat3 = CollapsiblePane(db_container, "Standardwerte & Editor", expanded=False)

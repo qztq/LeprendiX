@@ -174,7 +174,6 @@ class SetupWizard(tk.Toplevel):
         
         self.add_text_input("Teamup API Key:", "TEAMUP_API_KEY", show="*")
         self.add_text_input("Teamup Calendar ID:", "TEAMUP_CALENDAR_ID")
-        self.add_text_input("GitHub Token (Updates):", "GITHUB_TOKEN", show="*")
 
     def create_defaults_step(self):
         tk.Label(self.container, text="3. Standardwerte", font=("Segoe UI", 16, "bold"), bg=COLOR_PRIMARY, fg="white").pack(pady=(0, 20))
@@ -183,6 +182,7 @@ class SetupWizard(tk.Toplevel):
         self.add_text_input("Standard Diagnose:", "DEFAULT_DIAGNOSE")
         self.add_text_input("Standard Anrede:", "DEFAULT_ANREDE")
         self.add_text_input("Schnellwahl Beträge (Komma-getrennt):", "QUICK_AMOUNTS")
+        self.add_text_input("Fixe Adresse (für KM-Berechnung):", "FIXED_ADDRESS")
 
     def add_text_input(self, label, key, show=None):
         frame = tk.Frame(self.container, bg=COLOR_PRIMARY)

@@ -280,7 +280,9 @@ class NeonTraceSplash:
         pb.pack(pady=10)
         dl_win.update()
 
-        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/octet-stream"}
+        headers = {"Accept": "application/octet-stream"}
+        if GITHUB_TOKEN:
+            headers["Authorization"] = f"token {GITHUB_TOKEN}"
         save_path = os.path.join(os.getcwd(), filename)
 
         start_time = time.time()
