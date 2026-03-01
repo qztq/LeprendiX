@@ -88,13 +88,6 @@ def _ensure_status_column():
         cursor.execute("ALTER TABLE patienten ADD COLUMN is_archived INTEGER DEFAULT 0")
         conn.commit()
         logging.info("Spalte 'is_archived' zur patienten-Tabelle hinzugefügt.")
-
-    try:
-        cursor.execute("CREATE TABLE IF NOT EXISTS blacklist (name TEXT PRIMARY KEY)")
-        conn.commit()
-    except Exception as e:
-        logging.error(f"Fehler beim Erstellen der Blacklist-Tabelle: {e}")
-
     finally:
         conn.close()
 
@@ -735,12 +728,19 @@ class HonorarGeneratorApp:
         self.root = root
         self.root = root
         self.root.title("LeprendiX")
-        self.root.geometry("1050x780")
+        # Fenster zentrieren + etwas nach rechts versetzt (Platz für Status-Checker links)
+        w, h = 1050, 780
+        ws = self.root.winfo_screenwidth()
+        hs = self.root.winfo_screenheight()
+        x = int((ws/2) - (w/2)) + 100
+        y = int((hs/2) - (h/2))
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
                 
         self.patient_data = None  
         self.stammdaten_betraege = {} 
         self.selected_leistung_id = None 
         self.selected_leistungs_kurznamen = set() # Für die Mehrfachauswahl-Buttons
+        self.session_blacklist = set() # In-memory blacklist for the current session
         self.ttk_style = ttk.Style(master=root) 
         self.mobile_server = None # Server instance
         
@@ -794,8 +794,7 @@ class HonorarGeneratorApp:
         self.update_patient_info() 
         self.load_leistung_stammdaten_buttons()
         self.open_status_checker()
-
-        self.search_entry.focus_set()
+        self.focus_and_highlight(self.search_entry)
         
         # Hotkeys aus Config laden und binden
         hk_enter = CONFIG.get('HOTKEY_ENTER', '<Return>')
@@ -821,7 +820,7 @@ class HonorarGeneratorApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def on_closing(self):
-        if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
+        if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?", parent=self.root):
             if os.path.exists(DATABASE_NAME):
                 try:
                     base_dir = os.path.dirname(DATABASE_NAME)
@@ -834,7 +833,6 @@ class HonorarGeneratorApp:
                 except Exception as e:
                     logging.error(f"[AutoBackup] Fehler: {e}")
         self.root.destroy()
-        sys.exit(0)
 
     def _setup_context_menu(self):
         """Bindet das Rechtsklick-Menü an alle Text-Widgets."""
@@ -868,7 +866,65 @@ class HonorarGeneratorApp:
         self.status_var.set(f" {message}")
         if duration:
             self.root.after(duration, lambda: self.status_var.set(""))
+
+    def _blink_highlight(self, widget, count=6):
+        if not widget or not widget.winfo_exists() or count <= 0:
+            # Restore original state at the end
+            if hasattr(widget, '_original_style'):
+                try:
+                    widget.configure(style=widget._original_style)
+                except tk.TclError:
+                    pass
+                del widget._original_style
+            if hasattr(widget, '_original_bg'):
+                try:
+                    widget.configure(background=widget._original_bg)
+                except tk.TclError:
+                    pass
+                del widget._original_bg
+            return
+
+        is_on = count % 2 == 0
         
+        if is_on:
+            # --- Turn ON highlight ---
+            if isinstance(widget, (ttk.Entry, ttk.Button)):
+                style_name = widget.winfo_class()
+                highlight_style_name = f"Highlight.{style_name}"
+                
+                if not hasattr(widget, '_original_style'):
+                    widget._original_style = widget.cget("style") or style_name
+
+                s = self.ttk_style
+                try:
+                    s.layout(highlight_style_name)
+                except tk.TclError: # Style does not exist, create it
+                    if isinstance(widget, ttk.Entry):
+                        s.configure(highlight_style_name, fieldbackground='#3498db')
+                    elif isinstance(widget, ttk.Button):
+                        s.configure(highlight_style_name, background='#3498db', foreground='white')
+                        try:
+                            original_font = s.lookup(widget._original_style, 'font')
+                            if original_font:
+                                s.configure(highlight_style_name, font=original_font)
+                        except tk.TclError:
+                            pass # Use default font
+                widget.configure(style=highlight_style_name)
+            elif isinstance(widget, tk.Listbox):
+                if not hasattr(widget, '_original_bg'):
+                    widget._original_bg = widget.cget("background")
+                widget.configure(background='#3498db')
+        else:
+            # --- Turn OFF highlight ---
+            if hasattr(widget, '_original_style'): widget.configure(style=widget._original_style)
+            if hasattr(widget, '_original_bg'): widget.configure(background=widget._original_bg)
+
+        self.root.after(150, lambda: self._blink_highlight(widget, count - 1))
+
+    def focus_and_highlight(self, widget):
+        if widget and widget.winfo_exists():
+            widget.focus_set()
+            self._blink_highlight(widget)
    
     def _get_invoice_sequence_data(self):
         """Holt die aktuelle Folgenummer, Jahr und Monat aus der Einstellungen-Tabelle."""
@@ -1072,6 +1128,12 @@ class HonorarGeneratorApp:
                                selection_callback=self.load_patient_from_checker,
                                archive_callback=self.refresh_all_stammdaten_ui) # Pass callback
         
+        # Auto-Positionierung: Links neben dem Hauptfenster
+        self.root.update_idletasks()
+        x = self.root.winfo_x()
+        y = self.root.winfo_y()
+        checker_window.geometry(f"+{x - 410}+{y}") # 400 Breite + 10px Abstand
+        
     def load_patient_from_checker(self, patient_id):
         # Setze ID in Suchfeld
         self.search_entry.delete(0, tk.END)
@@ -1117,7 +1179,7 @@ class HonorarGeneratorApp:
             self.results_listbox.selection_clear(0, tk.END)
             self.results_listbox.selection_set(0)
             self.results_listbox.activate(0)
-            self.results_listbox.focus_set() # WICHTIG: Fokus springt für das nächste ENTER in die Liste
+            self.focus_and_highlight(self.results_listbox) # WICHTIG: Fokus springt für das nächste ENTER in die Liste
 
 
     def finish_import_transition(self):
@@ -1186,7 +1248,7 @@ class HonorarGeneratorApp:
 
             # Focus auf den Teamup-Button setzen
             if hasattr(self, 'teamup_button'):
-                self.teamup_button.focus_set()
+                self.focus_and_highlight(self.teamup_button)
 
     def update_patient_info(self):
         if self.patient_data:
@@ -1209,7 +1271,7 @@ class HonorarGeneratorApp:
         # Aktion: Wechsel zum ersten Tab (wie "Fertig -->")
         if current_tab == 2:
             self.notebook.select(0)
-            self.search_entry.focus_set()
+            self.focus_and_highlight(self.search_entry)
             
         # Fall B: Wir sind im Tab "Honorarnote generieren" (Index 0)
         # Aktion: Dokument erstellen (wie "Drucken und Speichern")
@@ -1861,12 +1923,9 @@ class HonorarGeneratorApp:
         cursor.execute("SELECT nachname FROM patienten WHERE is_archived = 0 OR is_archived IS NULL")
         db_lastnames = [r[0].strip().lower() for r in cursor.fetchall() if r[0] and r[0].strip()]
         
-        # Blacklist laden
-        cursor.execute("SELECT name FROM blacklist")
-        blacklist_terms = [r[0].strip().lower() for r in cursor.fetchall() if r[0]]
-        
         conn.close()
 
+        blacklist_terms = [term.lower() for term in self.session_blacklist]
         unknown_patients = []
         
         for title, date_str, _, _ in events:
@@ -1935,20 +1994,14 @@ class HonorarGeneratorApp:
         text = self.new_patients_listbox.get(index)
         name_part = text.split(": ", 1)[1] if ": " in text else text
             
-        term = simpledialog.askstring("Blacklist", "Begriff für Blacklist eingeben (z.B. 'Meeting', 'Urlaub'):", initialvalue=name_part, parent=self.root)
+        term = simpledialog.askstring("Blacklist", "Begriff für Blacklist für diese Sitzung eingeben (z.B. 'Meeting', 'Urlaub'):", initialvalue=name_part, parent=self.root)
         
-        if term:
-            conn = sqlite3.connect(DATABASE_NAME)
-            cursor = conn.cursor()
-            try:
-                cursor.execute("INSERT OR IGNORE INTO blacklist (name) VALUES (?)", (term.strip(),))
-                conn.commit()
-                self.set_status(f"'{term}' zur Blacklist hinzugefügt.")
-                self.check_new_patients()
-            except Exception as e:
-                messagebox.showerror("Fehler", f"Fehler beim Speichern: {e}")
-            finally:
-                conn.close()
+        if term and term.strip():
+            clean_term = term.strip()
+            self.session_blacklist.add(clean_term)
+            self.set_status(f"'{clean_term}' zur Blacklist für diese Sitzung hinzugefügt.")
+            # Refresh the list to reflect the change
+            self.check_new_patients()
 
     def search_and_load_patient(self):
         # ... (Funktion bleibt unverändert)
@@ -2385,115 +2438,51 @@ class HonorarGeneratorApp:
         self.leistung_canvas.itemconfig(self.window_id, width=event.width)
 
     def setup_leistung_tab(self, tab):
-# ... (Rest der Klasse bleibt unverändert)
-        ttk.Label(tab, text="Aktueller Patient:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-        self.leistung_patient_label = ttk.Label(tab, text="Bitte Patient in Tab 1 auswählen", foreground='red')
-        self.leistung_patient_label.grid(row=0, column=1, columnspan=2, padx=5, pady=5, sticky='w')
+        # Grid configuration
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(3, weight=1) # Treeview expands (Row 3)
 
-        # Erste Zeile: Datum und Uhrzeit Frame
-        date_time_frame = ttk.Frame(tab)
-        date_time_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='w')
-        ttk.Label(date_time_frame, text="Datum (TT.MM.JJJJ):").pack(side=tk.LEFT, padx=(0,5))
-        self.date_entry = ttk.Entry(date_time_frame, width=15)
-        self.date_entry.pack(side=tk.LEFT, padx=(0,15))
-        self.date_entry.insert(0, datetime.date.today().strftime("%d.%m.%Y"))
-        ttk.Label(date_time_frame, text="Von (HH:MM):").pack(side=tk.LEFT, padx=(0,5))
-        self.time_from_entry = ttk.Entry(date_time_frame, width=8)
-        self.time_from_entry.pack(side=tk.LEFT, padx=(0,5))
-        self.time_from_entry.insert(0, "11:00")
-        ttk.Label(date_time_frame, text="Bis (HH:MM):").pack(side=tk.LEFT, padx=(5,5))
-        self.time_to_entry = ttk.Entry(date_time_frame, width=8)
-        self.time_to_entry.pack(side=tk.LEFT, padx=(0,5))
-        self.time_to_entry.insert(0, "11:50")
+        # --- 1. Patient Info ---
+        info_frame = ttk.Frame(tab)
+        info_frame.grid(row=0, column=0, sticky='ew', padx=10, pady=5)
+        ttk.Label(info_frame, text="Aktueller Patient:", font=('Segoe UI', 10)).pack(side=tk.LEFT)
+        self.leistung_patient_label = ttk.Label(info_frame, text="Bitte Patient in Tab 1 auswählen", foreground='red', font=('Segoe UI', 10, 'bold'))
+        self.leistung_patient_label.pack(side=tk.LEFT, padx=10)
 
-        # NEU: Button zum Starten der Kalender-Suche
-        self.teamup_button = ttk.Button(date_time_frame, text="📅 Teamup-Termine Importieren/Ersetzen", command=self.open_teamup_search)
-        self.teamup_button.pack(side=tk.LEFT, padx=10)
-
-        # NEU: Checkbox für Kilometergeld
-        self.km_check = ttk.Checkbutton(date_time_frame, text="inkl. KM-Geld", variable=self.use_km_money_var)
-        self.km_check.pack(side=tk.LEFT, padx=10)
-
-        # Zeile 2: Toggle Editor Button
-        self.toggle_editor_btn = ttk.Button(tab, text="📝 Manuelle Eingabe / Editor öffnen", command=self.open_manual_editor)
-        self.toggle_editor_btn.grid(row=2, column=0, columnspan=3, padx=5, pady=(10,0), sticky='w')
-
-        # Zeile 3: Editor Frame (Hidden by default)
-        self.editor_frame = ttk.Frame(tab, borderwidth=1, relief="groove", padding=5)
-        self.editor_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky='ew')
+        # --- 2. Main Actions (Teamup & Finish) ---
+        main_action_frame = ttk.Frame(tab)
+        main_action_frame.grid(row=1, column=0, sticky='ew', padx=10, pady=10)
         
-        # 3.1 Loader (Stammdaten in Editor laden)
-        loader_frame = ttk.Frame(self.editor_frame)
-        loader_frame.pack(fill='x', pady=5)
-        ttk.Label(loader_frame, text="Vorlage aus Stammdaten laden:").pack(side=tk.LEFT)
-        self.stammdaten_combo = ttk.Combobox(loader_frame, width=40, state="readonly")
-        self.stammdaten_combo.pack(side=tk.LEFT, padx=5)
-        ttk.Button(loader_frame, text="In Editor übernehmen", command=self.load_description_from_combo).pack(side=tk.LEFT, padx=5)
+        # Styles
+        self.ttk_style.configure('Prominent.TButton', font=('Segoe UI', 12, 'bold'))
+        self.ttk_style.configure('Finish.TButton', font=('Segoe UI', 12, 'bold'), foreground='green')
 
-        # 3.2 Description
-        desc_frame = ttk.Frame(self.editor_frame)
-        desc_frame.pack(fill='x', pady=5)
-        ttk.Label(desc_frame, text="Beschreibung:").pack(side=tk.LEFT, anchor='n', padx=(0,5))
-        self.description_text = tk.Text(desc_frame, height=3, width=60, font=("Segoe UI", 10))
-        self.description_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.main_description_text = self.description_text # Backup für Restore
-        desc_scroll = ttk.Scrollbar(desc_frame, command=self.description_text.yview)
-        desc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.description_text.config(yscrollcommand=desc_scroll.set)
+        self.teamup_button = ttk.Button(main_action_frame, text="📅 Teamup-Termine Importieren", command=self.open_teamup_search, style='Prominent.TButton')
+        self.teamup_button.pack(side=tk.LEFT, fill='x', expand=True, padx=(0, 10), ipady=5)
 
-        # 3.3 Amount & Buttons
-        manual_frame = ttk.Frame(self.editor_frame)
-        manual_frame.pack(fill='x', pady=5)
-        ttk.Label(manual_frame, text="Manuelle Betragseingabe (€):").pack(side=tk.LEFT, padx=(0,5))
-        self.amount_entry = ttk.Entry(manual_frame, width=10)
-        self.amount_entry.pack(side=tk.LEFT, padx=(0,15))
-        self.main_amount_entry = self.amount_entry # Backup für Restore
-        self.amount_entry.insert(0, "0.00")
+        finish_btn = ttk.Button(main_action_frame, text="✅ Fertig / Weiter zum Drucken", command=self._switch_to_generate_tab, style='Finish.TButton')
+        finish_btn.pack(side=tk.LEFT, fill='x', expand=True, padx=(10, 0), ipady=5)
+
+        # --- 3. Leistungsauswahl (Stammdaten Buttons) ---
+        selection_frame = ttk.LabelFrame(tab, text="Leistung auswählen")
+        selection_frame.grid(row=2, column=0, sticky='ew', padx=10, pady=5)
         
-        self.add_leistung_button = ttk.Button(manual_frame, text="Leistung Speichern", command=self.add_leistung_gui)
-        self.main_add_leistung_button = self.add_leistung_button # Backup für Restore
-        self.add_leistung_button.pack(side=tk.LEFT, padx=10)
-        ttk.Button(manual_frame, text="Editor Leeren", command=self.clear_editor).pack(side=tk.LEFT, padx=10)
+        self.leistung_canvas = tk.Canvas(selection_frame, height=200)
+        self.leistung_canvas.pack(side="left", fill="x", expand=True, padx=5, pady=5)
 
-        self.editor_frame.grid_remove() # Standardmäßig versteckt
+        ls_scrollbar = ttk.Scrollbar(selection_frame, orient="vertical", command=self.leistung_canvas.yview)
+        ls_scrollbar.pack(side="right", fill="y", pady=5)
 
-        # Zeile 4: Leistungsbuttons Frame (Scrollable)
-        leistung_scroll_frame = ttk.Frame(tab)
-        leistung_scroll_frame.grid(row=4, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
-        
-        ttk.Label(leistung_scroll_frame, text="Schnellwahl aus Stammdaten:").pack(anchor='w', padx=5)
-        
-        self.leistung_canvas = tk.Canvas(leistung_scroll_frame)
-        self.leistung_canvas.pack(side="left", fill="both", expand=True, pady=5)
-
-        leistung_scrollbar = ttk.Scrollbar(leistung_scroll_frame, orient="vertical", command=self.leistung_canvas.yview)
-        leistung_scrollbar.pack(side="right", fill="y", pady=5)
-
-        self.leistung_canvas.configure(yscrollcommand=leistung_scrollbar.set)
+        self.leistung_canvas.configure(yscrollcommand=ls_scrollbar.set)
         self.leistung_canvas.bind('<Configure>', self._on_canvas_configure)
 
         self.leistung_button_frame = ttk.Frame(self.leistung_canvas)
         self.window_id = self.leistung_canvas.create_window((0, 0), window=self.leistung_button_frame, anchor="nw")
+
+        # --- 4. Treeview (Existing Services) ---
+        tree_frame = ttk.LabelFrame(tab, text="Erfasste Leistungen")
+        tree_frame.grid(row=3, column=0, sticky='nsew', padx=10, pady=5)
         
-        # Zeile 5: Actions for Quick Select
-        action_frame = ttk.Frame(tab)
-        action_frame.grid(row=5, column=0, columnspan=3, padx=5, pady=5, sticky='ew')
-        
-        self.add_selection_button = ttk.Button(action_frame, text="Ausgewählte Leistungen Hinzufügen", command=self.add_leistung_gui)
-        self.add_selection_button.pack(side=tk.LEFT, padx=10)
-        ttk.Button(action_frame, text="Auswahl zurücksetzen", command=lambda: self._reset_leistung_selection()).pack(side=tk.LEFT, padx=10)
-
-        # Zeile 6: Trennlinie
-        ttk.Separator(tab, orient='horizontal').grid(row=6, column=0, columnspan=3, sticky='ew', pady=5)
-
-        # Zeile 7: Gesamtübersicht
-        self.summary_label = ttk.Label(tab, text="Gesamtsumme: €0.00 | Nicht abgerechnete Leistungen: 0")
-        self.summary_label.grid(row=7, column=0, columnspan=3, padx=5, pady=5, sticky='w')
-
-        # Zeile 8: Treeview
-        tree_frame = ttk.Frame(tab)
-        tree_frame.grid(row=8, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
-
         columns = ('ID', 'Datum', 'Von', 'Bis', 'Beschreibung', 'Betrag')
         self.leistung_tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='browse')
         
@@ -2506,37 +2495,77 @@ class HonorarGeneratorApp:
         for col in columns:
             self.leistung_tree.heading(col, text=col)
         
-        # Spaltenbreiten 
         self.leistung_tree.column('ID', width=40, anchor='center')
         self.leistung_tree.column('Datum', width=100, anchor='center')
         self.leistung_tree.column('Von', width=60, anchor='center')
         self.leistung_tree.column('Bis', width=60, anchor='center')
         self.leistung_tree.column('Beschreibung', width=300, anchor='w')
         self.leistung_tree.column('Betrag', width=120, anchor='e')
-
-        
-        tab.grid_rowconfigure(8, weight=1)
-
-
-        control_frame = ttk.Frame(tab)
-        control_frame.grid(row=9, column=0, columnspan=3, pady=10, sticky='ew')
-        ttk.Button(control_frame, text="Leistung Löschen", command=self.delete_leistung_gui).pack(side=tk.LEFT, padx=10)
-        ttk.Button(control_frame, text="Alle Leistungen Löschen", command=self.delete_all_leistungen_gui).pack(side=tk.LEFT, padx=10)
-        ttk.Button(control_frame, text="Leistung Bearbeiten/Laden", command=self.load_leistung_for_edit).pack(side=tk.RIGHT, padx=10)
-        tk.Button(control_frame, text="=> Fertig", command=self._switch_to_generate_tab).pack(side=tk.LEFT, expand=True, padx=10)
-        
-
-        
         
         self.leistung_tree.bind('<<TreeviewSelect>>', self.select_leistung_for_edit)
 
-    def toggle_editor(self):
-        if self.editor_frame.winfo_viewable():
-            self.editor_frame.grid_remove()
-            self.toggle_editor_btn.config(text="🔽 Manuelle Eingabe / Editor öffnen")
-        else:
-            self.editor_frame.grid()
-            self.toggle_editor_btn.config(text="🔼 Editor schließen")
+        # --- 5. Summary & List Controls ---
+        summary_frame = ttk.Frame(tab)
+        summary_frame.grid(row=4, column=0, sticky='ew', padx=10, pady=5)
+
+        self.summary_label = ttk.Label(summary_frame, text="Gesamtsumme: €0.00 | Nicht abgerechnete Leistungen: 0", font=('Segoe UI', 10, 'bold'))
+        self.summary_label.pack(side=tk.LEFT)
+
+        ttk.Button(summary_frame, text="Alle Löschen", command=self.delete_all_leistungen_gui).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(summary_frame, text="Löschen", command=self.delete_leistung_gui).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(summary_frame, text="Bearbeiten", command=self.load_leistung_for_edit).pack(side=tk.RIGHT, padx=5)
+
+        # --- 6. Date/Time & Add & Manual ---
+        bottom_group = ttk.LabelFrame(tab, text="Hinzufügen / Bearbeiten")
+        bottom_group.grid(row=5, column=0, sticky='ew', padx=10, pady=10)
+
+        # Date/Time/KM
+        dt_frame = ttk.Frame(bottom_group)
+        dt_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(dt_frame, text="Datum:").pack(side=tk.LEFT)
+        self.date_entry = ttk.Entry(dt_frame, width=12)
+        self.date_entry.pack(side=tk.LEFT, padx=5)
+        self.date_entry.insert(0, datetime.date.today().strftime("%d.%m.%Y"))
+
+        ttk.Label(dt_frame, text="Von:").pack(side=tk.LEFT)
+        self.time_from_entry = ttk.Entry(dt_frame, width=6)
+        self.time_from_entry.pack(side=tk.LEFT, padx=5)
+        self.time_from_entry.insert(0, "11:00")
+
+        ttk.Label(dt_frame, text="Bis:").pack(side=tk.LEFT)
+        self.time_to_entry = ttk.Entry(dt_frame, width=6)
+        self.time_to_entry.pack(side=tk.LEFT, padx=5)
+        self.time_to_entry.insert(0, "11:50")
+
+        self.km_check = ttk.Checkbutton(dt_frame, text="inkl. KM-Geld", variable=self.use_km_money_var)
+        self.km_check.pack(side=tk.LEFT, padx=15)
+
+        # Buttons
+        btn_frame = ttk.Frame(bottom_group)
+        btn_frame.pack(fill='x', padx=5, pady=5)
+
+        self.add_selection_button = ttk.Button(btn_frame, text="Ausgewählte Leistung(en) hinzufügen", command=self.add_leistung_gui)
+        self.add_selection_button.pack(side=tk.LEFT, padx=10)
+        
+        ttk.Button(btn_frame, text="Auswahl Reset", command=lambda: self._reset_leistung_selection()).pack(side=tk.LEFT, padx=5)
+
+        self.toggle_editor_btn = ttk.Button(btn_frame, text="Manuelle Eingabe / Editor öffnen", command=self.open_manual_editor)
+        self.toggle_editor_btn.pack(side=tk.RIGHT, padx=10)
+
+        # --- Hidden Widgets for Compatibility ---
+        # These are needed because add_leistung_gui references them even if the editor window isn't open
+        self.editor_frame = ttk.Frame(tab) # Dummy frame
+        self.description_text = tk.Text(self.editor_frame, height=1, width=1)
+        self.amount_entry = ttk.Entry(self.editor_frame)
+        self.amount_entry.insert(0, "0.00")
+        
+        # Backups for restore when Toplevel closes
+        self.main_description_text = self.description_text
+        self.main_amount_entry = self.amount_entry
+        self.main_add_leistung_button = self.add_selection_button
+        self.add_leistung_button = self.add_selection_button # Initial reference
+
     def open_manual_editor(self):
         if hasattr(self, 'editor_window') and self.editor_window and self.editor_window.winfo_exists():
             self.editor_window.lift()
@@ -2857,7 +2886,7 @@ class HonorarGeneratorApp:
         ttk.Button(btn_frame, text="+ Hinzufügen", command=add_selected_events).pack(side=tk.LEFT, padx=5)
         save_btn = ttk.Button(btn_frame, text="Auswahl Speichern & Ersetzen (ENTER)", command=replace_selected_events)
         save_btn.pack(side=tk.LEFT, padx=5)
-        search_window.after(100, lambda: save_btn.focus_set())
+        search_window.after(100, lambda: self.focus_and_highlight(save_btn))
 
         # --- BINDINGS ---
         # ENTER im Suchfeld -> Neue Suche

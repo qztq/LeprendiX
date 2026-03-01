@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import sqlite3
 import os
+import sys
 import shutil
 import json
 from config_loader import CONFIG
@@ -29,7 +30,7 @@ class PatientStatusApp:
         self.tree.heading('PatientID', text='ID')
         self.tree.column('PatientID', width=40, stretch=tk.NO, anchor='center') 
         self.tree.heading('PatientName', text='Patienten Name')
-        self.tree.column('PatientName', width=450, stretch=tk.YES)
+        self.tree.column('PatientName', width=300, stretch=tk.YES)
         
         scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -41,6 +42,7 @@ class PatientStatusApp:
         self.tree.tag_configure('green', foreground='green', font=('Courier New', 11))
         
         self.tree.bind("<Double-1>", self.on_double_click)
+        self.tree.bind("<Button-3>", self.show_context_menu)
         
         # --- BUTTONS ---
         button_frame = ttk.Frame(master)
@@ -68,6 +70,62 @@ class PatientStatusApp:
                 self.selection_callback(str(patient_id))
                 # Auswahl nach Doppelklick aufheben
                 self.tree.selection_remove(*selection)
+
+    def show_context_menu(self, event):
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            menu = tk.Menu(self.master, tearoff=0)
+            menu.add_command(label="📂 Im Explorer öffnen", command=self.open_in_explorer)
+            menu.add_command(label="✅ Auf Grün setzen", command=self.set_to_green)
+            menu.add_command(label="📦 Archivieren", command=self.archive_selected_patient)
+            menu.post(event.x_root, event.y_root)
+
+    def open_in_explorer(self):
+        selected_item = self.tree.selection()
+        if not selected_item: return
+        patient_id = selected_item[0]
+        
+        try:
+            db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
+            conn = sqlite3.connect(db_name)
+            cursor = conn.cursor()
+            cursor.execute("SELECT vorname, nachname FROM patienten WHERE id=?", (patient_id,))
+            res = cursor.fetchone()
+            conn.close()
+            
+            if res:
+                v_name, n_name = res
+                folder_name = f"{n_name} {v_name}"
+                patient_base_dir = CONFIG.get('PATIENT_BASE_DIR')
+                path = os.path.join(patient_base_dir, folder_name)
+                
+                if os.path.exists(path):
+                    if sys.platform == 'win32':
+                        os.startfile(path)
+                    else:
+                        import subprocess
+                        subprocess.Popen(['xdg-open', path])
+                else:
+                    messagebox.showinfo("Info", f"Ordner nicht gefunden:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Konnte Ordner nicht öffnen: {e}")
+
+    def set_to_green(self):
+        selected_item = self.tree.selection()
+        if not selected_item: return
+        patient_id = selected_item[0]
+        
+        try:
+            db_name = CONFIG.get('DATABASE_NAME', 'patienten.db')
+            conn = sqlite3.connect(db_name)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE patienten SET invoiced_since_reset = 1 WHERE id=?", (patient_id,))
+            conn.commit()
+            conn.close()
+            self.load_patient_statuses()
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Datenbankfehler: {e}")
     
     def _ensure_archive_dir(self):
         """Stellt sicher, dass der Archiv-Ordner existiert."""

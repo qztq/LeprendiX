@@ -125,6 +125,13 @@ class SetupWizard(tk.Toplevel):
         tk.Label(self.container, text="Admin-Konto erstellen", font=("Segoe UI", 16, "bold"), bg=COLOR_PRIMARY, fg="white").pack(pady=(0, 20))
         tk.Label(self.container, text="Bitte legen Sie einen Benutzer und ein Passwort fest.", font=("Segoe UI", 10), bg=COLOR_PRIMARY, fg="#bdc3c7").pack(pady=(0, 20))
         
+        # Auth Toggle
+        self.auth_var = tk.BooleanVar(value=self.config_data.get("AUTH_ENABLED", False))
+        cb = tk.Checkbutton(self.container, text="Passwortschutz aktivieren", variable=self.auth_var, 
+                            bg=COLOR_PRIMARY, fg="white", selectcolor=COLOR_SECONDARY, activebackground=COLOR_PRIMARY, activeforeground="white",
+                            command=lambda: self.config_data.update({"AUTH_ENABLED": self.auth_var.get()}))
+        cb.pack(pady=(0, 20))
+        
         self.add_cred_input("Benutzername:", "user")
         self.add_cred_input("Passwort:", "password", show="*")
 
@@ -202,7 +209,7 @@ class SetupWizard(tk.Toplevel):
 
     def finish(self):
         # Validate credentials if needed
-        if self.needs_creds:
+        if self.needs_creds and self.config_data.get("AUTH_ENABLED", False):
             if not self.new_creds.get("user") or not self.new_creds.get("password"):
                 messagebox.showwarning("Fehler", "Bitte Benutzername und Passwort festlegen.")
                 return
