@@ -8,7 +8,7 @@
     "GITHUB_TOKEN": "",
     "QUICK_AMOUNTS": "36, 38, 60, 86",
     "AUTH_ENABLED": false,
-    "LAST_SETUP_VERSION": "1.7.3",
+    "LAST_SETUP_VERSION": "0.0.0",
     "HOTKEY_ENTER": "<Return>",
     "HOTKEY_SWITCH_TAB": "<F12>, <Delete>",
     "AUTO_DATE_SELECTOR": "Auto",

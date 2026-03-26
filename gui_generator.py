@@ -1005,9 +1005,8 @@ class HonorarGeneratorApp:
         logging.debug(f"Sequenz-Daten aktuell: {self.invoice_sequence_data}")
 
 
-        now = datetime.datetime.now()
-        current_year = str(now.year)
-        current_month = str(now.month).zfill(2) 
+        current_year = self.selected_invoice_year.get()
+        current_month = self.selected_invoice_month.get()
 
         # Hole die gespeicherten Daten (als String)
         stored_year = self.invoice_sequence_data.get('rechnung_jahr', current_year)
