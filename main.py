@@ -165,9 +165,20 @@ def get_release_notes():
     notes_content = "Release-Informationen konnten nicht geladen werden.\n\n" \
                     "Bitte prüfen Sie Ihre Internetverbindung oder besuchen Sie die Releases-Seite manuell."
     try:
-        headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+        base_headers = {
+            "User-Agent": "LeprendiX-App",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        headers = base_headers.copy()
+        if GITHUB_TOKEN: headers["Authorization"] = f"token {GITHUB_TOKEN}"
+        
         # Get latest 5 releases
         response = requests.get(RELEASES_API_URL, headers=headers, timeout=5, params={"per_page": 5})
+        
+        # Fallback: Falls Token ungültig (401), ohne Token erneut versuchen
+        if response.status_code == 401:
+            response = requests.get(RELEASES_API_URL, headers=base_headers, timeout=5, params={"per_page": 5})
+            
         response.raise_for_status()
         releases = response.json()
         

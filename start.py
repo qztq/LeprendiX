@@ -200,8 +200,19 @@ class NeonTraceSplash:
         local_v = self.get_local_version()
         force_update = "--force-update" in sys.argv
         try:
-            headers = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
+            base_headers = {
+                "User-Agent": "LeprendiX-App",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            headers = base_headers.copy()
+            if GITHUB_TOKEN: headers["Authorization"] = f"token {GITHUB_TOKEN}"
+
             response = requests.get(API_URL, headers=headers, timeout=5)
+            
+            # Fallback: Falls Token ungültig (401), ohne Token erneut versuchen
+            if response.status_code == 401:
+                response = requests.get(API_URL, headers=base_headers, timeout=5)
+
             if response.status_code == 200:
                 release = response.json()
                 latest_tag = release.get('tag_name', '').replace('v', '')
@@ -256,6 +267,8 @@ class NeonTraceSplash:
                             sys.exit()
                 else:
                     print("[DEBUG] Kein Update nötig (Lokal >= GitHub).")
+            else:
+                print(f"[DEBUG] GitHub API Fehler {response.status_code}: {response.text}")
         except Exception as e:
             print(f"[DEBUG] Fehler beim Update-Check: {e}")
         print("--- CHECK BEENDET ---\n")
@@ -280,15 +293,25 @@ class NeonTraceSplash:
         pb.pack(pady=10)
         dl_win.update()
 
-        headers = {"Accept": "application/octet-stream"}
-        if GITHUB_TOKEN:
-            headers["Authorization"] = f"token {GITHUB_TOKEN}"
+        base_headers = {
+            "User-Agent": "LeprendiX-App",
+            "Accept": "application/octet-stream"
+        }
+        headers = base_headers.copy()
+        if GITHUB_TOKEN: headers["Authorization"] = f"token {GITHUB_TOKEN}"
+
         save_path = os.path.join(os.getcwd(), filename)
 
         start_time = time.time()
 
         try:
-            with requests.get(url, headers=headers, stream=True) as r:
+            r = requests.get(url, headers=headers, stream=True)
+            # Fallback: Falls Token ungültig (401), ohne Token erneut versuchen
+            if r.status_code == 401:
+                r.close()
+                r = requests.get(url, headers=base_headers, stream=True)
+
+            with r:
                 r.raise_for_status()
                 total = int(r.headers.get('content-length', 0))
                 dl = 0

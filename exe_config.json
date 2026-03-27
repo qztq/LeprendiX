@@ -15,7 +15,7 @@
   },
   {
    "optionDest": "console",
-   "value": false
+   "value": true
   },
   {
    "optionDest": "icon_file",
@@ -32,6 +32,10 @@
   {
    "optionDest": "clean_build",
    "value": false
+  },
+  {
+   "optionDest": "splash",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/logo.png"
   },
   {
    "optionDest": "strip",
@@ -66,128 +70,12 @@
    "value": "sqlite3"
   },
   {
-   "optionDest": "collect_submodules",
-   "value": "sqlite3"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "docx"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "PIL"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "requests"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "docx"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "_sqlite3"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "PIL"
-  },
-  {
    "optionDest": "hiddenimports",
    "value": "tkinter"
   },
   {
    "optionDest": "hiddenimports",
-   "value": "tkinter.ttk"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "calendar"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "typing"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "_sqlite3"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "requests"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "tkinter"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "tkinter.ttk"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "calendar"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "typing"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "importlib"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "importlib.resources"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "importlib"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "importlib.resources"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "runpy"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "traceback"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "runpy"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "traceback"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "pickle"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "pickle"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "shutil"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "json"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "shutil"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "json"
+   "value": "datetime"
   },
   {
    "optionDest": "datas",
@@ -195,11 +83,11 @@
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/db_setup.py;."
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/crash_handler.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/favicon.ico;."
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/db_setup.py;."
   },
   {
    "optionDest": "datas",
@@ -223,7 +111,23 @@
   },
   {
    "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/migrate_legacy.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/mobile_connect.py;."
+  },
+  {
+   "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/patient_status_checker.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/setup_wizard.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/start.py;."
   },
   {
    "optionDest": "datas",
@@ -231,63 +135,67 @@
   },
   {
    "optionDest": "hiddenimports",
+   "value": "PIL"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "docx"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "os"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "requests"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "subprocess"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "sys"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "shutil"
+  },
+  {
+   "optionDest": "hiddenimports",
    "value": "logging"
   },
   {
    "optionDest": "hiddenimports",
-   "value": "traceback"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "logging"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "traceback"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "urllib.parse"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "urllib.parse"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "ctypes"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "ctypes"
-  },
-  {
-   "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/crash_handler.py;."
-  },
-  {
-   "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/setup_wizard.py;."
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "tempfile"
-  },
-  {
-   "optionDest": "collect_submodules",
-   "value": "tempfile"
-  },
-  {
-   "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/migrate_legacy.py;."
+   "value": "threading"
   },
   {
    "optionDest": "hiddenimports",
    "value": "geopy"
   },
   {
-   "optionDest": "collect_submodules",
-   "value": "geopy"
+   "optionDest": "hiddenimports",
+   "value": "calendar"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "json"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "pickle"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "socket"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "flask"
+  },
+  {
+   "optionDest": "hiddenimports",
+   "value": "secrets"
   },
   {
    "optionDest": "hiddenimports",
@@ -295,31 +203,27 @@
   },
   {
    "optionDest": "hiddenimports",
-   "value": "pyzbar"
+   "value": "glob"
   },
   {
    "optionDest": "hiddenimports",
-   "value": "flask"
+   "value": "ctypes"
   },
   {
-   "optionDest": "collect_submodules",
-   "value": "pyzbar"
+   "optionDest": "hiddenimports",
+   "value": "webbrowser"
   },
   {
-   "optionDest": "collect_submodules",
-   "value": "qrcode"
+   "optionDest": "hiddenimports",
+   "value": "runpy"
   },
   {
-   "optionDest": "collect_submodules",
-   "value": "flask"
-  },
-  {
-   "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/mobile_connect.py;."
+   "optionDest": "hiddenimports",
+   "value": "tempfile"
   }
  ],
  "nonPyinstallerOptions": {
   "increaseRecursionLimit": true,
-  "manualArguments": "--collect-all python-docx"
+  "manualArguments": ""
  }
 }
