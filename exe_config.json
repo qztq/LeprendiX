@@ -15,7 +15,7 @@
   },
   {
    "optionDest": "console",
-   "value": true
+   "value": false
   },
   {
    "optionDest": "icon_file",
@@ -32,10 +32,6 @@
   {
    "optionDest": "clean_build",
    "value": false
-  },
-  {
-   "optionDest": "splash",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/logo.png"
   },
   {
    "optionDest": "strip",
@@ -68,14 +64,6 @@
   {
    "optionDest": "hiddenimports",
    "value": "sqlite3"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "tkinter"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "datetime"
   },
   {
    "optionDest": "datas",
@@ -132,94 +120,6 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/version.txt;."
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "PIL"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "docx"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "os"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "requests"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "subprocess"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "sys"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "shutil"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "logging"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "threading"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "geopy"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "calendar"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "json"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "pickle"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "socket"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "flask"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "secrets"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "qrcode"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "glob"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "ctypes"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "webbrowser"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "runpy"
-  },
-  {
-   "optionDest": "hiddenimports",
-   "value": "tempfile"
   }
  ],
  "nonPyinstallerOptions": {
