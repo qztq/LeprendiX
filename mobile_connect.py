@@ -4,14 +4,20 @@ import qrcode
 import os
 import secrets
 import logging
-from flask import Flask, request, jsonify
+import datetime
+import base64
 import json
+import sqlite3
+import re
+from flask import Flask, request, jsonify, send_from_directory
 
 class MobileServer:
-    def __init__(self, callback_function, status_callback=None):
+    def __init__(self, callback_function, status_callback=None, batch_callback=None, db_path=None):
         self.app = Flask(__name__)
         self.callback = callback_function
         self.status_callback = status_callback
+        self.batch_callback = batch_callback
+        self.db_path = db_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'patienten.db')
         self.connection_callback = None
         self.cancel_callback = None
         self.token = secrets.token_hex(16)
@@ -21,13 +27,51 @@ class MobileServer:
         self.running = False
         self.scan_requested = False
         self.ping_requested = False
+
+        # Companion directory
+        self.companion_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Companion')
         
-        # Routes
-        self.app.add_url_rule('/upload', 'upload', self.handle_upload, methods=['POST'])
-        self.app.add_url_rule('/verify', 'verify', self.handle_verify, methods=['POST'])
-        self.app.add_url_rule('/pong', 'pong', self.handle_pong, methods=['POST'])
-        self.app.add_url_rule('/status', 'status', self.handle_status, methods=['GET'])
-        self.app.add_url_rule('/report_status', 'report_status', self.handle_report_status, methods=['POST'])
+        # CORS & Headers
+        @self.app.after_request
+        def add_cors_headers(response):
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            return response
+
+        # Routes - Companion Web App
+        self.app.add_url_rule('/', 'companion_index', self.serve_companion_index, methods=['GET'])
+        self.app.add_url_rule('/logo.png', 'companion_logo', self.serve_companion_logo, methods=['GET'])
+        self.app.add_url_rule('/<path:filename>', 'companion_static', self.serve_companion_file, methods=['GET'])
+
+        # Routes - API
+        self.app.add_url_rule('/upload', 'upload', self.handle_upload, methods=['POST', 'OPTIONS'])
+        self.app.add_url_rule('/sync_batch', 'sync_batch', self.handle_sync_batch, methods=['POST', 'OPTIONS'])
+        self.app.add_url_rule('/calculate_distance', 'calculate_distance', self.handle_calculate_distance, methods=['POST', 'OPTIONS'])
+        self.app.add_url_rule('/verify', 'verify', self.handle_verify, methods=['POST', 'OPTIONS'])
+        self.app.add_url_rule('/pong', 'pong', self.handle_pong, methods=['POST', 'OPTIONS'])
+        self.app.add_url_rule('/status', 'status', self.handle_status, methods=['GET', 'OPTIONS'])
+        self.app.add_url_rule('/report_status', 'report_status', self.handle_report_status, methods=['POST', 'OPTIONS'])
+
+    def serve_companion_index(self):
+        """Liefert die Hauptseite der Companion-App aus."""
+        if os.path.exists(os.path.join(self.companion_dir, 'index.html')):
+            return send_from_directory(self.companion_dir, 'index.html')
+        return "LeprendiX Companion index.html nicht gefunden.", 404
+
+    def serve_companion_logo(self):
+        """Liefert das gemeinsame Anwendungslogo an die Companion-App aus."""
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
+        if os.path.isfile(logo_path):
+            return send_from_directory(os.path.dirname(logo_path), 'logo.png')
+        return "LeprendiX logo.png nicht gefunden.", 404
+
+    def serve_companion_file(self, filename):
+        """Liefert statische Dateien (CSS, JS, Res) der Companion-App aus."""
+        safe_path = os.path.normpath(os.path.join(self.companion_dir, filename))
+        if os.path.commonpath([self.companion_dir, safe_path]) == self.companion_dir and os.path.exists(safe_path):
+            return send_from_directory(self.companion_dir, filename)
+        return "Datei nicht gefunden", 404
 
     def set_connection_callback(self, callback):
         self.connection_callback = callback
@@ -39,7 +83,6 @@ class MobileServer:
         """Determines the local network IP address."""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # Connect to a public DNS server to determine outgoing interface
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             s.close()
@@ -56,27 +99,84 @@ class MobileServer:
             logging.info(f"Mobile Server started on {self.host_ip}:{self.port}")
 
     def _run_flask(self):
-        # Suppress standard Flask logging to keep console clean
         log = logging.getLogger('werkzeug')
         log.setLevel(logging.ERROR)
-        # Run on 0.0.0.0 to be accessible from the network
         self.app.run(host='0.0.0.0', port=self.port, use_reloader=False)
 
     def get_qr_image(self):
-        """Generates a QR code containing IP, Port, and Session Token."""
-        # Format: IP:PORT|TOKEN
-        data = f"{self.host_ip}:{self.port}|{self.token}"
+        """Generates a QR code containing direct URL to Companion web app."""
+        url = f"http://{self.host_ip}:{self.port}/?token={self.token}"
         qr = qrcode.QRCode(version=1, box_size=10, border=5)
-        qr.add_data(data)
+        qr.add_data(url)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
         return img
 
+    def handle_calculate_distance(self):
+        """Berechnet die Entfernung von der Praxisadresse zur Patientenadresse."""
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
+        try:
+            req_data = request.get_json(force=True, silent=True) or {}
+            patient_address = req_data.get('address')
+            if not patient_address:
+                return jsonify({"status": "error", "message": "Adresse fehlt"}), 400
+
+            fixed_address = "Triesterstraße 10/4, 2351 Wiener Neudorf"
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        cfg = json.load(f)
+                        if cfg.get('FIXED_ADDRESS'):
+                            fixed_address = cfg['FIXED_ADDRESS']
+                except Exception:
+                    pass
+
+            from geopy.geocoders import Nominatim
+            import requests
+
+            geolocator = Nominatim(user_agent="leprendix-companion-dist-calc")
+            loc1 = geolocator.geocode(f"{patient_address}, Austria", timeout=6)
+            loc2 = geolocator.geocode(f"{fixed_address}, Austria", timeout=6)
+
+            if loc1 and loc2:
+                osrm_url = f"http://router.project-osrm.org/route/v1/driving/{loc1.longitude},{loc1.latitude};{loc2.longitude},{loc2.latitude}"
+                resp = requests.get(osrm_url, timeout=6)
+                if resp.ok:
+                    data = resp.json()
+                    if data.get('code') == 'Ok':
+                        dist_km = round(data['routes'][0]['distance'] / 1000.0, 1)
+                        suggested_km = round(dist_km * 2, 2)
+                        return jsonify({
+                            "status": "ok",
+                            "distance_km": dist_km,
+                            "fixed_address": fixed_address,
+                            "suggested_km_geld": suggested_km
+                        })
+
+            return jsonify({
+                "status": "warning",
+                "message": "Route konnte nicht exakt ermittelt werden",
+                "distance_km": 0.0,
+                "suggested_km_geld": 0.0,
+                "fixed_address": fixed_address
+            })
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": str(e),
+                "distance_km": 0.0,
+                "suggested_km_geld": 0.0
+            })
+
     def handle_verify(self):
         """Endpoint for the app to verify the QR code token."""
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
         try:
-            req_data = request.json
-            req_token = req_data.get('token')
+            req_data = request.get_json(force=True, silent=True) or {}
+            req_token = req_data.get('token') or request.form.get('token')
             if req_token == self.token:
                 return jsonify({"status": "ok", "message": "Connected to LeprendiX"})
             return jsonify({"status": "error", "message": "Invalid Token"}), 403
@@ -85,12 +185,12 @@ class MobileServer:
 
     def handle_pong(self):
         """Endpoint for client to send pong and establish connection."""
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
         try:
-            req_data = request.get_json(force=True, silent=True)
-            if not req_data:
-                return jsonify({"status": "error", "message": "Invalid JSON"}), 400
-            req_token = req_data.get('token')
-            status = req_data.get('status')
+            req_data = request.get_json(force=True, silent=True) or {}
+            req_token = req_data.get('token') or request.form.get('token')
+            status = req_data.get('status') or request.form.get('status')
             
             if req_token == self.token:
                 if status == 'pong':
@@ -109,12 +209,12 @@ class MobileServer:
 
     def handle_report_status(self):
         """Endpoint for client to report status updates (e.g. cancellation)."""
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
         try:
-            req_data = request.get_json(force=True, silent=True)
-            if not req_data:
-                return jsonify({"status": "error", "message": "Invalid JSON"}), 400
-            req_token = req_data.get('token')
-            status = req_data.get('status')
+            req_data = request.get_json(force=True, silent=True) or {}
+            req_token = req_data.get('token') or request.form.get('token')
+            status = req_data.get('status') or request.form.get('status')
             
             if req_token == self.token:
                 if status == 'cancelled':
@@ -129,10 +229,12 @@ class MobileServer:
 
     def handle_status(self):
         """Endpoint for mobile app to check status/commands."""
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
         token = request.args.get('token')
         if token != self.token:
-             logging.warning(f"Unauthorized status check. Received: {token}")
-             return jsonify({"status": "error", "message": "Unauthorized"}), 403
+            logging.warning(f"Unauthorized status check. Received: {token}")
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
         
         status_msg = "ping"
         if self.ping_requested:
@@ -148,10 +250,9 @@ class MobileServer:
         }
         if self.scan_requested:
             logging.info("Mobile app polled status: Sending scan request!")
-            self.scan_requested = False # Reset after reading
+            self.scan_requested = False
             
         response = jsonify(response_data)
-        # Prevent caching to ensure the app always gets the latest status
         response.headers.add('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
         return response
 
@@ -164,58 +265,367 @@ class MobileServer:
         logging.info("PINGPONG: send_ping triggered.")
         self.ping_requested = True
 
+    def _save_signed_contracts(self, gui_data, contracts_package, signature_b64):
+        """Speichert unterzeichnete DSGVO-Verträge und die Unterschrift als Bild."""
+        try:
+            signatures_dir = os.path.join(self.companion_dir, 'signatures')
+            os.makedirs(signatures_dir, exist_ok=True)
+
+            timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            clean_nachname = re.sub(r'[^a-zA-Z0-9_\-äöüÄÖÜß]', '_', gui_data.get("Nachname") or "Patient")
+            clean_vorname = re.sub(r'[^a-zA-Z0-9_\-äöüÄÖÜß]', '_', gui_data.get("Vorname") or "")
+            base_filename = f"{timestamp_str}_{clean_nachname}_{clean_vorname}".strip("_")
+
+            # 1. Signatur-PNG speichern
+            if signature_b64 and "base64," in signature_b64:
+                _, encoded = signature_b64.split("base64,", 1)
+                img_data = base64.b64decode(encoded)
+                sig_path = os.path.join(signatures_dir, f"{base_filename}_signature.png")
+                with open(sig_path, "wb") as f:
+                    f.write(img_data)
+                logging.info(f"DSGVO Signatur als PNG archiviert: {sig_path}")
+
+            # 2. Vertragsprotokoll als JSON sichern
+            if contracts_package:
+                contract_path = os.path.join(signatures_dir, f"{base_filename}_vertrag.json")
+                with open(contract_path, "w", encoding="utf-8") as f:
+                    json.dump(contracts_package, f, ensure_ascii=False, indent=2)
+                logging.info(f"DSGVO Vertragsprotokoll archiviert: {contract_path}")
+        except Exception as e:
+            logging.error(f"Fehler beim Archivieren der DSGVO-Signatur: {e}")
+
     def handle_upload(self):
-        """Endpoint to receive the scanned data from the mobile app."""
-        if 'token' not in request.form or request.form['token'] != self.token:
+        """Endpoint to receive the scanned data from the mobile/companion app (Einzelübertragung)."""
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
+
+        token = None
+        raw_data = None
+
+        if request.form and 'token' in request.form:
+            token = request.form['token']
+            raw_data = request.form.get('data')
+        elif request.is_json:
+            req_json = request.get_json(silent=True) or {}
+            token = req_json.get('token')
+            raw_data = req_json.get('data')
+
+        if token != self.token:
             return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
-        if 'data' not in request.form:
-            return jsonify({"status": "error", "message": "No data part in form"}), 400
+        if not raw_data:
+            return jsonify({"status": "error", "message": "No data part in request"}), 400
 
         if self.status_callback:
             self.status_callback("Daten empfangen. Verarbeite...")
 
         try:
-            # The data is a JSON string in a form field
-            json_data_str = request.form['data']
-            scanned_data = json.loads(json_data_str)
+            if isinstance(raw_data, str):
+                scanned_data = json.loads(raw_data)
+            else:
+                scanned_data = raw_data
 
-            # Map the received keys to the keys expected by the GUI
+            anrede = (scanned_data.get("anrede") or "Herr/Frau").strip()
+            titel = scanned_data.get("titel")
+            if titel:
+                if isinstance(titel, list):
+                    titel = " ".join(titel).strip()
+                titel = str(titel).strip()
+                if titel and not anrede.endswith(titel):
+                    anrede = f"{anrede} {titel}".strip()
+
+            vorname = (scanned_data.get("vorname") or "").strip()
+            if titel and vorname.startswith(titel):
+                vorname = vorname[len(titel):].strip()
+
+            km_geld = 0.0
+            try:
+                km_geld = float(scanned_data.get("kilometergeld", 0.0) or 0.0)
+            except (ValueError, TypeError):
+                km_geld = 0.0
+
             gui_data = {
-                "Anrede": scanned_data.get("anrede"),
-                "Vorname": scanned_data.get("vorname"),
+                "Anrede": anrede,
+                "Vorname": vorname,
                 "Nachname": scanned_data.get("nachname"),
                 "Versicherungsnummer": scanned_data.get("vsnr"),
                 "Diagnose": scanned_data.get("diagnose"),
                 "PLZ": scanned_data.get("plz"),
-                "Ort": scanned_data.get("ort")
+                "Ort": scanned_data.get("ort"),
+                "Adresszusatz": scanned_data.get("adresszusatz", ""),
+                "Kilometergeld": km_geld
             }
 
-            # Splitting street and house number from "strasse"
-            street_full = scanned_data.get("strasse", "")
-            last_space_index = street_full.rfind(' ')
-            if last_space_index != -1:
-                street = street_full[:last_space_index].strip()
-                housenumber = street_full[last_space_index+1:].strip()
-                # A simple check if the last part is a number or contains a number
-                if any(char.isdigit() for char in housenumber):
-                    gui_data["Straße"] = street
-                    gui_data["Hausnummer"] = housenumber
-                else: # if no number, it's all street
+            if scanned_data.get("hausnummer"):
+                gui_data["Straße"] = scanned_data.get("strasse", "").strip()
+                gui_data["Hausnummer"] = scanned_data.get("hausnummer", "").strip()
+            else:
+                street_full = scanned_data.get("strasse", "")
+                last_space_index = street_full.rfind(' ')
+                if last_space_index != -1:
+                    street = street_full[:last_space_index].strip()
+                    housenumber = street_full[last_space_index+1:].strip()
+                    if any(char.isdigit() for char in housenumber):
+                        gui_data["Straße"] = street
+                        gui_data["Hausnummer"] = housenumber
+                    else:
+                        gui_data["Straße"] = street_full
+                        gui_data["Hausnummer"] = ""
+                else:
                     gui_data["Straße"] = street_full
                     gui_data["Hausnummer"] = ""
-            else:
-                gui_data["Straße"] = street_full
-                gui_data["Hausnummer"] = ""
 
-            # Notify GUI via callback
+            contracts_pkg = scanned_data.get("contracts")
+            signature_b64 = scanned_data.get("signature")
+            if contracts_pkg or signature_b64:
+                self._save_signed_contracts(gui_data, contracts_pkg, signature_b64)
+
             if self.callback:
                 self.callback(gui_data)
 
             return jsonify({"status": "success", "data": gui_data})
         except json.JSONDecodeError:
-            logging.error(f"Invalid JSON received: {request.form.get('data')}")
+            logging.error(f"Invalid JSON received: {raw_data}")
             return jsonify({"status": "error", "message": "Invalid JSON in data part"}), 400
         except Exception as e:
             logging.error(f"Error processing scan data: {e}")
             return jsonify({"status": "error", "message": str(e)}), 500
+
+    def handle_sync_batch(self):
+        """Endpoint to receive batch of offline-collected patient records at the end of the month."""
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
+
+        req_json = request.get_json(silent=True)
+        if not isinstance(req_json, dict):
+            return jsonify({"status": "error", "message": "Invalid JSON request"}), 400
+
+        token = req_json.get('token')
+        records = req_json.get('records')
+
+        if token != self.token:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
+        if records is None:
+            return jsonify({"status": "ok", "message": "No records to sync", "synced_ids": []})
+        if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+            return jsonify({"status": "error", "message": "Records must be a list of objects"}), 400
+        if not records:
+            return jsonify({"status": "ok", "message": "No records to sync", "synced_ids": []})
+        if not self.batch_callback:
+            logging.error("Batch-Sync abgelehnt: Kein Abschluss-Callback für den Stammdaten-Assistenten konfiguriert.")
+            return jsonify({
+                "status": "error",
+                "message": "Der Stammdaten-Assistent ist nicht verfügbar. Der Sync wurde nicht bestätigt."
+            }), 503
+
+        for record in records:
+            patient = record.get('patient', record)
+            if not isinstance(record.get('id'), str) or not record['id'].strip():
+                return jsonify({"status": "error", "message": "Every record needs a non-empty id"}), 400
+            if not isinstance(patient, dict):
+                return jsonify({"status": "error", "message": "Every record needs patient data"}), 400
+
+        if self.status_callback:
+            self.status_callback(f"Synchronisiere {len(records)} Datensätze vom Tablet...")
+
+        synced_ids = []
+        imported_count = 0
+        updated_count = 0
+        reactivated_count = 0
+        processed_patients = []
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            for record in records:
+                record_id = record['id'].strip()
+                patient = record.get('patient', record)
+
+                anrede = (patient.get('anrede') or 'Herr/Frau').strip()
+                titel = patient.get('titel', '')
+                if isinstance(titel, list):
+                    titel = " ".join(titel).strip()
+                titel = str(titel).strip()
+                if titel and not anrede.endswith(titel):
+                    anrede = f"{anrede} {titel}".strip()
+
+                vorname = (patient.get('vorname') or '').strip()
+                if titel and vorname.startswith(titel):
+                    vorname = vorname[len(titel):].strip()
+
+                nachname = (patient.get('nachname') or '').strip()
+                vsnr = (patient.get('vsnr') or '').strip()
+                diagnose = patient.get('diagnose') or 'Z71'
+                plz = (patient.get('plz') or '').strip()
+                ort = (patient.get('ort') or '').strip()
+                strasse = (patient.get('strasse') or '').strip()
+                hausnummer = (patient.get('hausnummer') or '').strip()
+                adresszusatz = (patient.get('adresszusatz') or '').strip()
+
+                try:
+                    km_geld = float(patient.get('kilometergeld', 0.0) or 0.0)
+                except (ValueError, TypeError):
+                    km_geld = 0.0
+
+                contracts_package = record.get('contracts')
+                signature = record.get('signature')
+                if not signature and isinstance(contracts_package, dict):
+                    signature = contracts_package.get('signatureImage')
+                if contracts_package or signature:
+                    self._save_signed_contracts(
+                        {"Vorname": vorname, "Nachname": nachname},
+                        contracts_package,
+                        signature
+                    )
+
+                existing_patient = None
+                if vsnr:
+                    cursor.execute(
+                        """
+                        SELECT id, is_archived FROM patienten
+                        WHERE versicherungsnummer = ?
+                        ORDER BY CASE WHEN COALESCE(is_archived, 0) = 0 THEN 0 ELSE 1 END, id
+                        LIMIT 1
+                        """,
+                        (vsnr,)
+                    )
+                    existing_patient = cursor.fetchone()
+
+                if not existing_patient:
+                    cursor.execute(
+                        """
+                        SELECT id, is_archived FROM patienten
+                        WHERE nachname = ? AND vorname = ? AND plz = ?
+                        ORDER BY CASE WHEN COALESCE(is_archived, 0) = 0 THEN 0 ELSE 1 END, id
+                        LIMIT 1
+                        """,
+                        (nachname, vorname, plz)
+                    )
+                    existing_patient = cursor.fetchone()
+
+                if not existing_patient:
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO patienten (
+                            vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort,
+                            anrede, versicherungsnummer, diagnose, kilometergeld,
+                            last_selected_kurznamen, invoiced_since_reset
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0)
+                        """,
+                        (
+                            vorname, nachname, strasse, hausnummer, adresszusatz, plz,
+                            ort, anrede, vsnr, diagnose, km_geld
+                        )
+                    )
+                    if cursor.rowcount == 1:
+                        patient_id = cursor.lastrowid
+                        imported_count += 1
+                    else:
+                        cursor.execute(
+                            """
+                            SELECT id, is_archived FROM patienten
+                            WHERE vorname = ? COLLATE NOCASE
+                              AND nachname = ? COLLATE NOCASE
+                              AND plz = ? COLLATE NOCASE
+                            ORDER BY CASE WHEN COALESCE(is_archived, 0) = 0 THEN 0 ELSE 1 END, id
+                            LIMIT 1
+                            """,
+                            (vorname, nachname, plz)
+                        )
+                        existing_patient = cursor.fetchone()
+                        if not existing_patient:
+                            raise sqlite3.IntegrityError(
+                                "Patient konnte nach einem INSERT-Konflikt nicht anhand "
+                                "von Vorname, Nachname und PLZ gefunden werden."
+                            )
+
+                if existing_patient:
+                    patient_id = existing_patient[0]
+                    was_archived = bool(existing_patient[1])
+                    cursor.execute(
+                        """
+                        UPDATE patienten
+                        SET vorname = COALESCE(NULLIF(?, ''), vorname),
+                            nachname = COALESCE(NULLIF(?, ''), nachname),
+                            strasse = COALESCE(NULLIF(?, ''), strasse),
+                            hausnummer = COALESCE(NULLIF(?, ''), hausnummer),
+                            adresszusatz = COALESCE(NULLIF(?, ''), adresszusatz),
+                            plz = COALESCE(NULLIF(?, ''), plz),
+                            ort = COALESCE(NULLIF(?, ''), ort),
+                            anrede = COALESCE(NULLIF(?, ''), anrede),
+                            versicherungsnummer = COALESCE(NULLIF(?, ''), versicherungsnummer),
+                            diagnose = COALESCE(NULLIF(?, ''), diagnose),
+                            kilometergeld = CASE WHEN ? > 0 THEN ? ELSE kilometergeld END,
+                            is_archived = 0
+                        WHERE id = ?
+                        """,
+                        (
+                            vorname, nachname, strasse, hausnummer, adresszusatz,
+                            plz, ort, anrede, vsnr,
+                            diagnose, km_geld, km_geld, patient_id
+                        )
+                    )
+                    updated_count += 1
+                    if was_archived:
+                        reactivated_count += 1
+
+                processed_patients.append({
+                    "id": record_id,
+                    "db_id": patient_id,
+                    "anrede": anrede,
+                    "vorname": vorname,
+                    "nachname": nachname,
+                    "name": f"{anrede} {vorname} {nachname}".strip(),
+                    "vsnr": vsnr,
+                    "ort": f"{plz} {ort}".strip(),
+                    "adresse": f"{strasse} {hausnummer}".strip(),
+                    "kilometergeld": km_geld,
+                    "diagnose": diagnose
+                })
+
+            conn.commit()
+
+            callback_completed = self.batch_callback(processed_patients)
+            if callback_completed is not True:
+                if self.status_callback:
+                    self.status_callback(
+                        "Sync nicht bestätigt: Stammdaten-Assistent wurde nicht vollständig abgeschlossen."
+                    )
+                return jsonify({
+                    "status": "error",
+                    "message": (
+                        "Der Stammdaten-Assistent wurde nicht vollständig abgeschlossen. "
+                        "Die Patienten bleiben am Companion als ausstehend markiert."
+                    ),
+                    "synced_ids": []
+                }), 409
+
+            synced_ids = [patient["id"] for patient in processed_patients]
+            if self.status_callback:
+                self.status_callback(
+                    f"Sync bestätigt: {imported_count} neu importiert, "
+                    f"{reactivated_count} archivierte reaktiviert, "
+                    f"{updated_count - reactivated_count} aktualisiert."
+                )
+
+            return jsonify({
+                "status": "success",
+                "synced_ids": synced_ids,
+                "imported": imported_count,
+                "updated": updated_count,
+                "reactivated": reactivated_count,
+                "patients": processed_patients
+            })
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logging.error(f"Error during handle_sync_batch: {e}", exc_info=True)
+            return jsonify({"status": "error", "message": str(e), "synced_ids": synced_ids}), 500
+        finally:
+            if conn:
+                conn.close()

@@ -543,7 +543,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
                         p_new.paragraph_format.first_line_indent = -LEISTUNG_INDENT_SIZE 
 
                     
-                    # 💥 NEUE LOGIK FÜR SEITENUMBRUCH-SCHUTZ:
+                    # NEUE LOGIK FÜR SEITENUMBRUCH-SCHUTZ:
                     # Der Schutz muss für alle Zeilen eines Blocks aktiviert werden, AUSSER für die letzte Zeile.
                     if not is_end_block_marker:
                         # Setze Keep_with_next für alle Zeilen, die nicht die letzte Zeile des Blocks sind.
@@ -660,7 +660,7 @@ def fill_template(patient_id, patient_data_tuple, template_data, add_gemeinde_bl
         insert_empty_line(ORT_DATUM_PARAGRAPH)
 
     
-    # 💥 --- 5. Final Diagnosis Format Override (DIE ULTIMATIVE KORREKTUR!) --- 💥
+    # --- 5. Final Diagnosis Format Override (DIE ULTIMATIVE KORREKTUR!) ---
     if DIAGNOSE_PLACEHOLDER_PARAGRAPH:
         
         target_p = DIAGNOSE_PLACEHOLDER_PARAGRAPH
@@ -771,20 +771,20 @@ class HonorarGeneratorApp:
         self.ttk_style.configure('Danger.TButton', foreground='red')
 
         self.tab_generate = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_generate, text='📝 Honorarnote Generieren')
+        self.notebook.add(self.tab_generate, text='Honorarnote Generieren')
         self.setup_generate_tab(self.tab_generate)
         
         self.tab_patient = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_patient, text='👤 Patienten Verwalten')
+        self.notebook.add(self.tab_patient, text='Patienten Verwalten')
         self.setup_patient_tab(self.tab_patient)
 
         self.tab_leistung = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_leistung, text='➕ Leistungen Hinzufügen/Prüfen')
+        self.notebook.add(self.tab_leistung, text='Leistungen Hinzufügen/Prüfen')
         self.setup_leistung_tab(self.tab_leistung)
         self.update_leistung_list()
         
         self.tab_stammdaten = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_stammdaten, text='⚙️ Stammdaten Leistungen')
+        self.notebook.add(self.tab_stammdaten, text='Stammdaten Leistungen')
         self.setup_stammdaten_tab(self.tab_stammdaten)
         
 
@@ -1075,7 +1075,7 @@ class HonorarGeneratorApp:
         ttk.Button(btn_frame, text="Speichern & Öffnen", command=self.generate_invoice).pack(side=tk.LEFT, padx=10)
         
         # NEUER BUTTON: Generieren und Sofort Drucken
-        ttk.Button(btn_frame, text="✅ Speichern & Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Speichern & Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
         
         # NEU: Button zum Widerrufen der letzten Honorarnote
         ttk.Button(btn_frame, text="Honorarnote Wiederrufen", command=self.revoke_last_invoice, style='Danger.TButton').pack(side=tk.LEFT, padx=10)
@@ -1545,10 +1545,9 @@ class HonorarGeneratorApp:
         # Spacer
         ttk.Label(search_frame, text="   |   ").pack(side=tk.LEFT)
         
-        ttk.Button(search_frame, text="♻️ Archiv", command=self.open_archive_manager).pack(side=tk.LEFT, padx=5)
-        self.mobile_scan_button = ttk.Button(search_frame, text="📱 Mobile Scan", command=self.open_scan_dialog, state=tk.DISABLED)
+        ttk.Button(search_frame, text="Archiv", command=self.open_archive_manager).pack(side=tk.LEFT, padx=5)
+        self.mobile_scan_button = ttk.Button(search_frame, text="Companion App", command=self.open_scan_dialog)
         self.mobile_scan_button.pack(side=tk.LEFT, padx=5)
-        self.set_status("Mobile Scan vorübergehend deaktiviert.", 3000)
         
         self.patient_id_to_edit = None
 
@@ -1633,7 +1632,7 @@ class HonorarGeneratorApp:
         self.delete_patient_button = ttk.Button(action_frame, text="LÖSCHEN", command=self.delete_patient_gui, style='Danger.TButton', state=tk.DISABLED)
         self.delete_patient_button.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(action_frame, text="📂 Ordner", command=self.open_patient_folder).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="Ordner", command=self.open_patient_folder).pack(side=tk.LEFT, padx=5)
 
         # --- 3. SEPARATOR ---
         ttk.Separator(tab, orient='vertical').grid(row=1, column=1, sticky='ns', padx=10, pady=10)
@@ -1663,8 +1662,294 @@ class HonorarGeneratorApp:
     def setup_mobile_server(self):
         """Initialisiert und startet den Mobile-Server, falls noch nicht geschehen."""
         if not self.mobile_server:
-            self.mobile_server = mobile_connect.MobileServer(self.on_scan_received, self.on_scan_status)
+            self.mobile_server = mobile_connect.MobileServer(
+                self.on_scan_received,
+                self.on_scan_status,
+                batch_callback=self.on_batch_synced,
+                db_path=DATABASE_NAME
+            )
             self.mobile_server.start()
+
+    def on_batch_synced(self, synced_patients):
+        """Callback für Monats-Batch-Synchronisation vom Companion-Tablet."""
+        completed = threading.Event()
+        result = {"success": False}
+        self.root.after(
+            0,
+            lambda: self._process_batch_synced(synced_patients, completed, result)
+        )
+        if not completed.wait(timeout=1800):
+            logging.error("Zeitüberschreitung beim Stammdaten-Assistenten für den Companion-Sync.")
+            return False
+        return result["success"]
+
+    def _process_batch_synced(self, synced_patients, completed, result):
+        """Verarbeitet synchronisierte Patienten im GUI-Thread."""
+        try:
+            count = len(synced_patients)
+            self.set_status(
+                f"Monats-Sync: {count} Patient(en) importiert; Stammdaten werden erfasst.",
+                5000
+            )
+            self.search_patients()
+
+            if hasattr(self, 'scan_dialog') and self.scan_dialog.winfo_exists():
+                self.scan_dialog.destroy()
+
+            self.open_stammdaten_wizard(
+                synced_patients,
+                lambda success: (result.update(success=success), completed.set())
+            )
+        except Exception:
+            logging.exception("Fehler beim Öffnen des Stammdaten-Assistenten nach dem Companion-Sync.")
+            result["success"] = False
+            completed.set()
+
+    def open_stammdaten_wizard(self, synced_patients, on_complete):
+        """Öffnet nach dem Sync die Verwaltung für Stammdaten-Leistungen."""
+        if not synced_patients:
+            on_complete(False)
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Stammdaten-Leistung für importierte Patienten")
+        win.geometry("760x650")
+        win.transient(self.root)
+        win.grab_set()
+        current_idx = [0]
+
+        header_frame = ttk.Frame(win, padding=15)
+        header_frame.pack(fill='x')
+        ttk.Label(
+            header_frame,
+            text="Stammdaten-Leistung zuweisen",
+            font=("Segoe UI", 14, "bold")
+        ).pack(anchor='w')
+        patient_label = ttk.Label(header_frame, font=("Segoe UI", 11, "bold"))
+        patient_label.pack(anchor='w', pady=(8, 0))
+        patient_details = ttk.Label(
+            header_frame,
+            text="",
+            wraplength=700
+        )
+        patient_details.pack(anchor='w', pady=(2, 0))
+        progress_label = ttk.Label(header_frame, text="")
+        progress_label.pack(anchor='w', pady=(4, 0))
+
+        form_frame = ttk.LabelFrame(win, text="Stammdatenleistung bearbeiten / neu anlegen", padding=12)
+        form_frame.pack(fill='x', padx=15, pady=5)
+
+        row_name = ttk.Frame(form_frame)
+        row_name.pack(fill='x', pady=5)
+        ttk.Label(row_name, text="Kurzname:", width=18).pack(side=tk.LEFT)
+        entry_name = ttk.Entry(row_name)
+        entry_name.pack(side=tk.LEFT, fill='x', expand=True)
+
+        row_amount = ttk.Frame(form_frame)
+        row_amount.pack(fill='x', pady=5)
+        ttk.Label(row_amount, text="Standardbetrag (€):", width=18).pack(side=tk.LEFT)
+        entry_amount = ttk.Entry(row_amount, width=18)
+        entry_amount.pack(side=tk.LEFT)
+
+        def set_quick_amount(value):
+            entry_amount.delete(0, tk.END)
+            entry_amount.insert(0, f"{value:.2f}")
+
+        quick_amounts_str = CONFIG.get('QUICK_AMOUNTS', "33, 35, 57, 83")
+        try:
+            quick_amounts = [
+                float(value.strip())
+                for value in quick_amounts_str.split(',')
+                if value.strip()
+            ]
+        except ValueError:
+            quick_amounts = [33, 35, 57, 83]
+
+        for value in quick_amounts:
+            label = f"€{int(value)}" if value.is_integer() else f"€{value}"
+            ttk.Button(
+                row_amount,
+                text=label,
+                width=5,
+                command=lambda amount=value: set_quick_amount(amount)
+            ).pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(form_frame, text="Beschreibung (für Honorarnote):").pack(anchor='w', pady=(8, 3))
+        entry_description = tk.Text(form_frame, height=5, font=("Segoe UI", 10), wrap=tk.WORD)
+        entry_description.pack(fill='x')
+
+        status_label = ttk.Label(form_frame, text="", font=("Segoe UI", 9))
+        status_label.pack(anchor='w', pady=(6, 0))
+
+        list_frame = ttk.LabelFrame(win, text="Vorhandene Stammdaten-Leistungen", padding=10)
+        list_frame.pack(fill='both', expand=True, padx=15, pady=8)
+        service_list = tk.Listbox(list_frame, height=10, font=("Segoe UI", 10))
+        service_list.pack(side=tk.LEFT, fill='both', expand=True)
+        list_scrollbar = ttk.Scrollbar(list_frame, command=service_list.yview)
+        list_scrollbar.pack(side=tk.RIGHT, fill='y')
+        service_list.config(yscrollcommand=list_scrollbar.set)
+        service_rows = []
+
+        def clear_fields():
+            entry_name.delete(0, tk.END)
+            entry_amount.delete(0, tk.END)
+            entry_description.delete("1.0", tk.END)
+            service_list.selection_clear(0, tk.END)
+            status_label.config(text="")
+
+        def finish(success):
+            if win.winfo_exists():
+                try:
+                    win.grab_release()
+                except tk.TclError:
+                    pass
+                win.destroy()
+            on_complete(success)
+
+        def refresh_services():
+            try:
+                with sqlite3.connect(DATABASE_NAME) as conn:
+                    service_rows[:] = conn.execute(
+                        "SELECT kurzname, beschreibung, standard_betrag "
+                        "FROM stammdaten_leistungen WHERE is_archived = 0 ORDER BY kurzname"
+                    ).fetchall()
+            except sqlite3.Error as e:
+                logging.exception("Fehler beim Laden der Stammdaten-Leistungen")
+                messagebox.showerror(
+                    "Fehler",
+                    f"Stammdaten-Leistungen konnten nicht geladen werden: {e}",
+                    parent=win
+                )
+                return
+
+            service_list.delete(0, tk.END)
+            for kurzname, beschreibung, betrag in service_rows:
+                service_list.insert(tk.END, f"{kurzname} — {beschreibung} (Standard: €{betrag:.2f})")
+
+        def select_service(event=None):
+            selection = service_list.curselection()
+            if not selection:
+                return
+            kurzname, beschreibung, betrag = service_rows[selection[0]]
+            entry_name.delete(0, tk.END)
+            entry_name.insert(0, kurzname)
+            entry_amount.delete(0, tk.END)
+            entry_amount.insert(0, f"{betrag:.2f}")
+            entry_description.delete("1.0", tk.END)
+            entry_description.insert("1.0", beschreibung)
+            status_label.config(text="Vorhandene Stammdatenleistung ausgewählt.")
+
+        def refresh_patient():
+            patient = synced_patients[current_idx[0]]
+            patient_name = patient.get('name') or (
+                f"{patient.get('anrede', '')} {patient.get('vorname', '')} "
+                f"{patient.get('nachname', '')}"
+            ).strip()
+            patient_label.config(text=patient_name)
+            patient_details.config(
+                text=f"SVNr: {patient.get('vsnr') or '—'} | "
+                     f"Adresse: {patient.get('adresse') or '—'}, {patient.get('ort') or '—'}"
+            )
+            progress_label.config(
+                text=f"Patient {current_idx[0] + 1} von {len(synced_patients)}"
+            )
+            button_next.config(
+                text=(
+                    "Fertig!"
+                    if current_idx[0] == len(synced_patients) - 1
+                    else "Weiter"
+                )
+            )
+            clear_fields()
+
+        def save_current_service():
+            kurzname = entry_name.get().strip()
+            amount_text = entry_amount.get().strip().replace(',', '.')
+            beschreibung = entry_description.get("1.0", tk.END).strip()
+            if not kurzname or ',' in kurzname or not amount_text or not beschreibung:
+                messagebox.showwarning(
+                    "Angaben fehlen",
+                    "Bitte einen Kurzname ohne Komma, den Standardbetrag und die Beschreibung ausfüllen.",
+                    parent=win
+                )
+                return
+
+            patient = synced_patients[current_idx[0]]
+            patient_id = patient.get('db_id')
+            if not patient_id:
+                messagebox.showerror(
+                    "Patient nicht gefunden",
+                    "Für diesen Import wurde keine Patienten-ID zurückgegeben. "
+                    "Der Sync wird nicht bestätigt.",
+                    parent=win
+                )
+                return
+
+            try:
+                betrag = float(amount_text)
+            except ValueError:
+                messagebox.showwarning(
+                    "Ungültiger Betrag",
+                    "Der Standardbetrag muss eine gültige Zahl sein.",
+                    parent=win
+                )
+                return
+
+            try:
+                with sqlite3.connect(DATABASE_NAME) as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO stammdaten_leistungen
+                            (kurzname, beschreibung, standard_betrag, is_archived)
+                        VALUES (?, ?, ?, 0)
+                        ON CONFLICT(kurzname) DO UPDATE SET
+                            beschreibung = excluded.beschreibung,
+                            standard_betrag = excluded.standard_betrag,
+                            is_archived = 0
+                        """,
+                        (kurzname, beschreibung, betrag)
+                    )
+                    cursor = conn.execute(
+                        "UPDATE patienten SET last_selected_kurznamen = ? WHERE id = ?",
+                        (kurzname, patient_id)
+                    )
+                    if cursor.rowcount != 1:
+                        raise sqlite3.DatabaseError(
+                            f"Patient {patient_id} wurde beim Speichern nicht gefunden."
+                        )
+                refresh_services()
+                self.update_stammdaten_list()
+            except sqlite3.Error as e:
+                logging.exception("Fehler beim Speichern einer Stammdatenleistung")
+                messagebox.showerror(
+                    "Fehler beim Speichern",
+                    f"Stammdatenleistung konnte nicht gespeichert werden: {e}",
+                    parent=win
+                )
+                return
+
+            if current_idx[0] == len(synced_patients) - 1:
+                finish(True)
+            else:
+                current_idx[0] += 1
+                refresh_patient()
+
+        service_list.bind('<<ListboxSelect>>', select_service)
+
+        button_bar = ttk.Frame(win, padding=12)
+        button_bar.pack(fill='x')
+        ttk.Button(
+            button_bar,
+            text="Abbrechen (Sync nicht bestätigen)",
+            command=lambda: finish(False)
+        ).pack(side=tk.LEFT)
+        ttk.Button(button_bar, text="Felder leeren", command=clear_fields).pack(side=tk.LEFT)
+        button_next = ttk.Button(button_bar, command=save_current_service)
+        button_next.pack(side=tk.RIGHT, padx=8)
+        win.protocol("WM_DELETE_WINDOW", lambda: finish(False))
+
+        refresh_services()
+        refresh_patient()
 
     def on_scan_status(self, message):
         """Callback für Status-Updates vom Server."""
@@ -1696,6 +1981,7 @@ class HonorarGeneratorApp:
             "Diagnose": "Diagnose",
             "Straße": "Straße",
             "Hausnummer": "Hausnummer",
+            "Adresszusatz": "Adresszusatz",
             "PLZ": "PLZ",
             "Ort": "Ort"
         }
@@ -1716,34 +2002,29 @@ class HonorarGeneratorApp:
         self.scan_dialog.destroy()
 
     def open_scan_dialog(self):
-        self.set_status("Mobile Scan ist vorübergehend deaktiviert.")
-        if hasattr(self, 'mobile_scan_button'):
-            self.mobile_scan_button.config(state=tk.DISABLED)
-        return
-
         self.setup_mobile_server()
         self.mobile_server.send_ping()
         
         self.scan_dialog = tk.Toplevel(self.root)
-        self.scan_dialog.title("Mit Mobile App verbinden")
-        self.scan_dialog.geometry("400x500")
+        self.scan_dialog.title("Mit Companion Web App verbinden")
+        self.scan_dialog.geometry("460x590")
         
         # Container for the initial view
         self.scan_initial_frame = ttk.Frame(self.scan_dialog)
-        self.scan_initial_frame.pack(fill='both', expand=True)
+        self.scan_initial_frame.pack(fill='both', expand=True, padx=15, pady=10)
         
-        ttk.Label(self.scan_initial_frame, text="Scannen Sie den Code oder geben Sie die Daten manuell ein:", wraplength=350, justify="center").pack(pady=10)
+        ttk.Label(self.scan_initial_frame, text="Scannen Sie den QR-Code mit der Tablet-Kamera\noder öffnen Sie die URL im Browser:", wraplength=420, justify="center", font=("Segoe UI", 11)).pack(pady=10)
         
-        pil_img = self.mobile_server.get_qr_image().resize((300, 300), Image.Resampling.LANCZOS)
+        pil_img = self.mobile_server.get_qr_image().resize((280, 280), Image.Resampling.LANCZOS)
         self.qr_photo = ImageTk.PhotoImage(pil_img, master=self.scan_initial_frame)
-        ttk.Label(self.scan_initial_frame, image=self.qr_photo).pack(pady=10)
+        ttk.Label(self.scan_initial_frame, image=self.qr_photo).pack(pady=5)
         
-        # NEU: Text-Anzeige für manuelle Eingabe in Flet App
         info_frame = ttk.Frame(self.scan_initial_frame)
-        info_frame.pack(pady=5)
+        info_frame.pack(pady=5, fill='x')
         
-        ttk.Label(info_frame, text=f"IP:Port:  {self.mobile_server.host_ip}:{self.mobile_server.port}", font=("Consolas", 11, "bold")).pack()
-        ttk.Label(info_frame, text=f"Token:    {self.mobile_server.token}", font=("Consolas", 10)).pack()
+        web_url = f"http://{self.mobile_server.host_ip}:{self.mobile_server.port}/?token={self.mobile_server.token}"
+        ttk.Label(info_frame, text=f"URL: {web_url}", font=("Consolas", 10, "bold"), foreground="blue", wraplength=420, justify="center").pack()
+        ttk.Label(info_frame, text=f"IP:Port: {self.mobile_server.host_ip}:{self.mobile_server.port}  |  Token: {self.mobile_server.token}", font=("Consolas", 9)).pack(pady=3)
         
         def on_close_dialog():
             self.mobile_server.set_connection_callback(None)
@@ -1787,8 +2068,6 @@ class HonorarGeneratorApp:
         self.mobile_server.set_connection_callback(on_mobile_connected)
         self.mobile_server.set_cancel_callback(on_mobile_cancelled)
 
-        ttk.Button(self.scan_initial_frame, text="Request", command=trigger_scan_action).pack(pady=5)
-        
         self.scan_status_label = ttk.Label(self.scan_initial_frame, text="Warte auf Scan...", font=("Segoe UI", 10, "italic"))
         self.scan_status_label.pack(pady=10)
         ttk.Button(self.scan_initial_frame, text="Abbrechen", command=on_close_dialog).pack(pady=10)
@@ -2462,10 +2741,10 @@ class HonorarGeneratorApp:
         self.ttk_style.configure('Prominent.TButton', font=('Segoe UI', 12, 'bold'))
         self.ttk_style.configure('Finish.TButton', font=('Segoe UI', 12, 'bold'), foreground='green')
 
-        self.teamup_button = ttk.Button(main_action_frame, text="📅 Teamup-Termine Importieren", command=self.open_teamup_search, style='Prominent.TButton')
+        self.teamup_button = ttk.Button(main_action_frame, text="Teamup-Termine Importieren", command=self.open_teamup_search, style='Prominent.TButton')
         self.teamup_button.pack(side=tk.LEFT, fill='x', expand=True, padx=(0, 10), ipady=5)
 
-        finish_btn = ttk.Button(main_action_frame, text="✅ Fertig / Weiter zum Drucken", command=self._switch_to_generate_tab, style='Finish.TButton')
+        finish_btn = ttk.Button(main_action_frame, text="Fertig / Weiter zum Drucken", command=self._switch_to_generate_tab, style='Finish.TButton')
         finish_btn.pack(side=tk.LEFT, fill='x', expand=True, padx=(10, 0), ipady=5)
 
         # --- 3. Leistungsauswahl (Stammdaten Buttons) ---
@@ -3067,7 +3346,7 @@ class HonorarGeneratorApp:
 
 
         if success_count > 0:
-            self.set_status(f"✅ {success_count} Leistung(en) erfolgreich hinzugefügt.")
+            self.set_status(f"{success_count} Leistung(en) erfolgreich hinzugefügt.")
             self.description_text.delete("1.0", tk.END) # Textbox leeren
             if hasattr(self, 'description_text') and self.description_text.winfo_exists():
                 self.description_text.delete("1.0", tk.END) # Textbox leeren
@@ -3372,7 +3651,7 @@ class HonorarGeneratorApp:
         btn_frame = ttk.Frame(input_frame)
         btn_frame.pack(fill='x', pady=(15, 0))
         
-        ttk.Button(btn_frame, text="💾 Speichern / Aktualisieren", command=self.save_stammdaten).pack(side=tk.RIGHT)
+        ttk.Button(btn_frame, text="Speichern / Aktualisieren", command=self.save_stammdaten).pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Felder leeren", command=self.clear_stammdaten_fields).pack(side=tk.RIGHT, padx=10)
 
         # --- Liste Bereich (Mitte) ---
@@ -3392,8 +3671,8 @@ class HonorarGeneratorApp:
         # --- Controls (Unten) ---
         control_frame = ttk.Frame(tab)
         control_frame.pack(fill='x', padx=10, pady=10)
-        ttk.Button(control_frame, text="🗑️ Ausgewählte Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT)
-        ttk.Button(control_frame, text="📁 Ausgewählte Leistung Archivieren", command=self.archive_stammdaten).pack(side=tk.LEFT, padx=10)
+        ttk.Button(control_frame, text="Ausgewählte Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT)
+        ttk.Button(control_frame, text="Ausgewählte Leistung Archivieren", command=self.archive_stammdaten).pack(side=tk.LEFT, padx=10)
 
         self.update_stammdaten_list()
 

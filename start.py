@@ -89,7 +89,7 @@ def check_system_integrity():
         err_win.geometry("600x500")
         err_win.configure(bg="#2c3e50")
         
-        tk.Label(err_win, text="⚠️ System-Integritätsprüfung fehlgeschlagen", font=("Segoe UI", 14, "bold"), fg="#e74c3c", bg="#2c3e50").pack(pady=10)
+        tk.Label(err_win, text="System-Integritätsprüfung fehlgeschlagen", font=("Segoe UI", 14, "bold"), fg="#e74c3c", bg="#2c3e50").pack(pady=10)
         tk.Label(err_win, text="Das Programm kann nicht gestartet werden, da folgende Dateien fehlen:", font=("Segoe UI", 10), fg="white", bg="#2c3e50").pack(pady=5)
         
         frame = tk.Frame(err_win, bg="#2c3e50")

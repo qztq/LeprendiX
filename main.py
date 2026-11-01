@@ -320,7 +320,7 @@ class CollapsiblePane(tk.Frame):
         self._title = title
         self._bg = bg_color
         
-        self._button = tk.Button(self, text=f"{'▼' if expanded else '▶'} {title}", 
+        self._button = tk.Button(self, text=f"{'-' if expanded else '+'} {title}",
                                  command=self._toggle, relief="flat", 
                                  bg=COLOR_SECONDARY, fg="white", 
                                  font=("Segoe UI", 12, "bold"), anchor="w", padx=10, pady=5)
@@ -334,11 +334,11 @@ class CollapsiblePane(tk.Frame):
         if self._variable.get():
             self.frame.grid_remove()
             self._variable.set(False)
-            self._button.configure(text=f"▶ {self._title}")
+            self._button.configure(text=f"+ {self._title}")
         else:
             self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
             self._variable.set(True)
-            self._button.configure(text=f"▼ {self._title}")
+            self._button.configure(text=f"- {self._title}")
 
 # --- HAUPTFENSTER ---
 def create_main():
@@ -712,7 +712,7 @@ def create_main():
     cat4.pack(fill="x", pady=5, padx=5)
             
     # Reminder
-    tk.Label(cat4.frame, text="⚠️ WICHTIG: Bitte erstellen Sie regelmäßig Backups!", 
+    tk.Label(cat4.frame, text="WICHTIG: Bitte erstellen Sie regelmäßig Backups!",
              font=("Segoe UI", 10, "bold"), fg="#e74c3c", bg=COLOR_PRIMARY).pack(pady=(0, 10), anchor="w")
 
     # Backup Liste
@@ -831,7 +831,7 @@ def create_main():
     support_frame.pack(pady=10)
     tk.Button(support_frame, text="Support / Fehler melden", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=open_support, padx=20, pady=5).pack(side="left", padx=5)
     tk.Button(support_frame, text="Auf Updates prüfen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_releases, padx=20, pady=5).pack(side="left", padx=5)
-    tk.Button(support_frame, text="Crash Test 💥", bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=trigger_crash, padx=20, pady=5).pack(side="left", padx=5)
+    tk.Button(support_frame, text="Crash Test", bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=trigger_crash, padx=20, pady=5).pack(side="left", padx=5)
 
     # --- TAB 3: DOKUMENTATION ---
     t3 = tk.Frame(nb, bg=COLOR_PRIMARY)

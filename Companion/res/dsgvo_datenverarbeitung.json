@@ -1,0 +1,46 @@
+{
+  "id": "dsgvo_datenverarbeitung",
+  "title": "Einwilligungserklärung – Datenschutz (DSGVO)",
+  "subtitle": "Wundpraxis Mödling · Birgit Hager · Bahnstraße 2/1/2, 2351 Wiener Neudorf",
+  "version": "2026.1",
+  "required": true,
+  "sections": [
+    {
+      "heading": "Einwilligungserklärung",
+      "text": "Ich stimme zu, dass die Wundpraxis Mödling die von mir bekannt gegebenen Daten (Name, Geburtsdatum, Telefonnummer, E-Mail Adresse, Postanschrift, Sozialversicherungsnummer und von mir gewünschte gesundheitsbezogene Daten, sowie die Behandlungsdokumentation inklusive Bilder) im erforderlichen Umfang speichert und für folgende Zwecke verwendet:"
+    },
+    {
+      "heading": "Zwecke der Datenverarbeitung",
+      "text": "• Speicherung der Behandlungs- und Wunddokumentation\n• Die Zusendung der Rechnung\n• Übermittlung der Behandlungsdokumentation an den Hausarzt\n• Die Übermittlung der Wunddokumentation auf Nachfrage der Krankenkasse"
+    },
+    {
+      "heading": "Hinweis zur elektronischen Verarbeitung",
+      "text": "Mir ist bekannt, dass meine oben angeführten Daten elektronisch verarbeitet und nach Beendigung meiner Geschäftsbeziehung gespeichert bleiben. Verantwortlich für die Verarbeitung ist Frau Birgit Hager. Für den Fall der Übertragung des Unternehmens stimme ich der Mitübertragung meiner oben angeführten Daten zu."
+    },
+    {
+      "heading": "Widerruf",
+      "text": "Diese Einwilligung kann ich jederzeit mittels E-Mail an: info@wundpraxis-moedling.at oder mittels Brief an:\n\nWundpraxis Mödling\nBahnstraße 2/1/2\n2351 Wiener Neudorf\n\nwiderrufen. Ab dem Zeitpunkt des Einlangens des Widerrufs erfolgt keine weitere Datenverarbeitung auf Grundlage dieser Einwilligungserklärung. Die Rechtmäßigkeit der Verarbeitung meiner Daten bis zum Einlangen des Widerrufs bleibt davon unberührt."
+    },
+    {
+      "heading": "Betroffenenrechte",
+      "text": "Es ist mir bekannt, dass ich mein Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung und Datenübertragung jederzeit geltend machen kann und das Recht auf Beschwerde bei der Datenschutzbehörde besteht."
+    }
+  ],
+  "checkboxes": [
+    {
+      "id": "dsgvo_consent_health",
+      "label": "Ich stimme ausdrücklich der Speicherung und Verarbeitung meiner Behandlungs- und Wunddokumentation (inkl. Bilder) zu den oben genannten Zwecken zu.",
+      "required": true
+    },
+    {
+      "id": "dsgvo_consent_transfer",
+      "label": "Ich stimme der Übermittlung meiner Daten an den Hausarzt sowie auf Nachfrage an die Krankenkasse zu.",
+      "required": true
+    },
+    {
+      "id": "dsgvo_read_confirmed",
+      "label": "Ich habe die vorstehende Einwilligungserklärung vollständig gelesen und verstanden.",
+      "required": true
+    }
+  ]
+}

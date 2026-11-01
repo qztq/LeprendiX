@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>LeprendiX Companion</title>
+  <link rel="icon" type="image/png" href="logo.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Warnung bei falscher Bildschirmausrichtung (Hochformat) -->
+  <div class="portrait-warning">
+    Bitte drehen Sie das Tablet ins <strong>Querformat</strong> für eine optimale Eingabe.
+  </div>
+
+  <div class="app-root-container">
+
+    <!-- ======================================================== -->
+    <!-- 1. DASHBOARD ANSICHT (STARTBILDSCHIRM BEIM ÖFFNEN)        -->
+    <!-- ======================================================== -->
+    <div id="dashboardView" class="dashboard-container">
+      
+      <!-- Dashboard Kopfzeile -->
+      <header class="dash-header">
+        <div class="dash-brand">
+          <img class="brand-logo-icon" src="logo.png" alt="LeprendiX">
+          <div>
+            <h1>LeprendiX Companion</h1>
+            <span class="text-muted" style="font-size: 13px;">Praxis-Begleiter für Patientendaten & DSGVO-Einwilligungen</span>
+          </div>
+        </div>
+
+        <div class="dash-header-actions">
+          <div class="dash-conn-status">
+            <span id="dashConnDot" class="status-dot disconnected"></span>
+            <span id="dashConnText">Offline-Modus</span>
+          </div>
+          <button type="button" id="btnOpenAdminFromDash" class="btn-admin-icon" title="Admin & Einstellungen" style="width:auto;padding:0 10px;border-radius:8px;font-size:13px;">Admin</button>
+        </div>
+      </header>
+
+      <!-- Dashboard Statistik-Karten (Punkt 1) -->
+      <section class="dash-stats-row">
+        <div class="stat-card">
+          <div class="stat-body">
+            <span class="stat-label">Gesamt gespeichert</span>
+            <span id="dashCountTotal" class="stat-value">0</span>
+            <span class="stat-sub">Erfasste Patienten auf dem Tablet</span>
+          </div>
+        </div>
+
+        <div class="stat-card stat-card-success">
+          <div class="stat-body">
+            <span class="stat-label">Bereits synchronisiert</span>
+            <span id="dashCountSynced" class="stat-value text-success">0</span>
+            <span class="stat-sub">In LeprendiX Datenbank übernommen</span>
+          </div>
+        </div>
+
+        <div class="stat-card stat-card-warning">
+          <div class="stat-body">
+            <span class="stat-label">Ausstehend (warten auf Sync)</span>
+            <span id="dashCountPending" class="stat-value text-warning">0</span>
+            <span class="stat-sub">Bereit für Monats-Synchronisation</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Dashboard Hauptaktionen (Punkt 1) -->
+      <section class="dash-actions-grid">
+        <button type="button" id="btnDashNewPatient" class="dash-action-btn primary-action">
+          <div class="action-text">
+            <h3>Neuen Patienten erfassen</h3>
+            <p>Startet den Schritt-für-Schritt-Assistenten für die Patientin / den Patienten im Wartezimmer</p>
+          </div>
+        </button>
+
+        <button type="button" id="btnDashScanQr" class="dash-action-btn">
+          <div class="action-text">
+            <h3>QR-Code der Hauptanwendung scannen</h3>
+            <p>Verbindet das Tablet per Kamera blitzschnell mit LeprendiX auf dem Praxis-PC</p>
+          </div>
+        </button>
+
+        <button type="button" id="btnDashSync" class="dash-action-btn">
+          <div class="action-text">
+            <h3>Monats-Synchronisation starten</h3>
+            <p id="dashSyncSubtext">Prüfen Sie Hausbesuche & Kilometergeld vor der Übertragung</p>
+          </div>
+        </button>
+      </section>
+
+      <!-- Kürzlich erfasste Patienten -->
+      <section class="dash-recent-section">
+        <h3>Zuletzt erfasste Patienten auf diesem Tablet</h3>
+        <div class="dash-table-wrapper">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Erfasst am</th>
+                <th>Patient (Anrede & Name)</th>
+                <th>SV-Nummer</th>
+                <th>Wohnort</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="dashRecentTbody">
+              <tr><td colspan="5" class="text-center text-muted">Noch keine Patienten erfasst. Tippen Sie auf "Neuen Patienten erfassen".</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+
+
+    <!-- ======================================================== -->
+    <!-- 2. PATIENTEN WIZARD (SCHRITT-FÜR-SCHRITT EINGABE)         -->
+    <!-- ======================================================== -->
+    <div id="patientView" class="app-container hidden">
+
+      <!-- Linke Seitenleiste: Stepper & Live-Zusammenfassung -->
+      <aside class="sidebar">
+        <div>
+          <div class="brand-header">
+            <div class="brand-title">
+              <img class="brand-logo-icon" src="logo.png" alt="LeprendiX">
+              <div class="brand-text">
+                <h1>LeprendiX</h1>
+                <span>Companion App</span>
+              </div>
+            </div>
+            <button type="button" id="btnBackToDashFromWizard" class="btn-admin-icon" title="Zurück zum Startbildschirm">Start</button>
+          </div>
+
+          <!-- Stepper Fortschritt -->
+          <nav class="stepper-nav">
+            <div class="stepper-item active" data-step="1">
+              <div class="stepper-circle">1</div>
+              <div class="stepper-label">Anrede & Titel</div>
+            </div>
+            <div class="stepper-item" data-step="2">
+              <div class="stepper-circle">2</div>
+              <div class="stepper-label">Name</div>
+            </div>
+            <div class="stepper-item" data-step="3">
+              <div class="stepper-circle">3</div>
+              <div class="stepper-label">SV-Nummer</div>
+            </div>
+            <div class="stepper-item" data-step="4">
+              <div class="stepper-circle">4</div>
+              <div class="stepper-label">Adresse</div>
+            </div>
+            <div class="stepper-item" data-step="5">
+              <div class="stepper-circle">5</div>
+              <div class="stepper-label">DSGVO & Verträge</div>
+            </div>
+            <div class="stepper-item" data-step="6">
+              <div class="stepper-circle">6</div>
+              <div class="stepper-label">Bestätigung</div>
+            </div>
+          </nav>
+        </div>
+
+        <!-- Live-Zusammenfassung links -->
+        <div>
+          <div class="sidebar-summary-card">
+            <h4>Ihre Angaben</h4>
+            <div class="summary-field">
+              <strong>Anrede & Titel:</strong> <span id="summaryLiveAnrede">Frau</span>
+            </div>
+            <div class="summary-field">
+              <strong>Name:</strong> <span id="summaryLiveName">—</span>
+            </div>
+            <div class="summary-field">
+              <strong>SVNr:</strong> <span id="summaryLiveSvnr">—</span>
+            </div>
+            <div class="summary-field">
+              <strong>Adresse:</strong> <span id="summaryLiveAddress">—</span>
+            </div>
+          </div>
+
+          <div class="sidebar-footer">
+            <span id="connStatusDot" class="status-dot disconnected"></span>
+            <span id="connStatusText">Offline-Modus</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Rechter Hauptbereich: Interaktive Formulare -->
+      <main class="main-content">
+
+        <!-- SCHRITT 1: ANREDE & TITEL (Punkt 4: Titel zur Anrede) -->
+        <section id="stepPane1" class="step-pane">
+          <div class="step-header">
+            <h2>1. Anrede & akademischer Titel</h2>
+            <p>Wählen Sie Ihre Anrede und eventuelle Titel per Antippen aus (z. B. <em>Herr Dr.</em> oder <em>Frau Mag.</em>).</p>
+          </div>
+
+          <div class="section-label">Anrede auswählen:</div>
+          <div class="choice-cards-row">
+            <div class="choice-card choice-card-anrede selected" data-value="Frau">
+              <div class="choice-title">Frau</div>
+            </div>
+            <div class="choice-card choice-card-anrede" data-value="Herr">
+              <div class="choice-title">Herr</div>
+            </div>
+            <div class="choice-card choice-card-anrede" data-value="Divers">
+              <div class="choice-title">Divers / Keine</div>
+            </div>
+          </div>
+
+          <div class="section-label">
+            <span>Titel auswählen (optional - Mehrfachauswahl möglich):</span>
+          </div>
+          
+          <div class="chips-grid">
+            <button type="button" class="title-chip" data-title="Dr.">Dr.</button>
+            <button type="button" class="title-chip" data-title="Dr. med.">Dr. med.</button>
+            <button type="button" class="title-chip" data-title="Dr. scient. med.">Dr. scient. med.</button>
+            <button type="button" class="title-chip" data-title="Mag.">Mag.</button>
+            <button type="button" class="title-chip" data-title="Dipl.-Ing.">Dipl.-Ing.</button>
+            <button type="button" class="title-chip" data-title="DI">DI</button>
+            <button type="button" class="title-chip" data-title="Prof.">Prof.</button>
+            <button type="button" class="title-chip" data-title="Prim.">Prim.</button>
+            <button type="button" class="title-chip" data-title="Univ.-Doz.">Univ.-Doz.</button>
+            <button type="button" class="title-chip" data-title="BSc">BSc</button>
+            <button type="button" class="title-chip" data-title="MSc">MSc</button>
+            <button type="button" class="title-chip" data-title="BA">BA</button>
+            <button type="button" class="title-chip" data-title="MA">MA</button>
+            <button type="button" class="title-chip" data-title="PhD">PhD</button>
+            <button type="button" class="title-chip" data-title="MBA">MBA</button>
+          </div>
+
+          <div id="selectedTitlesContainer" class="chips-grid" style="margin-top: 4px;"></div>
+
+          <div class="custom-title-row">
+            <input type="text" id="inputCustomTitle" class="use-virtual-keyboard" placeholder="Anderer Titel (z. B. Dkfm.)..." inputmode="none">
+            <button type="button" id="btnAddCustomTitle">+ Hinzufügen</button>
+          </div>
+        </section>
+
+        <!-- SCHRITT 2: VORNAME & NACHNAME -->
+        <section id="stepPane2" class="step-pane hidden">
+          <div class="step-header">
+            <h2>2. Ihr Vor- und Nachname</h2>
+            <p>Tippen Sie Ihren Vor- und Nachnamen über die Tastatur ein.</p>
+          </div>
+
+          <div class="form-grid-2" style="max-width: 800px;">
+            <div class="form-group">
+              <label for="inputVorname">Vorname *</label>
+              <input type="text" id="inputVorname" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. Max" inputmode="none" autocomplete="off" required>
+            </div>
+            <div class="form-group">
+              <label for="inputNachname">Nachname *</label>
+              <input type="text" id="inputNachname" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. Mustermann" inputmode="none" autocomplete="off" required>
+            </div>
+          </div>
+        </section>
+
+        <!-- SCHRITT 3: SOZIALVERSICHERUNGSNUMMER (Punkt 5: Hilfe rechts entfernt) -->
+        <section id="stepPane3" class="step-pane hidden">
+          <div class="step-header">
+            <h2>3. Sozialversicherungsnummer (SVNr)</h2>
+            <p>Tippen Sie Ihre 10-stellige österreichische SV-Nummer bequem über den Nummernblock ein.</p>
+          </div>
+
+          <div class="svnr-container">
+            <div>
+              <div class="section-label">Eingabe SV-Nummer:</div>
+              <div class="svnr-input-boxes">
+                <input type="text" id="inputVsnrNummer" class="svnr-box laufnummer active-numpad-field input-resetable" maxlength="4" placeholder="1234" inputmode="none" readonly>
+                <span class="svnr-divider">/</span>
+                <input type="text" id="inputVsnrGeburtsdatum" class="svnr-box geburtsdatum input-resetable" maxlength="6" placeholder="TTMMJJ" inputmode="none" readonly>
+              </div>
+
+              <div style="margin-top: 14px;">
+                <span id="svnrValidationBadge" class="status-badge neutral">Eingabe: 0/10 Ziffern</span>
+              </div>
+            </div>
+
+            <!-- Touch Numpad -->
+            <div class="numpad-grid">
+              <button type="button" class="numpad-btn" data-key="1">1</button>
+              <button type="button" class="numpad-btn" data-key="2">2</button>
+              <button type="button" class="numpad-btn" data-key="3">3</button>
+              <button type="button" class="numpad-btn" data-key="4">4</button>
+              <button type="button" class="numpad-btn" data-key="5">5</button>
+              <button type="button" class="numpad-btn" data-key="6">6</button>
+              <button type="button" class="numpad-btn" data-key="7">7</button>
+              <button type="button" class="numpad-btn" data-key="8">8</button>
+              <button type="button" class="numpad-btn" data-key="9">9</button>
+              <button type="button" class="numpad-btn action" data-key="clear">C</button>
+              <button type="button" class="numpad-btn" data-key="0">0</button>
+              <button type="button" class="numpad-btn action" data-key="backspace">Löschen</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- SCHRITT 4: ADRESSE (Punkt 5: Schnellwahl PLZ entfernt) -->
+        <section id="stepPane4" class="step-pane hidden">
+          <div class="step-header">
+            <h2>4. Ihre Wohnadresse</h2>
+            <p>Geben Sie Straße, Hausnummer, Postleitzahl und Wohnort ein.</p>
+          </div>
+
+          <div style="max-width: 800px;">
+            <div class="form-grid-2">
+              <div class="form-group" style="grid-column: 1 / 2;">
+                <label for="inputStrasse">Straße *</label>
+                <input type="text" id="inputStrasse" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. Hauptstraße" inputmode="none" autocomplete="off" required>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div class="form-group">
+                  <label for="inputHausnummer">Hausnummer *</label>
+                  <input type="text" id="inputHausnummer" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. 12" inputmode="none" autocomplete="off" required>
+                </div>
+                <div class="form-group">
+                  <label for="inputAdresszusatz">Top / Stiege</label>
+                  <input type="text" id="inputAdresszusatz" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. Top 4" inputmode="none" autocomplete="off">
+                </div>
+              </div>
+            </div>
+
+            <div class="form-grid-2" style="margin-top: 10px;">
+              <div class="form-group">
+                <label for="inputPlz">Postleitzahl (PLZ) *</label>
+                <input type="text" id="inputPlz" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. 1010" maxlength="4" inputmode="none" autocomplete="off" required>
+              </div>
+              <div class="form-group">
+                <label for="inputOrt">Ort *</label>
+                <input type="text" id="inputOrt" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. Wien" inputmode="none" autocomplete="off" required>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SCHRITT 5: DSGVO & VERTRÄGE UNTERZEICHNEN -->
+        <section id="stepPane5" class="step-pane hidden">
+          <div class="step-header" style="margin-bottom: 14px;">
+            <h2>5. Datenschutz (DSGVO) & Vereinbarungen unterzeichnen</h2>
+            <p>Bitte lesen Sie die Vereinbarungen, bestätigen Sie die Checkboxen und leisten Sie Ihre digitale Unterschrift im rechten Feld.</p>
+          </div>
+
+          <div class="contracts-split-layout">
+            <div id="contractsListContainer" class="contracts-scroll-pane"></div>
+
+            <div class="signature-pane">
+              <div class="signature-header">
+                <div>
+                  <h3 style="font-size: 16px; font-weight: 700;">Ihre digitale Unterschrift</h3>
+                  <span id="signatureStatusBadge" class="status-badge neutral" style="margin-top: 4px;">Bitte hier im Feld unterschreiben</span>
+                </div>
+                <button type="button" id="btnClearSignature" class="btn-secondary">↺ Löschen</button>
+              </div>
+
+              <div class="signature-canvas-wrapper">
+                <canvas id="signatureCanvas"></canvas>
+                <div class="signature-baseline"></div>
+                <div id="signaturePatientLabel" class="signature-helper-text">Unterschrift des Patienten</div>
+              </div>
+
+              <div class="signature-footer">
+                <span class="text-muted" style="font-size: 12px;">Mit Finger oder Stylus direkt auf dem Tablet zeichnen.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SCHRITT 6: ABSCHLUSS-ÜBERSICHT & ABSENDEN -->
+        <section id="stepPane6" class="step-pane hidden">
+          <div class="step-header">
+            <h2>6. Alle Angaben überprüfen</h2>
+              <p>Kontrollieren Sie Ihre persönlichen Daten, Einwilligungen und Unterschrift. Mit „Zurück“ können Sie Angaben noch ändern.</p>
+          </div>
+
+          <div id="finalSummaryCard" class="summary-container"></div>
+
+          <button type="button" id="btnSubmitAll" class="btn-submit-large">
+            Angaben & DSGVO sicher speichern
+          </button>
+        </section>
+
+        <!-- SCHRITT 7: ERFOLGSBILDSCHIRM -->
+        <section id="stepPane7" class="step-pane hidden">
+          <div class="success-screen">
+            <h2>Erfolgreich erfasst!</h2>
+            <p id="successScreenNote">Ihre Daten und die unterzeichnete DSGVO-Einwilligung wurden sicher gespeichert.</p>
+            <p style="font-weight: 600; color: var(--primary);">Bitte geben Sie das Tablet nun an das Praxisteam zurück.</p>
+            
+            <div style="display: flex; gap: 14px; justify-content: center; margin-top: 24px;">
+              <button type="button" id="btnNewPatient" class="btn-nav btn-nav-next">
+                Neuen Patienten erfassen
+              </button>
+              <button type="button" id="btnSuccessToDash" class="btn-nav btn-nav-back">
+                Zum Startbildschirm
+              </button>
+            </div>
+
+            <div class="auto-reset-info">
+              Bereit für den nächsten Patienten in <span id="resetCountdown">12</span> Sekunden...
+            </div>
+          </div>
+        </section>
+
+        <!-- Navigations-Fußzeile (Weiter / Zurück) -->
+        <footer id="patientFooterNav" class="patient-footer-nav">
+          <button type="button" id="btnStepBack" class="btn-nav btn-nav-back">
+            Zurück
+          </button>
+          <button type="button" id="btnStepNext" class="btn-nav btn-nav-next">
+            Weiter
+          </button>
+        </footer>
+
+      </main>
+    </div>
+
+
+    <!-- ======================================================== -->
+    <!-- 3. PRE-SYNC REVIEW VIEW (PUNKT 2: HAUSBESUCH & KM-GELD)   -->
+    <!-- ======================================================== -->
+    <div id="syncReviewView" class="review-modal-container hidden">
+      <div class="review-modal-content">
+        <header class="review-modal-header">
+          <div>
+            <h2>Monats-Synchronisation prüfen</h2>
+            <p class="text-muted">Prüfen Sie für jeden Patienten vor dem Senden, ob ein Hausbesuch vorliegt, und erfassen Sie das Kilometergeld.</p>
+          </div>
+          <button type="button" id="btnCloseSyncReview" class="btn-secondary">Abbrechen</button>
+        </header>
+
+        <div id="syncReviewList" class="sync-review-list">
+          <!-- Dynamische Patienten-Karten für Hausbesuch & KM-Geld -->
+        </div>
+
+        <footer class="review-modal-footer">
+          <div id="syncReviewSummaryText" class="review-summary-info">
+            0 Patienten bereit zur Synchronisation
+          </div>
+          <button type="button" id="btnConfirmAndSendSync" class="btn-nav btn-nav-next">
+            Jetzt alle Daten an LeprendiX senden
+          </button>
+        </footer>
+      </div>
+    </div>
+
+
+    <!-- ======================================================== -->
+    <!-- 4. LADEBALKEN / FORTSCHRITTS-MODAL (PUNKT 3)             -->
+    <!-- ======================================================== -->
+    <div id="syncProgressModal" class="loading-overlay hidden">
+      <div class="progress-box">
+        <div class="progress-spinner-row">
+          <div class="spinner"></div>
+          <div>
+            <h3 id="progressMainTitle">Synchronisiere mit LeprendiX...</h3>
+            <p id="progressSubTitle" class="text-muted" style="color: #cbd5e1; font-size: 14px;">Bitte warten, Daten werden übertragen.</p>
+          </div>
+        </div>
+
+        <!-- Visueller Ladebalken -->
+        <div class="progress-bar-track">
+          <div id="progressBarFill" class="progress-bar-fill" style="width: 0%;"></div>
+        </div>
+
+        <div class="progress-status-row">
+          <span id="progressCurrentAction">Vorbereitung...</span>
+          <span id="progressPercentText" style="font-weight: 700;">0%</span>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ======================================================== -->
+    <!-- 5. QR-CODE KAMERA SCANNER MODAL                          -->
+    <!-- ======================================================== -->
+    <div id="qrScannerModal" class="loading-overlay hidden">
+      <div class="scanner-modal-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+          <h3 style="font-size: 18px; font-weight: 700;">QR-Code aus LeprendiX scannen</h3>
+          <button type="button" id="btnCloseQrScanner" class="btn-admin-icon" style="width:auto;padding:0 12px;border-radius:8px;background:#e2e8f0;color:#0f172a;font-size:14px;">Schließen</button>
+        </div>
+
+        <p class="text-muted" style="font-size: 14px; margin-bottom: 12px;">
+          Halten Sie die Tablet-Kamera auf den QR-Code am PC-Bildschirm:
+        </p>
+
+        <div class="camera-stream-wrapper">
+          <video id="qrVideoFeed" playsinline></video>
+          <div class="scanner-crosshair"></div>
+        </div>
+
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-color);">
+          <label style="font-size: 13px; font-weight: 600;">Oder Verbindungs-URL manuell eingeben:</label>
+          <div style="display: flex; gap: 8px; margin-top: 6px;">
+            <input type="text" id="manualQrInput" class="input-touch" style="height: 42px; font-size: 14px;" placeholder="http://192.168.1.X:5000/?token=...">
+            <button type="button" id="btnApplyManualQr" class="btn-nav btn-nav-next" style="height: 42px; font-size: 14px;">Verbinden</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ======================================================== -->
+    <!-- 6. ADMIN MODUS                                           -->
+    <!-- ======================================================== -->
+    <div id="adminView" class="admin-view hidden">
+      <div class="admin-header">
+        <div>
+          <h2 style="font-size: 24px; font-weight: 800;">LeprendiX Companion Admin</h2>
+          <p class="text-muted">Konfiguration der WLAN-Verbindung, Verträge und Praxiseinstellungen</p>
+        </div>
+        <button type="button" id="btnCloseAdmin" class="btn-nav btn-nav-next">
+          Zum Startbildschirm
+        </button>
+      </div>
+
+      <div class="admin-sections-grid">
+        <div class="admin-card">
+          <h3>Verbindung zu mobile_connect.py</h3>
+          <div style="margin-bottom: 14px;">
+            <span id="adminConnStatus" class="status-badge neutral">Verbindung wird geprüft...</span>
+          </div>
+
+          <div class="form-group">
+            <label for="adminHostInput">LeprendiX Host-IP (Praxis-PC):</label>
+            <input type="text" id="adminHostInput" class="input-touch" style="height: 44px; font-size: 15px;" placeholder="z. B. 192.168.1.100">
+          </div>
+
+          <div style="display: grid; grid-template-columns: 120px 1fr; gap: 12px;">
+            <div class="form-group">
+              <label for="adminPortInput">Port:</label>
+              <input type="number" id="adminPortInput" class="input-touch" style="height: 44px; font-size: 15px;" value="5000">
+            </div>
+            <div class="form-group">
+              <label for="adminTokenInput">Sitzungs-Token:</label>
+              <input type="text" id="adminTokenInput" class="input-touch" style="height: 44px; font-size: 15px;" placeholder="Token aus LeprendiX QR-Code">
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 10px;">
+            <button type="button" id="btnAdminSaveConn" class="btn-nav btn-nav-next" style="height: 44px; font-size: 15px;">Speichern</button>
+            <button type="button" id="btnAdminTestConn" class="btn-secondary" style="height: 44px;">Verbindung testen</button>
+          </div>
+        </div>
+
+        <div class="admin-card">
+          <h3>Verträge in /Companion/res/</h3>
+          <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">
+            Aktivieren oder deaktivieren Sie Verträge für Patienten.
+          </p>
+          <div id="adminContractsList"></div>
+        </div>
+
+        <div class="admin-card">
+          <h3>Praxis-Einstellungen</h3>
+          <div class="form-group">
+            <label for="adminPraxisName">Praxisname / Arztname:</label>
+            <input type="text" id="adminPraxisName" class="input-touch" style="height: 44px; font-size: 15px;">
+          </div>
+          <div class="form-group">
+            <label for="adminDefaultDia">Standard-Diagnosecode:</label>
+            <input type="text" id="adminDefaultDia" class="input-touch" style="height: 44px; font-size: 15px;" value="Z71">
+          </div>
+          <div class="form-group">
+            <label for="adminPinInput">Admin-PIN (Standard 1234):</label>
+            <input type="password" id="adminPinInput" class="input-touch" style="height: 44px; font-size: 15px;" value="1234">
+          </div>
+          <button type="button" id="btnAdminSavePraxis" class="btn-nav btn-nav-next" style="height: 44px; font-size: 15px; margin-top: 8px;">
+            Einstellungen sichern
+          </button>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ======================================================== -->
+    <!-- 7. CUSTOM INTEGRIERTE BILDSCHIRMTASTATUR (PUNKT 1)        -->
+    <!-- ======================================================== -->
+    <div id="customVirtualKeyboard" class="custom-keyboard-container hidden">
+      <div class="keyboard-toolbar">
+        <span id="activeKeyboardFieldLabel" class="keyboard-field-indicator">Eingabe: Vorname</span>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" id="btnKeyboardToggleSymbols" class="btn-kb-tool">?123</button>
+          <button type="button" id="btnKeyboardClose" class="btn-kb-tool">▼ Minimieren</button>
+        </div>
+      </div>
+
+      <!-- Tasten-Gitter (Standard QWERTZ / Zahlen) -->
+      <div id="keyboardKeysGrid" class="keyboard-keys-grid"></div>
+    </div>
+
+  </div>
+
+  <dialog id="appDialog" class="app-dialog" aria-labelledby="appDialogTitle" aria-describedby="appDialogMessage">
+    <form method="dialog" class="app-dialog-card">
+      <h2 id="appDialogTitle" class="app-dialog-title"></h2>
+      <p id="appDialogMessage" class="app-dialog-message"></p>
+      <input id="appDialogInput" class="app-dialog-input hidden" autocomplete="off">
+      <div class="app-dialog-actions">
+        <button id="appDialogCancel" type="submit" value="cancel" class="app-dialog-button app-dialog-button-cancel hidden">Abbrechen</button>
+        <button id="appDialogAccept" type="submit" value="accept" class="app-dialog-button app-dialog-button-accept">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- JavaScript Module -->
+  <script src="js/austria_plz.js"></script>
+  <script src="js/signature.js"></script>
+  <script src="js/contracts.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
