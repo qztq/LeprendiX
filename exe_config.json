@@ -7,7 +7,7 @@
   },
   {
    "optionDest": "filenames",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/start.py"
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/start.py"
   },
   {
    "optionDest": "onefile",
@@ -19,7 +19,7 @@
   },
   {
    "optionDest": "icon_file",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/favicon.ico"
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/favicon.ico"
   },
   {
    "optionDest": "name",
@@ -67,59 +67,59 @@
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/config_loader.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/config_loader.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/crash_handler.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/crash_handler.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/db_setup.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/db_setup.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/gui_generator.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/gui_generator.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/honorar_vorlage.docx;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/honorar_vorlage.docx;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/log_data.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/log_data.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/logo.png;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/logo.png;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/main.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/main.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/migrate_legacy.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/migrate_legacy.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/mobile_connect.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/mobile_connect.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/patient_status_checker.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_status_checker.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/setup_wizard.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/setup_wizard.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/start.py;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/start.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Documents/LeprendiX/LeprendiX/version.txt;."
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/version.txt;."
   }
  ],
  "nonPyinstallerOptions": {

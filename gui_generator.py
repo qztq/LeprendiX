@@ -1546,7 +1546,9 @@ class HonorarGeneratorApp:
         ttk.Label(search_frame, text="   |   ").pack(side=tk.LEFT)
         
         ttk.Button(search_frame, text="♻️ Archiv", command=self.open_archive_manager).pack(side=tk.LEFT, padx=5)
-        ttk.Button(search_frame, text="📱 Mobile Scan", command=self.open_scan_dialog).pack(side=tk.LEFT, padx=5)
+        self.mobile_scan_button = ttk.Button(search_frame, text="📱 Mobile Scan", command=self.open_scan_dialog, state=tk.DISABLED)
+        self.mobile_scan_button.pack(side=tk.LEFT, padx=5)
+        self.set_status("Mobile Scan vorübergehend deaktiviert.", 3000)
         
         self.patient_id_to_edit = None
 
@@ -1714,6 +1716,11 @@ class HonorarGeneratorApp:
         self.scan_dialog.destroy()
 
     def open_scan_dialog(self):
+        self.set_status("Mobile Scan ist vorübergehend deaktiviert.")
+        if hasattr(self, 'mobile_scan_button'):
+            self.mobile_scan_button.config(state=tk.DISABLED)
+        return
+
         self.setup_mobile_server()
         self.mobile_server.send_ping()
         
@@ -1992,15 +1999,14 @@ class HonorarGeneratorApp:
     def _blacklist_new_patient(self, index):
         text = self.new_patients_listbox.get(index)
         name_part = text.split(": ", 1)[1] if ": " in text else text
-            
-        term = simpledialog.askstring("Blacklist", "Begriff für Blacklist für diese Sitzung eingeben (z.B. 'Meeting', 'Urlaub'):", initialvalue=name_part, parent=self.root)
-        
-        if term and term.strip():
-            clean_term = term.strip()
-            self.session_blacklist.add(clean_term)
-            self.set_status(f"'{clean_term}' zur Blacklist für diese Sitzung hinzugefügt.")
-            # Refresh the list to reflect the change
-            self.check_new_patients()
+        clean_term = name_part.strip()
+
+        if not clean_term:
+            return
+
+        self.session_blacklist.add(clean_term)
+        self.set_status(f"'{clean_term}' zur Blacklist für diese Sitzung hinzugefügt.")
+        self.check_new_patients()
 
     def search_and_load_patient(self):
         # ... (Funktion bleibt unverändert)
