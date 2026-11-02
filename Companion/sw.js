@@ -3,7 +3,7 @@
  * Ermöglicht den Betrieb auf Tablets im Wartezimmer ohne bestehende WLAN-Verbindung zum Haupt-PC.
  */
 
-const CACHE_NAME = 'leprendix-companion-v1.3';
+const CACHE_NAME = 'leprendix-companion-v1.4';
 const STATIC_ASSETS = [
   './',
   './index.html',

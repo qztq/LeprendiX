@@ -30,7 +30,7 @@ class CompanionApp {
       adresszusatz: '',
       plz: '',
       ort: '',
-      diagnose: 'Z71'
+      krankenkasse: ''
     };
 
     // Verbindungsdaten zu LeprendiX mobile_connect.py
@@ -45,9 +45,8 @@ class CompanionApp {
     // Admin & Praxis Konfiguration
     this.config = {
       adminPin: '1234',
-      praxisName: 'Praxis Dr. Med. Mustermann',
+      praxisName: 'Wundpraxis Moedling',
       praxisAdresse: 'Triesterstraße 10/4, 2351 Wiener Neudorf',
-      defaultDiagnose: 'Z71',
       autoResetSeconds: 12
     };
 
@@ -596,7 +595,7 @@ class CompanionApp {
     if (unsynced.length === 0) {
       await this.showAppDialog(
         'Alles synchronisiert',
-        'Alle Patientendaten sind bereits synchronisiert. Es gibt keine ausstehenden Datensätze.',
+        'Alle Patientendaten sind bereits synchronisiert. Es gibt keine ausstehenden Daten.',
         { variant: 'success' }
       );
       return;
@@ -761,7 +760,7 @@ class CompanionApp {
     try {
       const isConnected = await this.checkConnection();
       if (!isConnected) {
-        throw new Error('LeprendiX ist nicht erreichbar. Bitte stellen Sie sicher, dass das Programm am Praxis-PC läuft.');
+        throw new Error('LeprendiX ist nicht erreichbar. Bitte stellen Sie sicher, dass das Programm läuft.');
       }
 
       updateProgress(30, `${unsynced.length} Patient(en) werden vorbereitet...`);
@@ -920,7 +919,7 @@ class CompanionApp {
       this.savePersistedState();
       this.checkConnection();
       await this.showAppDialog(
-        'Verbindung eingerichtet',
+        'Verbindung erfolgreich',
         'Der QR-Code wurde erfolgreich gescannt.',
         { variant: 'success' }
       );
@@ -953,6 +952,8 @@ class CompanionApp {
     const btnBack = document.getElementById('btnStepBack');
     const btnNext = document.getElementById('btnStepNext');
     const footerNav = document.getElementById('patientFooterNav');
+    if (btnNext) btnNext.style.display = stepNumber === 6 ? 'none' : 'inline-flex';
+    if (footerNav) footerNav.style.display = stepNumber < 7 ? 'flex' : 'none';
 
     if (stepNumber === 1) {
       if (btnBack) btnBack.style.visibility = 'hidden';
@@ -977,8 +978,6 @@ class CompanionApp {
         btnNext.textContent = 'Weiter';
       }
     }
-
-    if (stepNumber < 7 && footerNav) footerNav.style.display = 'flex';
 
     // Virtuelle Tastatur für das erste Eingabefeld im Schritt fokussieren
     const firstInput = activePane ? activePane.querySelector('.use-virtual-keyboard') : null;
@@ -1008,7 +1007,8 @@ class CompanionApp {
         isValid = this.formData.strasse.trim().length > 0 &&
                   this.formData.hausnummer.trim().length > 0 &&
                   this.formData.plz.trim().length >= 4 &&
-                  this.formData.ort.trim().length > 0;
+                  this.formData.ort.trim().length > 0 &&
+                  this.formData.krankenkasse.trim().length > 0;
         break;
       case 5:
         const contractsConsent = this.contracts.areAllRequiredConsented();
@@ -1188,8 +1188,8 @@ class CompanionApp {
             <span class="field-value field-mono">${fullSvnr || '—'}</span>
           </div>
           <div class="contract-print-field">
-            <span class="field-label">Diagnose:</span>
-            <span class="field-value">${this.config.defaultDiagnose || 'Z71'}</span>
+            <span class="field-label">Krankenkasse:</span>
+            <span class="field-value">${this.formData.krankenkasse || '—'}</span>
           </div>
         </div>
 
@@ -1238,7 +1238,7 @@ class CompanionApp {
         vorname: this.formData.vorname,
         nachname: this.formData.nachname,
         vsnr: fullSvnr,
-        diagnose: this.config.defaultDiagnose || 'Z71',
+        krankenkasse: this.formData.krankenkasse,
         plz: this.formData.plz,
         ort: this.formData.ort,
         strasse: this.formData.strasse,
@@ -1309,7 +1309,7 @@ class CompanionApp {
       adresszusatz: '',
       plz: '',
       ort: '',
-      diagnose: this.config.defaultDiagnose || 'Z71'
+      krankenkasse: ''
     };
 
     if (this.signaturePad) this.signaturePad.clear();
@@ -1451,6 +1451,14 @@ class CompanionApp {
     bindInput('inputHausnummer', 'hausnummer');
     bindInput('inputAdresszusatz', 'adresszusatz');
     bindInput('inputOrt', 'ort');
+    const krankenkasseEl = document.getElementById('inputKrankenkasse');
+    if (krankenkasseEl) {
+      krankenkasseEl.onchange = (event) => {
+        this.formData.krankenkasse = event.target.value;
+        this.updateSummaryCard();
+        this.validateCurrentStep();
+      };
+    }
 
     // PLZ mit automatischem Stadtnamen-Lookup
     const plzEl = document.getElementById('inputPlz');
@@ -1630,14 +1638,12 @@ class CompanionApp {
     const portInput = document.getElementById('adminPortInput');
     const tokenInput = document.getElementById('adminTokenInput');
     const praxisNameInput = document.getElementById('adminPraxisName');
-    const defaultDiaInput = document.getElementById('adminDefaultDia');
     const pinInput = document.getElementById('adminPinInput');
 
     if (hostInput) hostInput.value = this.connection.host;
     if (portInput) portInput.value = this.connection.port;
     if (tokenInput) tokenInput.value = this.connection.token;
     if (praxisNameInput) praxisNameInput.value = this.config.praxisName;
-    if (defaultDiaInput) defaultDiaInput.value = this.config.defaultDiagnose;
     if (pinInput) pinInput.value = this.config.adminPin;
 
     this.renderAdminContractsList();
@@ -1681,11 +1687,9 @@ class CompanionApp {
     if (btnSavePraxis) {
       btnSavePraxis.onclick = async () => {
         const praxisName = document.getElementById('adminPraxisName');
-        const defaultDia = document.getElementById('adminDefaultDia');
         const pinInput = document.getElementById('adminPinInput');
 
         if (praxisName) this.config.praxisName = praxisName.value.trim();
-        if (defaultDia) this.config.defaultDiagnose = defaultDia.value.trim();
         if (pinInput && pinInput.value.trim()) this.config.adminPin = pinInput.value.trim();
 
         this.savePersistedState();

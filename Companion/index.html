@@ -338,6 +338,18 @@
                 <input type="text" id="inputOrt" class="input-touch input-resetable use-virtual-keyboard" placeholder="z. B. Wien" inputmode="none" autocomplete="off" required>
               </div>
             </div>
+            <div class="form-group" style="margin-top: 10px;">
+              <label for="inputKrankenkasse">Krankenkasse *</label>
+              <select id="inputKrankenkasse" class="input-touch input-resetable" required>
+                <option value="">Bitte auswählen</option>
+                <option value="ÖGK">ÖGK</option>
+                <option value="SVS">SVS</option>
+                <option value="BVAEB">BVAEB</option>
+                <option value="KFA">KFA</option>
+                <option value="Privat / Selbstzahler">Privat / Selbstzahler</option>
+                <option value="Sonstige">Sonstige</option>
+              </select>
+            </div>
           </div>
         </section>
 
@@ -564,10 +576,6 @@
           <div class="form-group">
             <label for="adminPraxisName">Praxisname / Arztname:</label>
             <input type="text" id="adminPraxisName" class="input-touch" style="height: 44px; font-size: 15px;">
-          </div>
-          <div class="form-group">
-            <label for="adminDefaultDia">Standard-Diagnosecode:</label>
-            <input type="text" id="adminDefaultDia" class="input-touch" style="height: 44px; font-size: 15px;" value="Z71">
           </div>
           <div class="form-group">
             <label for="adminPinInput">Admin-PIN (Standard 1234):</label>

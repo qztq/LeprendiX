@@ -43,6 +43,7 @@ def resource_path(relative_path):
 from config_loader import CONFIG
 import gui_generator
 import patient_status_checker
+import patient_records
 import crash_handler
 import setup_wizard
 
@@ -71,66 +72,6 @@ def setup_logging():
         ]
     )
     logging.info(f"=== LeprendiX gestartet (Log: {log_file}) ===")
-
-# --- WATCHDOG KLASSE (FREEZE DETECTION) ---
-class AppWatchdog:
-    """
-    Überwacht den Haupt-Thread. Wenn dieser für 'timeout_sec' Sekunden blockiert,
-    wird der Crash-Handler ausgelöst.
-    """
-    def __init__(self, root, check_interval_ms=1000, timeout_sec=20):
-        self.root = root
-        self.check_interval_ms = check_interval_ms
-        self.timeout_sec = timeout_sec
-        self.last_heartbeat = time.time()
-        self.running = True
-        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-
-    def start(self):
-        self.monitor_thread.start()
-        self._schedule_heartbeat()
-
-    def stop(self):
-        self.running = False
-
-    def _schedule_heartbeat(self):
-        if not self.running:
-            return
-        # Heartbeat aktualisieren (dies läuft im Main-Thread)
-        self.last_heartbeat = time.time()
-        try:
-            self.root.after(self.check_interval_ms, self._schedule_heartbeat)
-        except Exception:
-            pass # Falls root zerstört wurde
-
-    def _monitor_loop(self):
-        while self.running:
-            time.sleep(1)
-            # Prüfen, ob der letzte Heartbeat zu lange her ist
-            if time.time() - self.last_heartbeat > self.timeout_sec:
-                self._trigger_freeze_handling()
-                break
-
-    def _trigger_freeze_handling(self):
-        logging.critical("WATCHDOG: Programm reagiert nicht mehr (Freeze detected).")
-        
-        # Crash-Log schreiben
-        crash_file = crash_handler.CRASH_FILE
-        try:
-            with open(crash_file, "w", encoding="utf-8") as f:
-                f.write("KRITISCHER FEHLER: PROGRAMM EINGEFROREN (FREEZE)\n")
-                f.write("================================================\n")
-                f.write("Der Watchdog hat festgestellt, dass die Benutzeroberfläche seit über 20 Sekunden nicht mehr reagiert.\n")
-                f.write("Mögliche Ursachen: Endlosschleife, blockierende Netzwerkabfrage oder Deadlock.\n")
-                f.write(f"Zeitstempel: {datetime.datetime.now()}\n")
-        except Exception:
-            pass
-
-        # Crash Handler starten
-        crash_handler.start_crash_handler_process()
-        
-        # Prozess hart beenden (os._exit killt sofort, sys.exit wirft nur Exception)
-        os._exit(1)
 
 # --- KONFIGURATION & DESIGN ---
 COLOR_PRIMARY = "#2c3e50"
@@ -320,7 +261,7 @@ class CollapsiblePane(tk.Frame):
         self._title = title
         self._bg = bg_color
         
-        self._button = tk.Button(self, text=f"{'-' if expanded else '+'} {title}",
+        self._button = tk.Button(self, text=f"{'▼' if expanded else '▶'} {title}",
                                  command=self._toggle, relief="flat", 
                                  bg=COLOR_SECONDARY, fg="white", 
                                  font=("Segoe UI", 12, "bold"), anchor="w", padx=10, pady=5)
@@ -334,11 +275,11 @@ class CollapsiblePane(tk.Frame):
         if self._variable.get():
             self.frame.grid_remove()
             self._variable.set(False)
-            self._button.configure(text=f"+ {self._title}")
+            self._button.configure(text=f"▶ {self._title}")
         else:
             self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
             self._variable.set(True)
-            self._button.configure(text=f"- {self._title}")
+            self._button.configure(text=f"▼ {self._title}")
 
 # --- HAUPTFENSTER ---
 def create_main():
@@ -365,10 +306,6 @@ def create_main():
     root.title("LeprendiX - Control Center")
     root.geometry("1150x850")
     root.configure(bg=COLOR_PRIMARY)
-
-    # Watchdog starten (Schutz gegen Freezes)
-    watchdog = AppWatchdog(root)
-    watchdog.start()
 
     # Styles
     style = ttk.Style()
@@ -461,8 +398,33 @@ def create_main():
 
         launch_application(root)
 
+    def open_patient_records_from_launcher():
+        if not USER_CREDS:
+            messagebox.showerror("Fehler", "Datei 'credentials.dat' fehlt.", parent=root)
+            return
+        if u_ent.get() != USER_CREDS.get("user") or p_ent.get() != USER_CREDS.get("password"):
+            messagebox.showerror(
+                "Fehler",
+                "Bitte zuerst gültige Logindaten eingeben.",
+                parent=root,
+            )
+            return
+        patient_records.open_patient_records(root)
+
     tk.Button(login_f, text="ANMELDEN & STARTEN", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 11, "bold"),
               relief="flat", cursor="hand2", padx=20, pady=10, command=do_login).pack(fill="x")
+    tk.Button(
+        login_f,
+        text="PATIENTENAKTEN ÖFFNEN",
+        bg=COLOR_PRIMARY,
+        fg="#00f2ff",
+        font=("Segoe UI", 10, "bold"),
+        relief="flat",
+        cursor="hand2",
+        padx=20,
+        pady=9,
+        command=open_patient_records_from_launcher,
+    ).pack(fill="x", pady=(8, 0))
     root.bind('<Return>', do_login)
 
 
@@ -712,7 +674,7 @@ def create_main():
     cat4.pack(fill="x", pady=5, padx=5)
             
     # Reminder
-    tk.Label(cat4.frame, text="WICHTIG: Bitte erstellen Sie regelmäßig Backups!",
+    tk.Label(cat4.frame, text="⚠️ WICHTIG: Bitte erstellen Sie regelmäßig Backups!",
              font=("Segoe UI", 10, "bold"), fg="#e74c3c", bg=COLOR_PRIMARY).pack(pady=(0, 10), anchor="w")
 
     # Backup Liste
@@ -831,7 +793,7 @@ def create_main():
     support_frame.pack(pady=10)
     tk.Button(support_frame, text="Support / Fehler melden", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=open_support, padx=20, pady=5).pack(side="left", padx=5)
     tk.Button(support_frame, text="Auf Updates prüfen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_releases, padx=20, pady=5).pack(side="left", padx=5)
-    tk.Button(support_frame, text="Crash Test", bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=trigger_crash, padx=20, pady=5).pack(side="left", padx=5)
+    tk.Button(support_frame, text="Crash Test 💥", bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=trigger_crash, padx=20, pady=5).pack(side="left", padx=5)
 
     # --- TAB 3: DOKUMENTATION ---
     t3 = tk.Frame(nb, bg=COLOR_PRIMARY)
@@ -1014,7 +976,6 @@ def create_main():
 
     # --- AUTO-BACKUP ON EXIT ---
     def on_closing():
-        watchdog.stop() # Watchdog stoppen, um False Positives beim Beenden zu vermeiden
         # Automatisches Backup beim Schließen
         if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
             db_path = os.path.join(BASE_DIR, "patienten.db")

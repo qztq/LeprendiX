@@ -89,6 +89,7 @@ Die Companion App erfasst alle für LeprendiX erforderlichen Daten mit minimalem
 - **Vorname & Nachname:** Erfassung über die integrierte Touch-Tastatur
 - **Sozialversicherungsnummer:** Großes On-Screen Touch-Numpad inklusive **österreichischer Prüfziffernvalidierung (Modulo 11)** und Geburtsdatum-Erkennung
 - **Wohnadresse:** Straße, Hausnummer, Adresszusatz (Top/Stiege), PLZ & Ort (mit automatischer Ortsvervollständigung anhand der österreichischen PLZ-Datenbank)
+- **Krankenkasse:** Auswahl zwischen ÖGK, SVS, BVAEB, KFA, Privat/Selbstzahler und Sonstige; wird beim Sync am Patienten gespeichert
 - **DSGVO & Verträge:** Frei konfigurierbare Vertragstexte aus `/Companion/res/` mit Pflicht-Einwilligungs-Checkboxen und digitaler Unterschrift
 
 ---

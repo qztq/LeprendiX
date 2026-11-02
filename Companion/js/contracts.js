@@ -51,7 +51,7 @@ class ContractManager {
         title: "Behandlungs- & Honorarvereinbarung",
         badge: "Empfohlen",
         required: false,
-        enabled: true,
+        enabled: false,
         version: "2026.1"
       }
     ];
@@ -157,6 +157,7 @@ class ContractManager {
         vorname: patientInfo.vorname || '',
         nachname: patientInfo.nachname || '',
         vsnr: patientInfo.vsnr || '',
+        krankenkasse: patientInfo.krankenkasse || '',
         adresse: `${patientInfo.strasse || ''} ${patientInfo.hausnummer || ''}${patientInfo.adresszusatz ? ', ' + patientInfo.adresszusatz : ''}, ${patientInfo.plz || ''} ${patientInfo.ort || ''}`.trim()
       },
       contracts: signedContracts,
@@ -164,4 +165,3 @@ class ContractManager {
     };
   }
 }
-

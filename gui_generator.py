@@ -741,6 +741,7 @@ class HonorarGeneratorApp:
         self.selected_leistung_id = None 
         self.selected_leistungs_kurznamen = set() # Für die Mehrfachauswahl-Buttons
         self.session_blacklist = set() # In-memory blacklist for the current session
+        self._guided_blink_jobs = {}
         self.ttk_style = ttk.Style(master=root) 
         self.mobile_server = None # Server instance
         
@@ -771,20 +772,20 @@ class HonorarGeneratorApp:
         self.ttk_style.configure('Danger.TButton', foreground='red')
 
         self.tab_generate = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_generate, text='Honorarnote Generieren')
+        self.notebook.add(self.tab_generate, text='📝 Honorarnote Generieren')
         self.setup_generate_tab(self.tab_generate)
         
         self.tab_patient = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_patient, text='Patienten Verwalten')
+        self.notebook.add(self.tab_patient, text='👤 Patienten Verwalten')
         self.setup_patient_tab(self.tab_patient)
 
         self.tab_leistung = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_leistung, text='Leistungen Hinzufügen/Prüfen')
+        self.notebook.add(self.tab_leistung, text='➕ Leistungen Hinzufügen/Prüfen')
         self.setup_leistung_tab(self.tab_leistung)
         self.update_leistung_list()
         
         self.tab_stammdaten = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_stammdaten, text='Stammdaten Leistungen')
+        self.notebook.add(self.tab_stammdaten, text='⚙️ Stammdaten Leistungen')
         self.setup_stammdaten_tab(self.tab_stammdaten)
         
 
@@ -925,6 +926,54 @@ class HonorarGeneratorApp:
         if widget and widget.winfo_exists():
             widget.focus_set()
             self._blink_highlight(widget)
+
+    def _start_guided_blink(self, widget):
+        if not widget or not widget.winfo_exists():
+            return
+
+        self._stop_guided_blink(widget)
+        original_style = widget.cget("style") or widget.winfo_class()
+        blink_style = f"Guided.Highlight.{original_style}"
+        self.ttk_style.configure(
+            blink_style,
+            background="#f1c40f",
+            foreground="#1f2d3d",
+        )
+        self._guided_blink_jobs[widget] = {
+            "job": None,
+            "original_style": original_style,
+            "blink_style": blink_style,
+            "is_on": False,
+        }
+        self._toggle_guided_blink(widget)
+
+    def _toggle_guided_blink(self, widget):
+        state = self._guided_blink_jobs.get(widget)
+        if state is None:
+            return
+        if not widget.winfo_exists():
+            self._stop_guided_blink(widget)
+            return
+
+        state["is_on"] = not state["is_on"]
+        widget.configure(
+            style=state["blink_style"] if state["is_on"] else state["original_style"]
+        )
+        state["job"] = self.root.after(450, lambda: self._toggle_guided_blink(widget))
+
+    def _stop_guided_blink(self, widget=None):
+        widgets = [widget] if widget is not None else list(self._guided_blink_jobs)
+        for blinking_widget in widgets:
+            state = self._guided_blink_jobs.pop(blinking_widget, None)
+            if state is None:
+                continue
+            if state["job"] is not None:
+                try:
+                    self.root.after_cancel(state["job"])
+                except tk.TclError:
+                    pass
+            if blinking_widget.winfo_exists():
+                blinking_widget.configure(style=state["original_style"])
    
     def _get_invoice_sequence_data(self):
         """Holt die aktuelle Folgenummer, Jahr und Monat aus der Einstellungen-Tabelle."""
@@ -1058,6 +1107,7 @@ class HonorarGeneratorApp:
         self.results_listbox = tk.Listbox(tab, height=10, width=60)
         self.results_listbox.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='nsew')
         self.results_listbox.bind('<<ListboxSelect>>', self.select_patient_from_list)
+        self.results_listbox.bind('<Double-1>', self._on_patient_double_click)
 
         self.search_entry.bind('<Return>', lambda e: self.search_patients()) # Enter 1: Suchen
         self.results_listbox.bind('<Return>', self.handle_enter_on_listbox) # Enter 2: Patient wählen
@@ -1075,7 +1125,12 @@ class HonorarGeneratorApp:
         ttk.Button(btn_frame, text="Speichern & Öffnen", command=self.generate_invoice).pack(side=tk.LEFT, padx=10)
         
         # NEUER BUTTON: Generieren und Sofort Drucken
-        ttk.Button(btn_frame, text="Speichern & Drucken", command=self.generate_and_print_invoice).pack(side=tk.LEFT, padx=10)
+        self.print_invoice_button = ttk.Button(
+            btn_frame,
+            text="✅ Speichern & Drucken",
+            command=self.generate_and_print_invoice,
+        )
+        self.print_invoice_button.pack(side=tk.LEFT, padx=10)
         
         # NEU: Button zum Widerrufen der letzten Honorarnote
         ttk.Button(btn_frame, text="Honorarnote Wiederrufen", command=self.revoke_last_invoice, style='Danger.TButton').pack(side=tk.LEFT, padx=10)
@@ -1144,6 +1199,7 @@ class HonorarGeneratorApp:
             self.results_listbox.selection_clear(0, tk.END)
             self.results_listbox.selection_set(0)
             self.select_patient_from_list()
+            self._open_patient_leistungen()
 
         # Fokus auf das Hauptfenster setzen
         self.root.lift()
@@ -1229,6 +1285,7 @@ class HonorarGeneratorApp:
         if selection:
             # Hier wird die Methode nun sicher aufgerufen
             self.select_patient_from_list()
+            self._open_patient_leistungen()
 
     
     def select_patient_from_list(self, event=None):
@@ -1240,14 +1297,30 @@ class HonorarGeneratorApp:
             
             # NEU: Lade und wähle die zuletzt ausgewählten Leistungen aus
             self.load_and_select_last_leistungen()
-            
-            # Automatisch zum Leistungs-Tab wechseln und Liste aktualisieren
-            self.notebook.select(self.tab_leistung)
-            self.update_leistung_list() 
 
-            # Focus auf den Teamup-Button setzen
-            if hasattr(self, 'teamup_button'):
-                self.focus_and_highlight(self.teamup_button)
+    def _open_patient_leistungen(self):
+        if not self.patient_data:
+            return
+
+        self._stop_guided_blink()
+        self.notebook.select(self.tab_leistung)
+        self.update_leistung_list()
+        if hasattr(self, 'teamup_button'):
+            self.teamup_button.focus_set()
+            self._start_guided_blink(self.teamup_button)
+
+
+    def _on_patient_double_click(self, event):
+        index = self.results_listbox.nearest(event.y)
+        patient_data_list = getattr(self.results_listbox, "patient_data_list", [])
+        if index < 0 or index >= len(patient_data_list):
+            return "break"
+
+        self.results_listbox.selection_clear(0, tk.END)
+        self.results_listbox.selection_set(index)
+        self.select_patient_from_list()
+        self._open_patient_leistungen()
+        return "break"
 
     def update_patient_info(self):
         if self.patient_data:
@@ -1269,12 +1342,14 @@ class HonorarGeneratorApp:
         # Fall A: Wir sind im Tab "Leistungen hinzufügen" (Index 2)
         # Aktion: Wechsel zum ersten Tab (wie "Fertig -->")
         if current_tab == 2:
+            self._stop_guided_blink()
             self.notebook.select(0)
-            self.focus_and_highlight(self.search_entry)
+            self._start_guided_blink(self.print_invoice_button)
             
         # Fall B: Wir sind im Tab "Honorarnote generieren" (Index 0)
         # Aktion: Dokument erstellen (wie "Drucken und Speichern")
         elif current_tab == 0:
+            self._stop_guided_blink()
             # Hier rufen wir die Funktion auf, die dein Button "Drucken und Speichern" nutzt
             # Laut deinem Code-Stil heißt diese vermutlich generate_honorarnote
             self.generate_and_print_invoice()
@@ -1326,6 +1401,7 @@ class HonorarGeneratorApp:
 
     def generate_and_print_invoice(self):
         """Generiert die Honorarnote und versucht, sie direkt zu drucken."""
+        self._stop_guided_blink(self.print_invoice_button)
         if not self.patient_data:
             messagebox.showwarning("Warnung", "Bitte wählen Sie zuerst einen Patienten aus.")
             return
@@ -1545,8 +1621,8 @@ class HonorarGeneratorApp:
         # Spacer
         ttk.Label(search_frame, text="   |   ").pack(side=tk.LEFT)
         
-        ttk.Button(search_frame, text="Archiv", command=self.open_archive_manager).pack(side=tk.LEFT, padx=5)
-        self.mobile_scan_button = ttk.Button(search_frame, text="Companion App", command=self.open_scan_dialog)
+        ttk.Button(search_frame, text="♻️ Archiv", command=self.open_archive_manager).pack(side=tk.LEFT, padx=5)
+        self.mobile_scan_button = ttk.Button(search_frame, text="📱 Companion App", command=self.open_scan_dialog)
         self.mobile_scan_button.pack(side=tk.LEFT, padx=5)
         
         self.patient_id_to_edit = None
@@ -1632,7 +1708,7 @@ class HonorarGeneratorApp:
         self.delete_patient_button = ttk.Button(action_frame, text="LÖSCHEN", command=self.delete_patient_gui, style='Danger.TButton', state=tk.DISABLED)
         self.delete_patient_button.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(action_frame, text="Ordner", command=self.open_patient_folder).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="📂 Ordner", command=self.open_patient_folder).pack(side=tk.LEFT, padx=5)
 
         # --- 3. SEPARATOR ---
         ttk.Separator(tab, orient='vertical').grid(row=1, column=1, sticky='ns', padx=10, pady=10)
@@ -2293,7 +2369,6 @@ class HonorarGeneratorApp:
         self.patient_search_entry.delete(0, tk.END)
 
         if not search_term:
-            messagebox.showwarning("Suche", "Bitte geben Sie einen Suchbegriff ein.")
             return
             
         results = get_patient_data(search_term) 
@@ -2654,7 +2729,15 @@ class HonorarGeneratorApp:
             elif use_manual_override:
                 beschreibung = f"Manuelle Eingabe"
             else:
-                beschreibung = self.stammdaten_betraege.get(kurzname, kurzname)
+                stammdaten_key = next(
+                    (key for key in self.stammdaten_betraege if key.startswith(kurzname + ' -')),
+                    None,
+                )
+                beschreibung = (
+                    stammdaten_key.partition(' - ')[2]
+                    if stammdaten_key
+                    else kurzname
+                )
 
             cursor.execute("""
             INSERT INTO leistungen (patient_id, datum, uhrzeit_von, uhrzeit_bis, beschreibung, einzelbetrag)
@@ -2693,8 +2776,8 @@ class HonorarGeneratorApp:
                 standard_betrag = self.stammdaten_betraege[stammdaten_key[0]]
                 end_betrag = standard_betrag + km_geld
                 
-                # Die Beschreibung der Leistung wird aus den Stammdaten übernommen
-                final_beschreibung = stammdaten_key[0] 
+                # Die Leistungsbeschreibung ist der Teil nach dem Kurznamen.
+                final_beschreibung = stammdaten_key[0].partition(' - ')[2] or kurzname
                 
                 try:
                     datum_db = datetime.datetime.strptime(date_str, '%d.%m.%Y').strftime('%Y-%m-%d')
@@ -2741,11 +2824,11 @@ class HonorarGeneratorApp:
         self.ttk_style.configure('Prominent.TButton', font=('Segoe UI', 12, 'bold'))
         self.ttk_style.configure('Finish.TButton', font=('Segoe UI', 12, 'bold'), foreground='green')
 
-        self.teamup_button = ttk.Button(main_action_frame, text="Teamup-Termine Importieren", command=self.open_teamup_search, style='Prominent.TButton')
+        self.teamup_button = ttk.Button(main_action_frame, text="📅 Teamup-Termine Importieren", command=self.open_teamup_search, style='Prominent.TButton')
         self.teamup_button.pack(side=tk.LEFT, fill='x', expand=True, padx=(0, 10), ipady=5)
 
-        finish_btn = ttk.Button(main_action_frame, text="Fertig / Weiter zum Drucken", command=self._switch_to_generate_tab, style='Finish.TButton')
-        finish_btn.pack(side=tk.LEFT, fill='x', expand=True, padx=(10, 0), ipady=5)
+        self.finish_button = ttk.Button(main_action_frame, text="✅ Fertig / Weiter zum Drucken", command=self._switch_to_generate_tab, style='Finish.TButton')
+        self.finish_button.pack(side=tk.LEFT, fill='x', expand=True, padx=(10, 0), ipady=5)
 
         # --- 3. Leistungsauswahl (Stammdaten Buttons) ---
         selection_frame = ttk.LabelFrame(tab, text="Leistung auswählen")
@@ -2956,6 +3039,8 @@ class HonorarGeneratorApp:
         - Datumsbereichs-Automatik
         - ENTER-Support zum Ersetzen/Speichern
         """
+        self._stop_guided_blink(self.teamup_button)
+
         # --- 1. ORIGINAL VALIDIERUNG ---
         if not self.patient_data:
             messagebox.showwarning("Achtung", "Bitte wählen Sie zuerst einen Patienten im ersten Tab aus.")
@@ -3138,9 +3223,10 @@ class HonorarGeneratorApp:
         def replace_selected_events():
             """Nutzt Original replace_all_leistungen_from_teamup."""
             events = _get_selected_events_and_validate()
-            if events:
-                self.replace_all_leistungen_from_teamup(events)
+            if events and self.replace_all_leistungen_from_teamup(events):
+                self._stop_guided_blink(save_btn)
                 search_window.destroy()
+                self._start_guided_blink(self.finish_button)
 
         def search_gemeinde():
             if not self.patient_data: return
@@ -3170,7 +3256,7 @@ class HonorarGeneratorApp:
         ttk.Button(btn_frame, text="+ Hinzufügen", command=add_selected_events).pack(side=tk.LEFT, padx=5)
         save_btn = ttk.Button(btn_frame, text="Auswahl Speichern & Ersetzen (ENTER)", command=replace_selected_events)
         save_btn.pack(side=tk.LEFT, padx=5)
-        search_window.after(100, lambda: self.focus_and_highlight(save_btn))
+        search_window.after(100, lambda: self._start_guided_blink(save_btn))
 
         # --- BINDINGS ---
         # ENTER im Suchfeld -> Neue Suche
@@ -3346,7 +3432,7 @@ class HonorarGeneratorApp:
 
 
         if success_count > 0:
-            self.set_status(f"{success_count} Leistung(en) erfolgreich hinzugefügt.")
+            self.set_status(f"✅ {success_count} Leistung(en) erfolgreich hinzugefügt.")
             self.description_text.delete("1.0", tk.END) # Textbox leeren
             if hasattr(self, 'description_text') and self.description_text.winfo_exists():
                 self.description_text.delete("1.0", tk.END) # Textbox leeren
@@ -3381,7 +3467,7 @@ class HonorarGeneratorApp:
         """Löscht alle bestehenden Leistungen des Patienten und fügt die ausgewählten Teamup-Termine als neue Leistungen ein."""
         if not self.patient_data or not self.selected_leistungs_kurznamen:
             logging.warning("Kein Patient oder keine Leistung ausgewählt. Vorgang abgebrochen.")
-            return
+            return False
 
         patient_id = self.patient_data[0]
         patient_name = f"{self.patient_data[1]} {self.patient_data[2]}"
@@ -3389,7 +3475,7 @@ class HonorarGeneratorApp:
         # 1. Lösche alle bestehenden Leistungen
         if not self._delete_all_patient_leistungen(patient_id):
             messagebox.showerror("Fehler", f"FEHLER: Fehler beim Löschen bestehender Leistungen für Patient {patient_name}. Neue Termine wurden NICHT eingefügt.")
-            return
+            return False
 
         # 2. Füge neue Leistungen ein
         insertion_success_count = self._insert_multiple_leistungen(patient_id, events_list)
@@ -3400,9 +3486,11 @@ class HonorarGeneratorApp:
             self.set_status(f"{insertion_success_count} Leistung(en) für Patient {patient_name} erfolgreich ERSETZT.")
             self.update_leistung_list()
             self.root.focus_force()
+            return True
         else:
             messagebox.showwarning("Achtung", "Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
             logging.info("Es konnten keine neuen Leistungen hinzugefügt werden (nach dem Löschen).")
+            return False
 
     def update_leistung_list(self):
         # ... (Rest der Klasse bleibt unverändert)
@@ -3651,7 +3739,7 @@ class HonorarGeneratorApp:
         btn_frame = ttk.Frame(input_frame)
         btn_frame.pack(fill='x', pady=(15, 0))
         
-        ttk.Button(btn_frame, text="Speichern / Aktualisieren", command=self.save_stammdaten).pack(side=tk.RIGHT)
+        ttk.Button(btn_frame, text="💾 Speichern / Aktualisieren", command=self.save_stammdaten).pack(side=tk.RIGHT)
         ttk.Button(btn_frame, text="Felder leeren", command=self.clear_stammdaten_fields).pack(side=tk.RIGHT, padx=10)
 
         # --- Liste Bereich (Mitte) ---
@@ -3671,8 +3759,8 @@ class HonorarGeneratorApp:
         # --- Controls (Unten) ---
         control_frame = ttk.Frame(tab)
         control_frame.pack(fill='x', padx=10, pady=10)
-        ttk.Button(control_frame, text="Ausgewählte Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT)
-        ttk.Button(control_frame, text="Ausgewählte Leistung Archivieren", command=self.archive_stammdaten).pack(side=tk.LEFT, padx=10)
+        ttk.Button(control_frame, text="🗑️ Ausgewählte Leistung Löschen", command=self.delete_stammdaten).pack(side=tk.LEFT)
+        ttk.Button(control_frame, text="📁 Ausgewählte Leistung Archivieren", command=self.archive_stammdaten).pack(side=tk.LEFT, padx=10)
 
         self.update_stammdaten_list()
 

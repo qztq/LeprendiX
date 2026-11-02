@@ -2,6 +2,7 @@ import threading
 import socket
 import qrcode
 import os
+import sys
 import secrets
 import logging
 import datetime
@@ -10,6 +11,34 @@ import json
 import sqlite3
 import re
 from flask import Flask, request, jsonify, send_from_directory
+
+
+def _runtime_roots():
+    """Gibt mögliche Basisverzeichnisse für Quellcode und PyInstaller-Bundles zurück."""
+    roots = []
+    executable_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else None
+    bundle_dir = getattr(sys, '_MEIPASS', None)
+    source_dir = os.path.dirname(os.path.abspath(__file__))
+
+    for path in (executable_dir, bundle_dir, source_dir):
+        if path:
+            normalized = os.path.abspath(path)
+            if normalized not in roots:
+                roots.append(normalized)
+    return roots
+
+
+def _resolve_companion_dir():
+    """Findet Companion-Dateien sowohl im Ordner als auch im flachen PyInstaller-Bundle."""
+    roots = _runtime_roots()
+    for root in roots:
+        for candidate in (os.path.join(root, 'Companion'), root):
+            if os.path.isfile(os.path.join(candidate, 'index.html')):
+                return candidate
+    return os.path.join(roots[0], 'Companion') if roots else os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'Companion'
+    )
+
 
 class MobileServer:
     def __init__(self, callback_function, status_callback=None, batch_callback=None, db_path=None):
@@ -28,8 +57,7 @@ class MobileServer:
         self.scan_requested = False
         self.ping_requested = False
 
-        # Companion directory
-        self.companion_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Companion')
+        self.companion_dir = _resolve_companion_dir()
         
         # CORS & Headers
         @self.app.after_request
@@ -55,15 +83,24 @@ class MobileServer:
 
     def serve_companion_index(self):
         """Liefert die Hauptseite der Companion-App aus."""
-        if os.path.exists(os.path.join(self.companion_dir, 'index.html')):
+        index_path = os.path.join(self.companion_dir, 'index.html')
+        if os.path.isfile(index_path):
             return send_from_directory(self.companion_dir, 'index.html')
-        return "LeprendiX Companion index.html nicht gefunden.", 404
+        searched = ', '.join(
+            os.path.join(root, 'Companion') for root in _runtime_roots()
+        )
+        return (
+            "LeprendiX Companion index.html nicht gefunden. "
+            f"Geprüfte Bundle-Ordner: {searched}",
+            404
+        )
 
     def serve_companion_logo(self):
         """Liefert das gemeinsame Anwendungslogo an die Companion-App aus."""
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
-        if os.path.isfile(logo_path):
-            return send_from_directory(os.path.dirname(logo_path), 'logo.png')
+        for root in _runtime_roots():
+            logo_path = os.path.join(root, 'logo.png')
+            if os.path.isfile(logo_path):
+                return send_from_directory(root, 'logo.png')
         return "LeprendiX logo.png nicht gefunden.", 404
 
     def serve_companion_file(self, filename):
@@ -439,6 +476,10 @@ class MobileServer:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(patienten)")
+            patient_columns = {column[1] for column in cursor.fetchall()}
+            if 'krankenkasse' not in patient_columns:
+                cursor.execute("ALTER TABLE patienten ADD COLUMN krankenkasse TEXT DEFAULT ''")
 
             for record in records:
                 record_id = record['id'].strip()
@@ -458,6 +499,7 @@ class MobileServer:
 
                 nachname = (patient.get('nachname') or '').strip()
                 vsnr = (patient.get('vsnr') or '').strip()
+                krankenkasse = (patient.get('krankenkasse') or '').strip()
                 diagnose = patient.get('diagnose') or 'Z71'
                 plz = (patient.get('plz') or '').strip()
                 ort = (patient.get('ort') or '').strip()
@@ -511,14 +553,14 @@ class MobileServer:
                         """
                         INSERT OR IGNORE INTO patienten (
                             vorname, nachname, strasse, hausnummer, adresszusatz, plz, ort,
-                            anrede, versicherungsnummer, diagnose, kilometergeld,
+                            anrede, versicherungsnummer, diagnose, krankenkasse, kilometergeld,
                             last_selected_kurznamen, invoiced_since_reset
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0)
                         """,
                         (
                             vorname, nachname, strasse, hausnummer, adresszusatz, plz,
-                            ort, anrede, vsnr, diagnose, km_geld
+                            ort, anrede, vsnr, diagnose, krankenkasse, km_geld
                         )
                     )
                     if cursor.rowcount == 1:
@@ -559,6 +601,7 @@ class MobileServer:
                             anrede = COALESCE(NULLIF(?, ''), anrede),
                             versicherungsnummer = COALESCE(NULLIF(?, ''), versicherungsnummer),
                             diagnose = COALESCE(NULLIF(?, ''), diagnose),
+                            krankenkasse = COALESCE(NULLIF(?, ''), krankenkasse),
                             kilometergeld = CASE WHEN ? > 0 THEN ? ELSE kilometergeld END,
                             is_archived = 0
                         WHERE id = ?
@@ -566,7 +609,7 @@ class MobileServer:
                         (
                             vorname, nachname, strasse, hausnummer, adresszusatz,
                             plz, ort, anrede, vsnr,
-                            diagnose, km_geld, km_geld, patient_id
+                            diagnose, krankenkasse, km_geld, km_geld, patient_id
                         )
                     )
                     updated_count += 1
@@ -581,6 +624,7 @@ class MobileServer:
                     "nachname": nachname,
                     "name": f"{anrede} {vorname} {nachname}".strip(),
                     "vsnr": vsnr,
+                    "krankenkasse": krankenkasse,
                     "ort": f"{plz} {ort}".strip(),
                     "adresse": f"{strasse} {hausnummer}".strip(),
                     "kilometergeld": km_geld,

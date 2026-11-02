@@ -111,6 +111,10 @@
   },
   {
    "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_records.py;."
+  },
+  {
+   "optionDest": "datas",
    "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/setup_wizard.py;."
   },
   {
@@ -120,6 +124,42 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/version.txt;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/css;Companion/css/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/js;Companion/js/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/res;Companion/res/"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/favicon.ico;Companion"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/index.html;Companion"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/manifest.json;Companion"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/README.md;Companion"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/server.py;Companion"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/sw.js;Companion"
   }
  ],
  "nonPyinstallerOptions": {
