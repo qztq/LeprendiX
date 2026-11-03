@@ -160,6 +160,22 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/sw.js;Companion"
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_records.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/material_orders.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/material_orders.py;."
+  },
+  {
+   "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_records.py;."
   }
  ],
  "nonPyinstallerOptions": {

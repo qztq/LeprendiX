@@ -1574,14 +1574,22 @@ input:checked + .slider:before { transform: translateX(20px); }
 
 /* Branded replacement for blocking browser alert/prompt dialogs. */
 .app-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  transform: translate(-50%, -50%);
   width: min(440px, calc(100vw - 32px));
   max-width: none;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   padding: 0;
   border: 0;
   border-radius: 18px;
   background: transparent;
   color: var(--text-main);
-  overflow: visible;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .app-dialog::backdrop {

@@ -3218,14 +3218,13 @@ class HonorarGeneratorApp:
             events = _get_selected_events_and_validate()
             if events:
                 self.add_multiple_leistungen_from_teamup(events)
-                search_window.destroy()
+                close_search_window()
 
         def replace_selected_events():
             """Nutzt Original replace_all_leistungen_from_teamup."""
             events = _get_selected_events_and_validate()
             if events and self.replace_all_leistungen_from_teamup(events):
-                self._stop_guided_blink(save_btn)
-                search_window.destroy()
+                close_search_window()
                 self._start_guided_blink(self.finish_button)
 
         def search_gemeinde():
@@ -3256,7 +3255,13 @@ class HonorarGeneratorApp:
         ttk.Button(btn_frame, text="+ Hinzufügen", command=add_selected_events).pack(side=tk.LEFT, padx=5)
         save_btn = ttk.Button(btn_frame, text="Auswahl Speichern & Ersetzen (ENTER)", command=replace_selected_events)
         save_btn.pack(side=tk.LEFT, padx=5)
-        search_window.after(100, lambda: self._start_guided_blink(save_btn))
+
+        def close_search_window():
+            self._stop_guided_blink(save_btn)
+            if search_window.winfo_exists():
+                search_window.destroy()
+
+        self._start_guided_blink(save_btn)
 
         # --- BINDINGS ---
         # ENTER im Suchfeld -> Neue Suche
@@ -3268,7 +3273,8 @@ class HonorarGeneratorApp:
         # Doppelklick -> Hinzufügen (wie im Original)
         results_tree.bind('<Double-1>', lambda e: add_selected_events())
         # ESC -> Schließen
-        search_window.bind('<Escape>', lambda e: search_window.destroy())
+        search_window.bind('<Escape>', lambda e: close_search_window())
+        search_window.protocol("WM_DELETE_WINDOW", close_search_window)
 
         # Fenster zentrieren
         search_window.update_idletasks()
