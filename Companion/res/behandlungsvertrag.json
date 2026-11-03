@@ -1,0 +1,34 @@
+{
+  "id": "behandlungsvertrag",
+  "title": "Behandlungs- & Honorarvereinbarung",
+  "subtitle": "Informationen zur wahlärztlichen bzw. freiberuflichen Behandlung und Abrechnung",
+  "version": "2026.1",
+  "required": false,
+  "sections": [
+    {
+      "heading": "1. Wahlarzt- / Freiberufler-Status",
+      "text": "Die Leistungen werden als Wahlarzt / Wahltherapeut erbracht. Es besteht kein direkter Kassenvertrag mit den gesetzlichen Krankenversicherungsträgern (ÖGK, SVS, BVAEB etc.)."
+    },
+    {
+      "heading": "2. Honorargestaltung & Kostenerstattung",
+      "text": "Die Verrechnung erfolgt nach den jeweils gültigen Honorarsätzen der Praxis. Nach Abschluss der Behandlungsserie erhalten Sie eine detaillierte Honorarnote mit Zahlungsziel. Diese können Sie zur teilweisen Kostenrückerstattung bei Ihrer gesetzlichen Krankenkasse oder privaten Zusatzversicherung einreichen."
+    },
+    {
+      "heading": "3. Termineinhaltung & Absageregelung",
+      "text": "Vereinbarte Behandlungstermine sind verbindlich reserviert. Sollten Sie einen Termin nicht wahrnehmen können, sagen Sie diesen bitte mindestens 24 Stunden vorher ab. Bei unentschuldigtem Fernbleiben kann ein Ausfallhonorar verrechnet werden."
+    }
+  ],
+  "checkboxes": [
+    {
+      "id": "agreement_fee_terms",
+      "label": "Ich nehme zur Kenntnis, dass die Behandlung auf wahlärztlicher Basis erfolgt und das Honorar direkt an die Praxis zu entrichten ist.",
+      "required": true
+    },
+    {
+      "id": "agreement_cancellation_terms",
+      "label": "Ich akzeptiere die 24-Stunden-Absageregelung für reservierte Termine.",
+      "required": true
+    }
+  ]
+}
+

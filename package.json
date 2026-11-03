@@ -1,0 +1,17 @@
+{
+  "name": "leprendix-companion-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Android APK packaging for the LeprendiX Companion app",
+  "scripts": {
+    "android:stage": "python scripts/stage_companion_web.py",
+    "android:prepare": "python scripts/prepare_companion_android.py"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/core": "8.6.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0"
+  }
+}

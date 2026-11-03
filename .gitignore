@@ -7,3 +7,11 @@ __pycache__
 last_crash.txt
 /backups
 *.log
+/node_modules/
+/android/
+/build/
+.gradle/
+Companion/signatures/
+config.json
+/resbest/Druckformular.pdf
+Companion/README.md

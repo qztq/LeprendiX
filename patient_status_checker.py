@@ -49,12 +49,12 @@ class PatientStatusApp:
         button_frame.pack(pady=10, fill='x', padx=10)
 
         # Archivieren Button (für selektierte Zeile)
-        self.archive_btn = ttk.Button(button_frame, text="📁 Ausgewählten Patienten archivieren", 
+        self.archive_btn = ttk.Button(button_frame, text="📁 Ausgewählten Patienten archivieren",
                                      command=self.archive_selected_patient)
         self.archive_btn.pack(side=tk.LEFT, expand=True, fill='x', padx=5)
 
         # Reset Button
-        ttk.Button(button_frame, text="🔄 Alle auf Rot", 
+        ttk.Button(button_frame, text="🔄 Alle auf Rot",
                    command=self.reset_all_statuses).pack(side=tk.LEFT, expand=True, fill='x', padx=5)
 
         self.load_patient_statuses() 
