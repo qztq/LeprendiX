@@ -1,5 +1,8 @@
 {
   "appId": "com.qztq.leprendixcompanion",
   "appName": "LeprendiX Companion",
-  "webDir": "build/companion-web"
+  "webDir": "build/companion-web",
+  "android": {
+    "allowMixedContent": true
+  }
 }
