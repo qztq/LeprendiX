@@ -25,17 +25,25 @@ npm run android:stage
 npx cap add android
 
 npx cap sync android
-npm run android:prepare -- --version-code 4 --version-name 2.0.1
+$versionName = (Get-Content .\version.txt -Raw).Trim()
+$versionCodeMatch = Select-String -Path .\android\app\build.gradle -Pattern '^\s*versionCode\s+(\d+)\s*$'
+if (-not $versionName) { throw "version.txt ist leer" }
+if (-not $versionCodeMatch) { throw "versionCode in android\app\build.gradle nicht gefunden" }
+$versionCode = [int]$versionCodeMatch.Matches[0].Groups[1].Value + 1
+npm run android:prepare -- --version-code $versionCode --version-name $versionName
 Set-Location android
 .\gradlew.bat assembleDebug
 ```
 
 `android:stage` kopiert die Companion-Webdateien nach `build/companion-web`.
 `android:prepare` setzt die Android-Version und richtet die nötigen Manifest-
-Berechtigungen ein. Der `version-name` stammt standardmäßig aus `version.txt`
-(aktuell `2.0.1`); `version-code` muss bei jedem Update größer als der vorherige
-Wert sein. Im Beispiel ist `4` der nächste Code nach dem derzeit gespeicherten
-Wert `3`.
+Berechtigungen ein. Die Befehle lesen den `version-name` automatisch aus
+`version.txt` und erhöhen den `versionCode` aus der lokalen
+`android/app/build.gradle` um eins. `android:prepare` speichert den neuen Code
+dort, damit der nächste lokale Build ihn weiter erhöhen kann. Da der Android-
+Ordner nicht eingecheckt wird, muss bei einer neu erzeugten Android-App zuerst
+deren `versionCode` auf den Wert der zuletzt veröffentlichten APK gesetzt
+werden. Jeder Update-Code muss größer als der zuletzt veröffentlichte sein.
 
 Die Debug-APK befindet sich nach dem Build unter
 `android/app/build/outputs/apk/debug/app-debug.apk`. Sie ist zum lokalen Testen
