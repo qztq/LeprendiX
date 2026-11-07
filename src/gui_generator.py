@@ -14,35 +14,26 @@ from docx.shared import Pt
 import calendar # Am Anfang der Datei zu den anderen Imports hinzufügen
 import logging
 import threading
-from config_loader import CONFIG
+from src.config_loader import CONFIG
+from src.project_paths import get_app_directory, get_resource_path
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
-import mobile_connect
+from src import mobile_connect
 
 
 
 # --- HELPER FUNCTIONS FOR PATH RESOLUTION ---
 def resolve_data_path(relative_path):
     """Resolves path for writable data (next to exe or source dir)."""
-    if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, relative_path)
+    return os.path.join(get_app_directory(), relative_path)
 
 def resolve_resource_path(relative_path):
     """Resolves path for read-only resources (bundled in exe or source dir)."""
-    # 1. Try bundled path (PyInstaller)
-    if hasattr(sys, '_MEIPASS'):
-        bundled_path = os.path.join(sys._MEIPASS, relative_path)
-        if os.path.exists(bundled_path):
-            return bundled_path
-    # 2. Fallback to data path
-    return resolve_data_path(relative_path)
+    return get_resource_path(relative_path)
 
 # --- KONFIGURATION ---
 DATABASE_NAME = resolve_data_path('patienten.db')
-TEMPLATE_FILE = resolve_resource_path('honorar_vorlage.docx') 
+TEMPLATE_FILE = resolve_resource_path(os.path.join('assets', 'honorar_vorlage.docx'))
 
 
 def start_gui():
@@ -1176,7 +1167,7 @@ class HonorarGeneratorApp:
         tab.grid_rowconfigure(1, weight=1)
 
     def open_status_checker(self):
-        from patient_status_checker import PatientStatusApp
+        from src.patient_status_checker import PatientStatusApp
         checker_window = tk.Toplevel(self.root)
         app = PatientStatusApp(checker_window, 
                                selection_callback=self.load_patient_from_checker,

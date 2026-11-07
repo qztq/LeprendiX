@@ -7,11 +7,10 @@ import time
 import logging
 import tkinter as tk
 from tkinter import ttk
+from src.project_paths import get_app_directory
 
 def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+    return get_app_directory()
 
 class MigrationGUI:
     def __init__(self):

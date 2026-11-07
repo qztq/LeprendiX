@@ -11,9 +11,16 @@ import socket
 import shutil
 import glob
 import ctypes
-from config_loader import CONFIG
-import crash_handler
-import migrate_legacy
+
+APP_DIRECTORY = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__))
+)
+os.chdir(APP_DIRECTORY)
+
+from src.config_loader import CONFIG
+from src import crash_handler, migrate_legacy
 
 # Sofort den Crash-Handler aktivieren, um Fehler beim Start/Splash abzufangen
 crash_handler.install_exception_handler()
@@ -523,7 +530,7 @@ if __name__ == "__main__":
     # Nach dem Splash-Screen (wenn mainloop beendet ist):
     print("[DEBUG] Starte Hauptprogramm...")
     try:
-        import main
+        from src import main
         main.create_main()
     except Exception as e:
         import traceback

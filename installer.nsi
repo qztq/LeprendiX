@@ -39,8 +39,8 @@
 
   !define MUI_ABORTWARNING
   ; Icon für den Installer (optional, Pfad anpassen oder auskommentieren)
-  !define MUI_ICON "favicon.ico" 
-  !define MUI_UNICON "favicon.ico"
+  !define MUI_ICON "assets\favicon.ico"
+  !define MUI_UNICON "assets\favicon.ico"
   
   ; --- STYLE ANPASSUNGEN (LeprendiX Style) ---
   !define MUI_FONT "Segoe UI"

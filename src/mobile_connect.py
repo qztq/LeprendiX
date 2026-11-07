@@ -11,8 +11,9 @@ import json
 import sqlite3
 import re
 from flask import Flask, request, jsonify, send_from_directory
-from config_loader import CONFIG
-from companion_contracts import get_contract_directory, load_contracts
+from src.config_loader import CONFIG
+from src.companion_contracts import get_contract_directory, load_contracts
+from src.project_paths import get_app_directory
 
 
 def _runtime_roots():
@@ -20,7 +21,7 @@ def _runtime_roots():
     roots = []
     executable_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else None
     bundle_dir = getattr(sys, '_MEIPASS', None)
-    source_dir = os.path.dirname(os.path.abspath(__file__))
+    source_dir = get_app_directory()
 
     for path in (executable_dir, bundle_dir, source_dir):
         if path:
@@ -38,7 +39,7 @@ def _resolve_companion_dir():
             if os.path.isfile(os.path.join(candidate, 'index.html')):
                 return candidate
     return os.path.join(roots[0], 'Companion') if roots else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 'Companion'
+        get_app_directory(), 'Companion'
     )
 
 
@@ -48,7 +49,9 @@ class MobileServer:
         self.callback = callback_function
         self.status_callback = status_callback
         self.batch_callback = batch_callback
-        self.db_path = db_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'patienten.db')
+        self.db_path = db_path or os.path.join(
+            get_app_directory(), 'patienten.db'
+        )
         self.connection_callback = None
         self.cancel_callback = None
         self.token = secrets.token_hex(16)
@@ -102,9 +105,9 @@ class MobileServer:
     def serve_companion_logo(self):
         """Liefert das gemeinsame Anwendungslogo an die Companion-App aus."""
         for root in _runtime_roots():
-            logo_path = os.path.join(root, 'logo.png')
+            logo_path = os.path.join(root, 'assets', 'logo.png')
             if os.path.isfile(logo_path):
-                return send_from_directory(root, 'logo.png')
+                return send_from_directory(os.path.join(root, 'assets'), 'logo.png')
         return "LeprendiX logo.png nicht gefunden.", 404
 
     def serve_companion_file(self, filename):
@@ -202,7 +205,7 @@ class MobileServer:
                 return jsonify({"status": "error", "message": "Adresse fehlt"}), 400
 
             fixed_address = "Triesterstraße 10/4, 2351 Wiener Neudorf"
-            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+            config_path = os.path.join(get_app_directory(), 'config.json')
             if os.path.exists(config_path):
                 try:
                     with open(config_path, 'r', encoding='utf-8') as f:

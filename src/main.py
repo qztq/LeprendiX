@@ -18,34 +18,19 @@ import shutil
 import logging
 import tempfile
 import traceback # Für Crash-Handling
+from src.project_paths import get_app_directory, get_resource_path
 
-def get_base_path():
-    """ Ermittelt den Pfad zum Ordner, in dem die EXE oder das Skript liegt """
-    if getattr(sys, 'frozen', False):
-        # Pfad der EXE im "One Directory" Modus
-        return os.path.dirname(sys.executable)
-    else:
-        # Pfad im Editor
-        return os.path.dirname(os.path.abspath(__file__))
-
-BASE_DIR = get_base_path()
+BASE_DIR = get_app_directory()
 os.chdir(BASE_DIR)
 
 def resource_path(relative_path):
     """ Hilfsfunktion für interne Ressourcen (wie Logos im _MEIPASS) """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = BASE_DIR
-    return os.path.join(base_path, relative_path)
+    return get_resource_path(relative_path)
 
 
-from config_loader import CONFIG
-import gui_generator
-import patient_status_checker
-import patient_records
-import crash_handler
-import setup_wizard
+from src.config_loader import CONFIG
+from src import gui_generator, patient_status_checker, patient_records
+from src import crash_handler, setup_wizard
 
 # --- LOGGING SETUP ---
 def setup_logging():
@@ -79,7 +64,7 @@ COLOR_SECONDARY = "#34495e"
 COLOR_ACCENT = "#27ae60"
 COLOR_TEXT = "#ecf0f1"
 COLOR_HIGHLIGHT = "#3498db"
-LOGO_PATH = resource_path("logo.png")
+LOGO_PATH = resource_path(os.path.join("assets", "logo.png"))
 
 # --- GITHUB CONFIG FOR RELEASE NOTES ---
 GITHUB_USER = "qztq"
@@ -387,7 +372,7 @@ def create_main():
         if not db_ready:
             if messagebox.askyesno("Datenbank Setup", "Die Datenbank wurde noch nicht eingerichtet.\nMöchten Sie die Datenbank jetzt erstellen?"):
                 try:
-                    setup_script = resource_path("db_setup.py")
+                    setup_script = resource_path(os.path.join("src", "db_setup.py"))
                     runpy.run_path(setup_script, run_name="__main__")
                     messagebox.showinfo("Erfolg", "Datenbank wurde erfolgreich erstellt.")
                 except Exception as e:
@@ -484,7 +469,7 @@ def create_main():
     def do_setup():
         if USER_CREDS and db_p_ent.get() == USER_CREDS.get("password"):
             try:
-                setup_script = resource_path("db_setup.py")
+                setup_script = resource_path(os.path.join("src", "db_setup.py"))
                 runpy.run_path(setup_script, run_name="__main__")
                 messagebox.showinfo("Erfolg", "Datenbank bereit.")
             except Exception as e: 

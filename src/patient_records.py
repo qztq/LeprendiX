@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import os
 import shutil
@@ -8,18 +9,20 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from config_loader import CONFIG
-from mobile_connect import MobileServer
-from material_orders import (
+from src.config_loader import CONFIG
+from src.mobile_connect import MobileServer
+from src.material_orders import (
     MaterialOrderDialog,
     _find_template,
     get_patient_material_orders,
     open_material_order_pdf,
+    validate_material_order_template,
 )
+from src.project_paths import get_app_directory
 
 
 BACKGROUND = "#f0f0f0"
@@ -31,9 +34,7 @@ MUTED = "#555555"
 
 
 def _base_dir():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(os.path.abspath(__file__))
+    return get_app_directory()
 
 
 def _configured_path(config_key, fallback):
@@ -689,11 +690,20 @@ class PatientRecordWindow(tk.Toplevel):
         self.invoice_tree.column("datum", width=145, anchor="center")
         self.invoice_tree.column("datei", width=300)
 
-        ttk.Button(
+        self.create_material_order_button = ttk.Button(
             orders_frame.button_frame,
             text="Neue Materialbestellung",
             command=self._create_material_order,
-        ).pack(side="left", padx=(4, 6), pady=6)
+            state="normal" if self._has_material_order_template() else "disabled",
+        )
+        self.create_material_order_button.pack(side="left", padx=(4, 6), pady=6)
+        self.material_template_button = ttk.Button(
+            orders_frame.button_frame,
+            text="Druckformular auswählen",
+            command=self._select_material_order_template,
+        )
+        if not self._has_material_order_template():
+            self.material_template_button.pack(side="left", padx=4, pady=6)
         ttk.Button(
             orders_frame.button_frame,
             text="Bestellung öffnen",
@@ -786,8 +796,8 @@ class PatientRecordWindow(tk.Toplevel):
 
     def _create_material_order(self):
         try:
-            template_path = _find_template(_base_dir())
-        except FileNotFoundError as error:
+            template_path = _find_template()
+        except (FileNotFoundError, ValueError) as error:
             messagebox.showerror("Materialbestellung", str(error), parent=self)
             return
         try:
@@ -814,6 +824,42 @@ class PatientRecordWindow(tk.Toplevel):
             self.material_order_tree.delete(*self.material_order_tree.get_children())
             self.material_order_paths.clear()
             self._load_material_orders()
+
+    @staticmethod
+    def _has_material_order_template():
+        template_path = CONFIG.get("MATERIAL_ORDER_TEMPLATE", "")
+        if not template_path:
+            return False
+        if not os.path.isabs(template_path):
+            template_path = os.path.join(_base_dir(), template_path)
+        try:
+            validate_material_order_template(template_path)
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def _select_material_order_template(self):
+        template_path = filedialog.askopenfilename(
+            parent=self,
+            title="Druckformular-PDF auswählen",
+            filetypes=(("PDF-Dateien", "*.pdf"),),
+        )
+        if not template_path:
+            return
+        try:
+            template_path = validate_material_order_template(template_path)
+            updated_config = CONFIG.copy()
+            updated_config["MATERIAL_ORDER_TEMPLATE"] = template_path
+            config_path = os.path.join(_base_dir(), "config.json")
+            with open(config_path, "w", encoding="utf-8") as config_file:
+                json.dump(updated_config, config_file, ensure_ascii=False, indent=4)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Druckformular", str(error), parent=self)
+            return
+
+        CONFIG.update(updated_config)
+        self.create_material_order_button.configure(state="normal")
+        self.material_template_button.pack_forget()
 
     def _open_selected_material_order(self, _event=None):
         selection = self.material_order_tree.selection()
