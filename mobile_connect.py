@@ -11,6 +11,8 @@ import json
 import sqlite3
 import re
 from flask import Flask, request, jsonify, send_from_directory
+from config_loader import CONFIG
+from companion_contracts import get_contract_directory, load_contracts
 
 
 def _runtime_roots():
@@ -80,6 +82,8 @@ class MobileServer:
         self.app.add_url_rule('/pong', 'pong', self.handle_pong, methods=['POST', 'OPTIONS'])
         self.app.add_url_rule('/status', 'status', self.handle_status, methods=['GET', 'OPTIONS'])
         self.app.add_url_rule('/report_status', 'report_status', self.handle_report_status, methods=['POST', 'OPTIONS'])
+        self.app.add_url_rule('/contracts', 'contracts', self.handle_contracts, methods=['GET', 'OPTIONS'])
+        self.app.add_url_rule('/app-version', 'app_version', self.handle_app_version, methods=['GET'])
 
     def serve_companion_index(self):
         """Liefert die Hauptseite der Companion-App aus."""
@@ -105,10 +109,48 @@ class MobileServer:
 
     def serve_companion_file(self, filename):
         """Liefert statische Dateien (CSS, JS, Res) der Companion-App aus."""
+        normalized_filename = filename.replace("\\", "/")
+        if normalized_filename == "app-version.json":
+            return self.handle_app_version()
+        if normalized_filename == "res" or normalized_filename.startswith("res/"):
+            return "Verträge werden nur über die authentifizierte Verbindung geladen.", 404
+
         safe_path = os.path.normpath(os.path.join(self.companion_dir, filename))
         if os.path.commonpath([self.companion_dir, safe_path]) == self.companion_dir and os.path.exists(safe_path):
             return send_from_directory(self.companion_dir, filename)
         return "Datei nicht gefunden", 404
+
+    def handle_contracts(self):
+        if request.method == 'OPTIONS':
+            return jsonify({"status": "ok"})
+        authorization = request.headers.get("Authorization", "")
+        supplied_token = (
+            authorization[len("Bearer "):].strip()
+            if authorization.startswith("Bearer ")
+            else ""
+        )
+        if supplied_token != self.token:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
+        contract_dir = get_contract_directory(CONFIG.get("COMPANION_CONTRACTS_DIR"))
+        try:
+            contracts = load_contracts(contract_dir)
+        except (OSError, ValueError) as error:
+            logging.exception("Companion-Verträge konnten nicht geladen werden.")
+            return jsonify({
+                "status": "error",
+                "message": f"Verträge konnten nicht geladen werden: {error}",
+            }), 500
+        return jsonify({"status": "ok", "contracts": contracts})
+
+    @staticmethod
+    def handle_app_version():
+        for root in _runtime_roots():
+            version_path = os.path.join(root, "version.txt")
+            if os.path.isfile(version_path):
+                with open(version_path, "r", encoding="utf-8") as file:
+                    return jsonify({"version": file.read().strip()})
+        return jsonify({"error": "version.txt nicht gefunden"}), 404
 
     def set_connection_callback(self, callback):
         self.connection_callback = callback

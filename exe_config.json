@@ -71,6 +71,10 @@
   },
   {
    "optionDest": "datas",
+   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/companion_contracts.py;."
+  },
+  {
+   "optionDest": "datas",
    "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/crash_handler.py;."
   },
   {
@@ -132,10 +136,6 @@
   {
    "optionDest": "datas",
    "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/js;Companion/js/"
-  },
-  {
-   "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/res;Companion/res/"
   },
   {
    "optionDest": "datas",

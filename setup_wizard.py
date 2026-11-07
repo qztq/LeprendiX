@@ -4,7 +4,15 @@ import json
 import os
 import sys
 import pickle
+import qrcode
+from PIL import ImageTk
 from config_loader import CONFIG
+from companion_contracts import get_contract_directory, read_contract_files, save_contract_files
+
+
+COMPANION_APK_URL = (
+    "https://github.com/qztq/LeprendiX/releases/latest/download/LeprendiX_Mobile.apk"
+)
 
 # Design-Konstanten (passend zu LeprendiX)
 COLOR_PRIMARY = "#2c3e50"
@@ -33,6 +41,10 @@ class SetupWizard(tk.Toplevel):
         self.config_data = CONFIG.copy()
         self.current_version = current_version
         self.current_step = 0
+        self.selected_contract_files = []
+        self.download_companion_var = tk.BooleanVar(
+            value=bool(self.config_data.get("DOWNLOAD_COMPANION_APP", False))
+        )
         
         # Determine base path and check for credentials
         if getattr(sys, 'frozen', False):
@@ -55,6 +67,7 @@ class SetupWizard(tk.Toplevel):
             self.create_paths_step,
             self.create_api_step,
             self.create_defaults_step,
+            self.create_companion_step,
             self.create_finish_step
         ])
         
@@ -191,6 +204,98 @@ class SetupWizard(tk.Toplevel):
         self.add_text_input("Schnellwahl Beträge (Komma-getrennt):", "QUICK_AMOUNTS")
         self.add_text_input("Fixe Adresse (für KM-Berechnung):", "FIXED_ADDRESS")
 
+    def create_companion_step(self):
+        tk.Label(
+            self.container,
+            text="Companion-App & Verträge",
+            font=("Segoe UI", 16, "bold"),
+            bg=COLOR_PRIMARY,
+            fg="white",
+        ).pack(pady=(0, 12))
+        tk.Label(
+            self.container,
+            text=(
+                "Verträge werden lokal auf diesem PC gespeichert und nicht in die APK "
+                "gepackt. Nach dem Verbinden über den QR-Code werden sie einmalig auf "
+                "das Tablet übertragen und dort offline gespeichert."
+            ),
+            font=("Segoe UI", 10),
+            bg=COLOR_PRIMARY,
+            fg=COLOR_TEXT,
+            wraplength=560,
+            justify="left",
+        ).pack(fill="x", pady=(0, 14))
+
+        tk.Checkbutton(
+            self.container,
+            text="Companion-App auf einem Tablet installieren",
+            variable=self.download_companion_var,
+            bg=COLOR_PRIMARY,
+            fg="white",
+            selectcolor=COLOR_SECONDARY,
+            activebackground=COLOR_PRIMARY,
+            activeforeground="white",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", pady=(0, 12))
+
+        contract_box = tk.LabelFrame(
+            self.container,
+            text="Vertragsdateien (.json)",
+            bg=COLOR_PRIMARY,
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            padx=10,
+            pady=8,
+        )
+        contract_box.pack(fill="both", expand=True)
+        tk.Label(
+            contract_box,
+            text="Bestehende Verträge bleiben erhalten; ausgewählte IDs werden aktualisiert.",
+            bg=COLOR_PRIMARY,
+            fg=COLOR_TEXT,
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w")
+        self.contract_files_label = tk.Label(
+            contract_box,
+            text="Noch keine Dateien ausgewählt.",
+            bg=COLOR_PRIMARY,
+            fg="#bdc3c7",
+            justify="left",
+            anchor="w",
+            wraplength=520,
+        )
+        self.contract_files_label.pack(fill="x", pady=8)
+        tk.Button(
+            contract_box,
+            text="JSON-Verträge auswählen",
+            command=self.select_contract_files,
+            bg=COLOR_SECONDARY,
+            fg="white",
+            relief="flat",
+            font=("Segoe UI", 10),
+            padx=12,
+            pady=6,
+        ).pack(anchor="w")
+
+    def select_contract_files(self):
+        paths = filedialog.askopenfilenames(
+            parent=self,
+            title="Vertrags-JSON-Dateien auswählen",
+            filetypes=(("JSON-Dateien", "*.json"),),
+        )
+        if not paths:
+            return
+        try:
+            read_contract_files(paths)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Verträge", str(error), parent=self)
+            return
+
+        self.selected_contract_files = list(paths)
+        names = "\n".join(os.path.basename(path) for path in self.selected_contract_files)
+        self.contract_files_label.config(text=names, fg="white")
+
     def add_text_input(self, label, key, show=None):
         frame = tk.Frame(self.container, bg=COLOR_PRIMARY)
         frame.pack(fill="x", pady=8)
@@ -203,9 +308,59 @@ class SetupWizard(tk.Toplevel):
         var.trace_add("write", lambda *args: self.config_data.update({key: var.get()}))
 
     def create_finish_step(self):
-        tk.Label(self.container, text="Fertig!", font=("Segoe UI", 20, "bold"), bg=COLOR_PRIMARY, fg="white").pack(pady=(40, 20))
-        tk.Label(self.container, text="Alle Einstellungen wurden erfasst.\n\nSie können diese später jederzeit im Tab 'EINSTELLUNGEN' ändern.", 
-                 font=("Segoe UI", 11), bg=COLOR_PRIMARY, fg=COLOR_TEXT, wraplength=500, justify="center").pack(pady=20)
+        tk.Label(
+            self.container,
+            text="Fertig!",
+            font=("Segoe UI", 20, "bold"),
+            bg=COLOR_PRIMARY,
+            fg="white",
+        ).pack(pady=(12, 8))
+        tk.Label(
+            self.container,
+            text=(
+                "Die Vertragsdateien werden lokal gespeichert. Das Tablet lädt sie "
+                "beim ersten Verbinden mit LeprendiX herunter."
+            ),
+            font=("Segoe UI", 11),
+            bg=COLOR_PRIMARY,
+            fg=COLOR_TEXT,
+            wraplength=540,
+            justify="center",
+        ).pack(pady=8)
+        if self.download_companion_var.get():
+            try:
+                qr_code = qrcode.QRCode(box_size=5, border=2)
+                qr_code.add_data(COMPANION_APK_URL)
+                qr_code.make(fit=True)
+                qr_image = qr_code.make_image(fill_color="black", back_color="white").convert("RGB")
+                qr_photo = ImageTk.PhotoImage(qr_image)
+                qr_label = tk.Label(self.container, image=qr_photo, bg=COLOR_PRIMARY)
+                qr_label.image = qr_photo
+                qr_label.pack(pady=8)
+                tk.Label(
+                    self.container,
+                    text="QR-Code mit dem Tablet scannen, APK herunterladen und installieren.",
+                    font=("Segoe UI", 10),
+                    bg=COLOR_PRIMARY,
+                    fg=COLOR_TEXT,
+                ).pack()
+            except (ImportError, OSError, ValueError) as error:
+                tk.Label(
+                    self.container,
+                    text=f"APK-Download: {COMPANION_APK_URL}\nQR-Code konnte nicht erstellt werden: {error}",
+                    font=("Segoe UI", 9),
+                    bg=COLOR_PRIMARY,
+                    fg=COLOR_TEXT,
+                    wraplength=560,
+                ).pack()
+        else:
+            tk.Label(
+                self.container,
+                text="Die Tablet-App wurde für diesen Installationsvorgang nicht ausgewählt.",
+                font=("Segoe UI", 10),
+                bg=COLOR_PRIMARY,
+                fg=COLOR_TEXT,
+            ).pack()
 
     def finish(self):
         # Validate credentials if needed
@@ -214,10 +369,17 @@ class SetupWizard(tk.Toplevel):
                 messagebox.showwarning("Fehler", "Bitte Benutzername und Passwort festlegen.")
                 return
 
-        self.config_data["LAST_SETUP_VERSION"] = self.current_version
-        CONFIG.update(self.config_data)
-        
         try:
+            if self.selected_contract_files:
+                contract_dir = get_contract_directory(
+                    self.config_data.get("COMPANION_CONTRACTS_DIR")
+                )
+                save_contract_files(self.selected_contract_files, contract_dir)
+                self.config_data["COMPANION_CONTRACTS_DIR"] = str(contract_dir)
+
+            self.config_data["DOWNLOAD_COMPANION_APP"] = self.download_companion_var.get()
+            self.config_data["COMPANION_SETUP_COMPLETED"] = True
+            self.config_data["LAST_SETUP_VERSION"] = self.current_version
             config_file = os.path.join(self.base_path, 'config.json')
             
             with open(config_file, 'w', encoding='utf-8') as f:
@@ -227,8 +389,9 @@ class SetupWizard(tk.Toplevel):
                 with open(self.cred_file, "wb") as f:
                     pickle.dump(self.new_creds, f)
                     
+            CONFIG.update(self.config_data)
             self.destroy()
-        except Exception as e:
+        except (OSError, ValueError) as e:
             messagebox.showerror("Fehler", f"Konnte Konfiguration nicht speichern: {e}")
 
 def check_and_run_setup(root):
@@ -247,7 +410,10 @@ def check_and_run_setup(root):
 
     last_setup_version = CONFIG.get("LAST_SETUP_VERSION", None)
     
-    if last_setup_version != current_version:
+    if (
+        last_setup_version != current_version
+        or not CONFIG.get("COMPANION_SETUP_COMPLETED", False)
+    ):
         root.withdraw()
         wizard = SetupWizard(root, current_version)
         root.wait_window(wizard)

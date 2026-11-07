@@ -12,6 +12,7 @@ last_crash.txt
 /build/
 .gradle/
 Companion/signatures/
+Companion/res/*.json
 config.json
 /resbest/Druckformular.pdf
 Companion/README.md

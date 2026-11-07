@@ -1,74 +1,152 @@
 /**
- * contracts.js - Verwaltung und Darstellung von Verträgen & DSGVO
- * Lädt Verträge dynamisch aus dem /Companion/res/ Ordner.
+ * Verwaltung und lokale Speicherung der vom Praxis-PC importierten Verträge.
  */
-
 class ContractManager {
   constructor() {
     this.contractsIndex = [];
     this.loadedContracts = new Map();
-    this.consentStates = new Map(); // contractId -> { checkboxId: boolean }
+    this.consentStates = new Map();
     this.activeContractTab = null;
   }
 
   async init() {
-    try {
-      const res = await fetch('res/contracts_index.json?v=' + Date.now());
-      if (res.ok) {
-        const data = await res.json();
-        this.contractsIndex = data.contracts || [];
-      } else {
-        console.warn('contracts_index.json konnte nicht geladen werden, verwende Fallback');
-        this.contractsIndex = this.getFallbackIndex();
-      }
-    } catch (e) {
-      console.warn('Ladefehler contracts_index:', e);
-      this.contractsIndex = this.getFallbackIndex();
-    }
+    const savedContracts = localStorage.getItem('leprendix_companion_contracts');
+    if (!savedContracts) return;
 
-    // Lade alle aktivierten Verträge
-    for (const item of this.contractsIndex) {
-      if (item.enabled) {
-        await this.loadContract(item);
-      }
+    try {
+      const contracts = JSON.parse(savedContracts);
+      this.replaceContracts(contracts, false);
+    } catch (error) {
+      console.error('Lokal gespeicherte Verträge konnten nicht geladen werden:', error);
     }
   }
 
-  getFallbackIndex() {
-    return [
-      {
-        id: "dsgvo_datenverarbeitung",
-        file: "dsgvo_datenverarbeitung.json",
-        title: "Einwilligung zur Datenverarbeitung (DSGVO)",
-        badge: "Pflicht",
-        required: true,
-        enabled: true,
-        version: "2026.1"
-      },
-      {
-        id: "behandlungsvertrag",
-        file: "behandlungsvertrag.json",
-        title: "Behandlungs- & Honorarvereinbarung",
-        badge: "Empfohlen",
-        required: false,
-        enabled: false,
-        version: "2026.1"
+  validateContract(contract) {
+    if (!contract || typeof contract !== 'object' || Array.isArray(contract)) {
+      throw new Error('Die Vertragsdatei muss ein JSON-Objekt enthalten.');
+    }
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(contract.id || '') || contract.id === 'contracts_index') {
+      throw new Error('Die Vertrags-ID ist ungültig.');
+    }
+    if (typeof contract.title !== 'string' || !contract.title.trim()) {
+      throw new Error('Der Vertragstitel fehlt.');
+    }
+    if (contract.required !== undefined && typeof contract.required !== 'boolean') {
+      throw new Error(`Der Vertrag „${contract.title}“ hat eine ungültige Pflicht-Angabe.`);
+    }
+    if (!Array.isArray(contract.sections) || !contract.sections.length) {
+      throw new Error(`Der Vertrag „${contract.title}“ enthält keine Abschnitte.`);
+    }
+    if (contract.sections.some(section =>
+      !section || typeof section.heading !== 'string' || typeof section.text !== 'string'
+    )) {
+      throw new Error(`Der Vertrag „${contract.title}“ enthält einen ungültigen Abschnitt.`);
+    }
+    if (!Array.isArray(contract.checkboxes || [])) {
+      throw new Error(`Der Vertrag „${contract.title}“ enthält ungültige Zustimmungspunkte.`);
+    }
+    const checkboxIds = new Set();
+    for (const checkbox of contract.checkboxes || []) {
+      if (
+        !checkbox ||
+        typeof checkbox.id !== 'string' ||
+        !checkbox.id.trim() ||
+        typeof checkbox.label !== 'string' ||
+        (checkbox.required !== undefined && typeof checkbox.required !== 'boolean') ||
+        checkboxIds.has(checkbox.id)
+      ) {
+        throw new Error(`Der Vertrag „${contract.title}“ enthält einen ungültigen Zustimmungspunkt.`);
       }
-    ];
+      checkboxIds.add(checkbox.id);
+    }
+    return contract;
   }
 
-  async loadContract(item) {
-    try {
-      const res = await fetch(`res/${item.file}?v=` + Date.now());
-      if (res.ok) {
-        const contractData = await res.json();
-        this.loadedContracts.set(item.id, contractData);
-      } else {
-        console.error(`Fehler beim Laden von res/${item.file}`);
-      }
-    } catch (e) {
-      console.error(`Netzwerkfehler bei res/${item.file}:`, e);
+  replaceContracts(contracts, persist = true) {
+    if (!Array.isArray(contracts)) {
+      throw new Error('Die Vertragsliste ist ungültig.');
     }
+
+    const nextContracts = new Map();
+    for (const rawContract of contracts) {
+      const contract = {
+        ...this.validateContract(rawContract),
+        enabled: rawContract.enabled !== false
+      };
+      if (nextContracts.has(contract.id)) {
+        throw new Error(`Die Vertrags-ID „${contract.id}“ ist mehrfach vorhanden.`);
+      }
+      nextContracts.set(contract.id, contract);
+    }
+
+    if (persist) {
+      localStorage.setItem(
+        'leprendix_companion_contracts',
+        JSON.stringify(Array.from(nextContracts.values()))
+      );
+    }
+
+    this.loadedContracts = nextContracts;
+    this.contractsIndex = Array.from(nextContracts.values()).map(contract => ({
+      id: contract.id,
+      file: `${contract.id}.json`,
+      title: contract.title,
+      badge: contract.required ? 'Pflicht' : 'Optional',
+      required: !!contract.required,
+      enabled: contract.enabled,
+      version: contract.version || '1.0'
+    }));
+    this.consentStates.clear();
+  }
+
+  async importFiles(files) {
+    const imported = [];
+    const seenIds = new Set();
+    for (const file of files) {
+      if (file.size > 2 * 1024 * 1024) {
+        throw new Error(`${file.name}: Die Datei ist größer als 2 MB.`);
+      }
+      let contract;
+      try {
+        contract = JSON.parse(await file.text());
+      } catch (error) {
+        throw new Error(`${file.name}: Die JSON-Datei ist ungültig.`);
+      }
+      const validated = this.validateContract(contract);
+      if (seenIds.has(validated.id)) {
+        throw new Error(`${file.name}: Diese Vertrags-ID wurde mehrfach ausgewählt.`);
+      }
+      seenIds.add(validated.id);
+      imported.push(validated);
+    }
+
+    const merged = new Map(this.loadedContracts);
+    for (const contract of imported) {
+      const previous = merged.get(contract.id);
+      merged.set(contract.id, {
+        ...contract,
+        enabled: previous ? previous.enabled !== false : true
+      });
+    }
+    this.replaceContracts(Array.from(merged.values()));
+    return imported.length;
+  }
+
+  setContractEnabled(contractId, enabled) {
+    const contract = this.loadedContracts.get(contractId);
+    if (!contract || contract.required) return;
+    const newEnabled = !!enabled;
+    const nextContracts = Array.from(this.loadedContracts.values()).map(item =>
+      item.id === contractId ? { ...item, enabled: newEnabled } : item
+    );
+    localStorage.setItem(
+      'leprendix_companion_contracts',
+      JSON.stringify(nextContracts)
+    );
+
+    contract.enabled = newEnabled;
+    const indexItem = this.contractsIndex.find(item => item.id === contractId);
+    if (indexItem) indexItem.enabled = contract.enabled;
   }
 
   getActiveContracts() {
@@ -93,15 +171,13 @@ class ContractManager {
 
   areAllRequiredConsented() {
     const activeContracts = this.getActiveContracts();
-    for (const c of activeContracts) {
-      const contract = this.loadedContracts.get(c.id);
+    for (const item of activeContracts) {
+      const contract = this.loadedContracts.get(item.id);
       if (!contract) continue;
 
-      if (contract.checkboxes) {
-        for (const cb of contract.checkboxes) {
-          if (cb.required && !this.getCheckboxState(c.id, cb.id)) {
-            return false;
-          }
+      for (const checkbox of contract.checkboxes || []) {
+        if (checkbox.required && !this.getCheckboxState(item.id, checkbox.id)) {
+          return false;
         }
       }
     }
@@ -120,36 +196,32 @@ class ContractManager {
     });
 
     const signedContracts = [];
-    const activeContracts = this.getActiveContracts();
-
-    for (const c of activeContracts) {
-      const contract = this.loadedContracts.get(c.id);
+    for (const item of this.getActiveContracts()) {
+      const contract = this.loadedContracts.get(item.id);
       if (!contract) continue;
 
       const checkboxesState = {};
-      if (contract.checkboxes) {
-        for (const cb of contract.checkboxes) {
-          checkboxesState[cb.id] = {
-            label: cb.label,
-            checked: this.getCheckboxState(c.id, cb.id),
-            required: !!cb.required
-          };
-        }
+      for (const checkbox of contract.checkboxes || []) {
+        checkboxesState[checkbox.id] = {
+          label: checkbox.label,
+          checked: this.getCheckboxState(item.id, checkbox.id),
+          required: !!checkbox.required
+        };
       }
 
       signedContracts.push({
         id: contract.id,
         title: contract.title,
         version: contract.version || '1.0',
-        required: !!c.required,
-        timestamp: timestamp,
-        readableDate: readableDate,
+        required: !!item.required,
+        timestamp,
+        readableDate,
         checkboxes: checkboxesState
       });
     }
 
     return {
-      timestamp: timestamp,
+      timestamp,
       signedDate: readableDate,
       patient: {
         titel: patientInfo.titel || '',
