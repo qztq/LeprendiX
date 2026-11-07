@@ -6,6 +6,8 @@ import sqlite3
 import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
+from src.config_loader import CONFIG
+from src.project_paths import get_app_directory
 
 import pymupdf
 from PIL import Image, ImageDraw
@@ -49,17 +51,36 @@ def _save_dgkp_settings(phone, signature):
     os.replace(temporary_path, path)
 
 
-def _find_template(base_dir):
-    candidates = (
-        os.path.join(base_dir, "resbest", "Druckformular.pdf"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "resbest", "Druckformular.pdf"),
-    )
-    for candidate in candidates:
-        if os.path.isfile(candidate):
-            return candidate
-    raise FileNotFoundError(
-        "Die ÖGK-Druckvorlage 'resbest\\Druckformular.pdf' wurde nicht gefunden."
-    )
+def validate_material_order_template(template_path):
+    template_path = os.path.abspath(template_path)
+    if not template_path.lower().endswith(".pdf") or not os.path.isfile(template_path):
+        raise ValueError("Bitte wählen Sie eine vorhandene PDF-Datei aus.")
+    try:
+        document = pymupdf.open(template_path)
+        page_count = document.page_count
+        document.close()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValueError(f"Die PDF-Druckvorlage konnte nicht gelesen werden: {error}") from error
+    if page_count < 1:
+        raise ValueError("Die PDF-Druckvorlage enthält keine Seiten.")
+    return template_path
+
+
+def _find_template():
+    template_path = CONFIG.get("MATERIAL_ORDER_TEMPLATE", "")
+    if not template_path:
+        raise FileNotFoundError(
+            "Materialbestellungen sind gesperrt. Bitte wählen Sie im Setup "
+            "oder in der Patientenakte eine Druckformular-PDF aus."
+        )
+    if not os.path.isabs(template_path):
+        template_path = os.path.join(get_app_directory(), template_path)
+    if not os.path.isfile(template_path):
+        raise FileNotFoundError(
+            "Die konfigurierte Druckformular-PDF wurde nicht gefunden. "
+            "Bitte wählen Sie eine neue Datei aus."
+        )
+    return validate_material_order_template(template_path)
 
 
 def ensure_material_orders_table(database_path):

@@ -6,8 +6,14 @@ import sys
 import pickle
 import qrcode
 from PIL import ImageTk
-from config_loader import CONFIG
-from companion_contracts import get_contract_directory, read_contract_files, save_contract_files
+from src.config_loader import CONFIG
+from src.companion_contracts import (
+    get_contract_directory,
+    read_contract_files,
+    save_contract_files,
+)
+from src.material_orders import validate_material_order_template
+from src.project_paths import get_app_directory
 
 
 COMPANION_APK_URL = (
@@ -39,19 +45,29 @@ class SetupWizard(tk.Toplevel):
 
         # Kopie der Config zum Bearbeiten
         self.config_data = CONFIG.copy()
+        self.base_path = get_app_directory()
         self.current_version = current_version
         self.current_step = 0
         self.selected_contract_files = []
+        self.material_order_template = ""
+        configured_template = self.config_data.get("MATERIAL_ORDER_TEMPLATE", "")
+        if configured_template:
+            if not os.path.isabs(configured_template):
+                configured_template = os.path.join(self.base_path, configured_template)
+            try:
+                self.material_order_template = validate_material_order_template(
+                    configured_template
+                )
+                self.config_data["MATERIAL_ORDER_TEMPLATE"] = (
+                    self.material_order_template
+                )
+            except (OSError, ValueError):
+                self.config_data.pop("MATERIAL_ORDER_TEMPLATE", None)
         self.download_companion_var = tk.BooleanVar(
             value=bool(self.config_data.get("DOWNLOAD_COMPANION_APP", False))
         )
         
         # Determine base path and check for credentials
-        if getattr(sys, 'frozen', False):
-            self.base_path = os.path.dirname(sys.executable)
-        else:
-            self.base_path = os.path.dirname(os.path.abspath(__file__))
-            
         self.cred_file = os.path.join(self.base_path, "credentials.dat")
         self.needs_creds = not os.path.exists(self.cred_file)
         self.new_creds = {"user": "", "password": ""}
@@ -67,6 +83,7 @@ class SetupWizard(tk.Toplevel):
             self.create_paths_step,
             self.create_api_step,
             self.create_defaults_step,
+            self.create_material_order_template_step,
             self.create_companion_step,
             self.create_finish_step
         ])
@@ -278,6 +295,72 @@ class SetupWizard(tk.Toplevel):
             pady=6,
         ).pack(anchor="w")
 
+    def create_material_order_template_step(self):
+        tk.Label(
+            self.container,
+            text="Druckformular für Materialbestellungen",
+            font=("Segoe UI", 16, "bold"),
+            bg=COLOR_PRIMARY,
+            fg="white",
+        ).pack(pady=(0, 12))
+        tk.Label(
+            self.container,
+            text=(
+                "Wählen Sie das PDF-Druckformular aus, das für "
+                "Materialbestellungen verwendet werden soll. Ohne eine gültige "
+                "Druckformular-PDF bleibt diese Funktion gesperrt. Sie können "
+                "die Datei auch später in der Patientenakte auswählen."
+            ),
+            font=("Segoe UI", 10),
+            bg=COLOR_PRIMARY,
+            fg=COLOR_TEXT,
+            wraplength=560,
+            justify="left",
+        ).pack(fill="x", pady=(0, 14))
+
+        self.material_template_label = tk.Label(
+            self.container,
+            text=self.material_order_template or "Noch kein Druckformular ausgewählt.",
+            font=("Segoe UI", 10),
+            bg=COLOR_PRIMARY,
+            fg=COLOR_TEXT if self.material_order_template else "#bdc3c7",
+            wraplength=540,
+            justify="left",
+            anchor="w",
+        )
+        self.material_template_label.pack(fill="x", pady=8)
+        tk.Button(
+            self.container,
+            text="Druckformular-PDF auswählen",
+            command=self.select_material_order_template,
+            bg=COLOR_SECONDARY,
+            fg="white",
+            relief="flat",
+            font=("Segoe UI", 10),
+            padx=12,
+            pady=6,
+        ).pack(anchor="w")
+
+    def select_material_order_template(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Druckformular-PDF auswählen",
+            filetypes=(("PDF-Dateien", "*.pdf"),),
+        )
+        if not path:
+            return
+        try:
+            self.material_order_template = validate_material_order_template(path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Druckformular", str(error), parent=self)
+            return
+
+        self.config_data["MATERIAL_ORDER_TEMPLATE"] = self.material_order_template
+        self.material_template_label.config(
+            text=self.material_order_template,
+            fg="white",
+        )
+
     def select_contract_files(self):
         paths = filedialog.askopenfilenames(
             parent=self,
@@ -327,6 +410,18 @@ class SetupWizard(tk.Toplevel):
             wraplength=540,
             justify="center",
         ).pack(pady=8)
+        if not self.material_order_template:
+            tk.Label(
+                self.container,
+                text=(
+                    "Es wurde keine Druckformular-PDF ausgewählt. "
+                    "Materialbestellungen bleiben gesperrt."
+                ),
+                font=("Segoe UI", 10, "bold"),
+                bg=COLOR_PRIMARY,
+                fg="#e67e22",
+                wraplength=540,
+            ).pack(pady=6)
         if self.download_companion_var.get():
             try:
                 qr_code = qrcode.QRCode(box_size=5, border=2)
@@ -370,6 +465,23 @@ class SetupWizard(tk.Toplevel):
                 return
 
         try:
+            if self.material_order_template:
+                try:
+                    self.config_data["MATERIAL_ORDER_TEMPLATE"] = (
+                        validate_material_order_template(
+                            self.material_order_template
+                        )
+                    )
+                except (OSError, ValueError) as error:
+                    messagebox.showwarning(
+                        "Druckformular",
+                        f"Die ausgewählte PDF ist nicht mehr verfügbar oder ungültig. "
+                        f"Materialbestellungen bleiben gesperrt.\n\n{error}",
+                        parent=self,
+                    )
+                    self.config_data.pop("MATERIAL_ORDER_TEMPLATE", None)
+                    self.material_order_template = ""
+
             if self.selected_contract_files:
                 contract_dir = get_contract_directory(
                     self.config_data.get("COMPANION_CONTRACTS_DIR")
@@ -378,6 +490,7 @@ class SetupWizard(tk.Toplevel):
                 self.config_data["COMPANION_CONTRACTS_DIR"] = str(contract_dir)
 
             self.config_data["DOWNLOAD_COMPANION_APP"] = self.download_companion_var.get()
+            self.config_data["MATERIAL_ORDER_SETUP_COMPLETED"] = True
             self.config_data["COMPANION_SETUP_COMPLETED"] = True
             self.config_data["LAST_SETUP_VERSION"] = self.current_version
             config_file = os.path.join(self.base_path, 'config.json')
@@ -397,11 +510,7 @@ class SetupWizard(tk.Toplevel):
 def check_and_run_setup(root):
     try:
         # Pfad sicher auflösen (für EXE und Skript)
-        if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
-        else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            
+        base_path = get_app_directory()
         version_file = os.path.join(base_path, "version.txt")
         with open(version_file, "r") as f:
             current_version = f.read().strip()
@@ -413,6 +522,7 @@ def check_and_run_setup(root):
     if (
         last_setup_version != current_version
         or not CONFIG.get("COMPANION_SETUP_COMPLETED", False)
+        or not CONFIG.get("MATERIAL_ORDER_SETUP_COMPLETED", False)
     ):
         root.withdraw()
         wizard = SetupWizard(root, current_version)

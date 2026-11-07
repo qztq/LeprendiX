@@ -20,7 +20,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def translate_path(self, path):
         if urlsplit(path).path == '/logo.png':
-            return os.path.join(os.path.dirname(DIRECTORY), 'logo.png')
+            return os.path.join(os.path.dirname(DIRECTORY), 'assets', 'logo.png')
         return super().translate_path(path)
 
     def do_GET(self):

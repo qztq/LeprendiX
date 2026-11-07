@@ -19,7 +19,7 @@ def main():
             raise FileNotFoundError(f"Required Companion file is missing: {source}")
         shutil.copy2(source, DESTINATION / filename)
 
-    logo = ROOT / "logo.png"
+    logo = ROOT / "assets" / "logo.png"
     if not logo.is_file():
         raise FileNotFoundError(f"Required application logo is missing: {logo}")
     shutil.copy2(logo, DESTINATION / "logo.png")

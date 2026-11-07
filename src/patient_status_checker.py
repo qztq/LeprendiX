@@ -5,7 +5,7 @@ import os
 import sys
 import shutil
 import json
-from config_loader import CONFIG
+from src.config_loader import CONFIG
 
 class PatientStatusApp:
     def __init__(self, master, selection_callback=None, archive_callback=None):

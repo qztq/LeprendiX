@@ -1,15 +1,10 @@
 import os
 import json
-import sys
+from src.project_paths import get_app_directory
 
 
 def get_config():
-    # Ermittle den Basispfad (Exe-Verzeichnis oder Skript-Verzeichnis)
-    if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        
+    base_path = get_app_directory()
     config_file = os.path.join(base_path, 'config.json')
     
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")

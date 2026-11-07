@@ -9,19 +9,15 @@ import urllib.parse
 import traceback
 import logging
 import tempfile
+from src.project_paths import get_app_directory, get_resource_path
+
 # Design-Konstanten (passend zu LeprendiX)
 COLOR_PRIMARY = "#2c3e50"
 COLOR_SECONDARY = "#34495e"
 COLOR_ACCENT = "#e74c3c" # Rot für Fehler
 COLOR_TEXT = "#ecf0f1"
 
-def get_base_path():
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
-
-BASE_DIR = get_base_path()
+BASE_DIR = get_app_directory()
 
 def get_crash_file():
     app_name = "LeprendiX"
@@ -102,13 +98,13 @@ def start_crash_handler_process():
         except Exception as e:
             print(f"Konnte Crash-Handler nicht starten: {e}")
     else:
-        # Wir nehmen an, dass crash_handler.py im selben Verzeichnis liegt
-        script_path = os.path.abspath(__file__)
-        if os.path.exists(script_path):
-            try:
-                subprocess.Popen([sys.executable, script_path])
-            except Exception as e:
-                print(f"Konnte Crash-Handler nicht starten: {e}")
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "src.crash_handler"],
+                cwd=BASE_DIR,
+            )
+        except Exception as e:
+            print(f"Konnte Crash-Handler nicht starten: {e}")
 
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     """Globaler Exception Handler, der von start.py und main.py genutzt wird."""
@@ -143,7 +139,7 @@ def main():
 
     # Icon laden falls vorhanden
     try:
-        icon_path = os.path.join(BASE_DIR, "logo.png")
+        icon_path = get_resource_path(os.path.join("assets", "logo.png"))
         if os.path.exists(icon_path):
             img = tk.PhotoImage(file=icon_path)
             root.iconphoto(False, img)

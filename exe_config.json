@@ -7,7 +7,7 @@
   },
   {
    "optionDest": "filenames",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/start.py"
+   "value": "start.py"
   },
   {
    "optionDest": "onefile",
@@ -19,7 +19,7 @@
   },
   {
    "optionDest": "icon_file",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/favicon.ico"
+   "value": "assets/favicon.ico"
   },
   {
    "optionDest": "name",
@@ -67,115 +67,123 @@
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/config_loader.py;."
+   "value": "src/config_loader.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/companion_contracts.py;."
+   "value": "src/__init__.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/crash_handler.py;."
+   "value": "src/project_paths.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/db_setup.py;."
+   "value": "src/companion_contracts.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/gui_generator.py;."
+   "value": "src/crash_handler.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/honorar_vorlage.docx;."
+   "value": "src/db_setup.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/log_data.py;."
+   "value": "src/gui_generator.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/logo.png;."
+   "value": "assets/honorar_vorlage.docx;assets"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/main.py;."
+   "value": "src/log_data.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/migrate_legacy.py;."
+   "value": "assets/logo.png;assets"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/mobile_connect.py;."
+   "value": "src/main.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_status_checker.py;."
+   "value": "src/migrate_legacy.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_records.py;."
+   "value": "src/mobile_connect.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/setup_wizard.py;."
+   "value": "src/patient_status_checker.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/start.py;."
+   "value": "src/patient_records.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/version.txt;."
+   "value": "src/setup_wizard.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/css;Companion/css/"
+   "value": "start.py;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/js;Companion/js/"
+   "value": "version.txt;."
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/favicon.ico;Companion"
+   "value": "Companion/css;Companion/css/"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/index.html;Companion"
+   "value": "Companion/js;Companion/js/"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/manifest.json;Companion"
+   "value": "Companion/favicon.ico;Companion"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/README.md;Companion"
+   "value": "Companion/index.html;Companion"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/server.py;Companion"
+   "value": "Companion/manifest.json;Companion"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/Companion/sw.js;Companion"
+   "value": "Companion/README.md;Companion"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_records.py;."
+   "value": "Companion/server.py;Companion"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/material_orders.py;."
+   "value": "Companion/sw.js;Companion"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/material_orders.py;."
+   "value": "src/patient_records.py;src"
   },
   {
    "optionDest": "datas",
-   "value": "C:/Users/tobia/Desktop/Projekte/LeprendiX/LeprendiX/patient_records.py;."
+   "value": "src/material_orders.py;src"
+  },
+  {
+   "optionDest": "datas",
+   "value": "src/material_orders.py;src"
+  },
+  {
+   "optionDest": "datas",
+   "value": "src/patient_records.py;src"
   }
  ],
  "nonPyinstallerOptions": {
