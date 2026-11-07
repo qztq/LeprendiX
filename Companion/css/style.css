@@ -1348,6 +1348,63 @@ body {
   border-bottom: 1px solid #e2e8f0;
 }
 
+.first-run-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.82);
+}
+
+.first-run-card {
+  width: min(680px, 96vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 26px;
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.first-run-card h2 {
+  margin-bottom: 12px;
+  font-size: 22px;
+}
+
+.first-run-card p,
+.first-run-card li {
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+.first-run-card ol {
+  padding-left: 24px;
+}
+
+.first-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.first-run-footnote {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+#apkUpdateDownloadLink {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  color: var(--text-main);
+  text-decoration: none;
+}
+
 .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .slider { position: absolute; cursor: pointer; top:0; left:0; right:0; bottom:0; background: #cbd5e1; border-radius: 24px; transition: .2s; }

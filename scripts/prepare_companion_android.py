@@ -66,10 +66,11 @@ def set_gradle_version(build_file, version_code, version_name):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--version-code", type=int, required=True)
-    parser.add_argument("--version-name", required=True)
+    parser.add_argument("--version-name")
     args = parser.parse_args()
 
-    android_root = Path("android")
+    root = Path(__file__).resolve().parents[1]
+    android_root = root / "android"
     manifest_path = android_root / "app" / "src" / "main" / "AndroidManifest.xml"
     build_file = android_root / "app" / "build.gradle"
     if not manifest_path.is_file() or not build_file.is_file():
@@ -78,7 +79,15 @@ def main():
         )
 
     set_manifest_attributes(manifest_path)
-    set_gradle_version(build_file, args.version_code, args.version_name)
+    version_name = args.version_name
+    if not version_name:
+        version_file = root / "version.txt"
+        if not version_file.is_file():
+            raise FileNotFoundError(f"Application version is missing: {version_file}")
+        version_name = version_file.read_text(encoding="utf-8").strip()
+        if not version_name:
+            raise ValueError(f"Application version is empty: {version_file}")
+    set_gradle_version(build_file, args.version_code, version_name)
 
 
 if __name__ == "__main__":

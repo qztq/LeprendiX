@@ -118,8 +118,36 @@
 
     </div>
 
+    <section id="firstRunWizard" class="first-run-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="firstRunTitle">
+      <div class="first-run-card">
+        <h2 id="firstRunTitle">Willkommen bei LeprendiX Companion</h2>
+        <p>
+          Die App funktioniert offline. Patientendaten werden zuerst lokal auf diesem
+          Tablet gespeichert und nur beim Monats-Sync an LeprendiX übertragen.
+        </p>
+        <ol>
+          <li>Verträge als JSON-Dateien auswählen oder die Verträge beim Verbinden vom Praxis-PC laden.</li>
+          <li>Am Praxis-PC den Companion-QR-Code öffnen und hier scannen.</li>
+          <li>Patientendaten regelmäßig über „Monats-Synchronisation“ übertragen.</li>
+        </ol>
+        <p id="firstRunContractStatus" class="text-muted">
+          Noch keine lokalen Verträge geladen. Ohne Vertragsdateien bleibt der Vertrags-Schritt gesperrt.
+        </p>
+        <input id="firstRunContractFiles" class="hidden" type="file" accept=".json,application/json" multiple>
+        <div class="first-run-actions">
+          <button type="button" id="btnFirstRunChooseContracts" class="btn-secondary">JSON-Verträge auswählen</button>
+          <button type="button" id="btnFirstRunConnect" class="btn-secondary">Mit Praxis-PC verbinden</button>
+          <button type="button" id="btnFirstRunContinue" class="btn-nav btn-nav-next">Weiter</button>
+        </div>
+        <p class="first-run-footnote">
+          Updates werden monatlich geprüft. Android verlangt, dass Sie jeden APK-Update-Vorgang bestätigen.
+          Die App beim Aktualisieren nicht deinstallieren.
+        </p>
+      </div>
+    </section>
 
-    <!-- ======================================================== -->
+
+      <!-- ======================================================== -->
     <!-- 2. PATIENTEN WIZARD (SCHRITT-FÜR-SCHRITT EINGABE)         -->
     <!-- ======================================================== -->
     <div id="patientView" class="app-container hidden">
@@ -564,11 +592,33 @@
         </div>
 
         <div class="admin-card">
-          <h3>Verträge in /Companion/res/</h3>
+          <h3>Verträge</h3>
           <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">
-            Aktivieren oder deaktivieren Sie Verträge für Patienten.
+            JSON-Verträge werden privat auf dem Tablet gespeichert und bei einer Verbindung vom Praxis-PC aktualisiert.
           </p>
+          <input id="adminContractFiles" class="hidden" type="file" accept=".json,application/json" multiple>
+          <button type="button" id="btnAdminImportContracts" class="btn-secondary" style="height: 44px; margin-bottom: 12px;">
+            JSON-Verträge importieren
+          </button>
+          <p id="adminContractImportStatus" class="text-muted" style="font-size: 13px;"></p>
           <div id="adminContractsList"></div>
+        </div>
+
+        <div class="admin-card">
+          <h3>App-Updates</h3>
+          <p id="appUpdateStatus" class="text-muted" style="font-size: 13px; margin-bottom: 12px;">
+            Automatische Prüfung höchstens einmal pro Monat, sobald Internet verfügbar ist.
+          </p>
+          <button type="button" id="btnCheckAppUpdates" class="btn-secondary" style="height: 44px;">
+            Jetzt nach Updates suchen
+          </button>
+          <a
+            id="apkUpdateDownloadLink"
+            class="btn-secondary hidden"
+            href="https://github.com/qztq/LeprendiX/releases/latest/download/LeprendiX_Mobile.apk"
+            target="_blank"
+            rel="noopener"
+          ><span>APK von GitHub herunterladen</span></a>
         </div>
 
         <div class="admin-card">

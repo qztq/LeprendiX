@@ -3,7 +3,7 @@
  * Ermöglicht den Betrieb auf Tablets im Wartezimmer ohne bestehende WLAN-Verbindung zum Haupt-PC.
  */
 
-const CACHE_NAME = 'leprendix-companion-v1.5';
+const CACHE_NAME = 'leprendix-companion-v1.6';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -14,11 +14,7 @@ const STATIC_ASSETS = [
   './js/app.js',
   './js/austria_plz.js',
   './js/contracts.js',
-  './js/signature.js',
-  './res/contracts_index.json',
-  './res/dsgvo_datenverarbeitung.json',
-  './res/behandlungsvertrag.json',
-  './res/telemedizin_einwilligung.json'
+  './js/signature.js'
 ];
 
 // Installation: Alle Kern-Dateien in den Cache laden
@@ -53,6 +49,9 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.includes('/upload') ||
       url.pathname.includes('/sync_batch') ||
       url.pathname.includes('/verify') ||
+      url.pathname.endsWith('/contracts') ||
+      url.pathname.endsWith('/app-version') ||
+      url.pathname.endsWith('/app-version.json') ||
       url.pathname.includes('/pong') ||
       url.pathname.includes('/status')) {
     return; // Normaler Netzwerkanruf

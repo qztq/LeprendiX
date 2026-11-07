@@ -9,7 +9,7 @@ import socketserver
 import os
 import sys
 import webbrowser
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 PORT = 5050
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +22,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if urlsplit(path).path == '/logo.png':
             return os.path.join(os.path.dirname(DIRECTORY), 'logo.png')
         return super().translate_path(path)
+
+    def do_GET(self):
+        request_path = unquote(urlsplit(self.path).path).replace("\\", "/")
+        if request_path.startswith('/res/') and request_path.lower().endswith('.json'):
+            self.send_error(404, "Verträge werden nicht über den Entwicklungsserver ausgeliefert.")
+            return
+        super().do_GET()
 
     def end_headers(self):
         # Cache deaktivieren während Entwicklung

@@ -56,6 +56,8 @@ class CompanionApp {
 
     // Module & Helfer
     this.contracts = new ContractManager();
+    this.contractSyncRetryAt = 0;
+    this.appVersion = '';
     this.signaturePad = null;
     this.activeNumpadTarget = 'vsnrNummer';
 
@@ -78,9 +80,13 @@ class CompanionApp {
     await this.contracts.init();
     this.initSignaturePad();
     this.setupEventListeners();
+    this.setupFirstRunWizard();
     this.setupCustomKeyboard();
     this.updateDashboardStats();
-    this.checkConnection();
+    await this.checkConnection();
+    this.showFirstRunWizard();
+    window.setTimeout(() => this.checkForUpdatesMonthly(), 2000);
+    window.addEventListener('online', () => this.checkForUpdatesMonthly());
 
     // Startansicht: Standardmäßig das Dashboard anzeigen (Punkt 1)
     this.switchView('dashboard');
@@ -242,6 +248,10 @@ class CompanionApp {
           this.connection.connected = true;
           this.connection.lastCheck = new Date();
           this.updateConnectionBadges(true, `Mit LeprendiX verbunden (${this.connection.host})`);
+          if (Date.now() >= this.contractSyncRetryAt) {
+            this.contractSyncRetryAt = Date.now() + 60000;
+            await this.syncContractsFromServer();
+          }
           return true;
         }
       }
@@ -252,6 +262,211 @@ class CompanionApp {
     this.connection.connected = false;
     this.updateConnectionBadges(false, 'Offline-Modus');
     return false;
+  }
+
+  async syncContractsFromServer() {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      let response;
+      try {
+        response = await fetch(`${this.getServerBaseUrl()}/contracts`, {
+          headers: { Authorization: `Bearer ${this.connection.token}` },
+          cache: 'no-store',
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      if (!response.ok) {
+        throw new Error(`Vertragsübertragung fehlgeschlagen (HTTP ${response.status}).`);
+      }
+      const data = await response.json();
+      if (data.status !== 'ok' || !Array.isArray(data.contracts)) {
+        throw new Error(data.message || 'Die Vertragsliste vom Praxis-PC ist ungültig.');
+      }
+      if (data.contracts.length) {
+        const enabledStates = new Map(
+          this.contracts.contractsIndex.map(item => [item.id, item.enabled])
+        );
+        const mergedContracts = new Map(this.contracts.loadedContracts);
+        for (const contract of data.contracts) {
+          mergedContracts.set(contract.id, {
+            ...contract,
+            enabled: enabledStates.has(contract.id)
+              ? enabledStates.get(contract.id)
+              : contract.enabled
+          });
+        }
+        this.contracts.replaceContracts(Array.from(mergedContracts.values()));
+        this.renderContractsInStep5();
+        this.renderAdminContractsList();
+        this.validateCurrentStep();
+      }
+    } catch (error) {
+      console.warn('Verträge konnten nicht mit dem Praxis-PC synchronisiert werden:', error);
+    }
+  }
+
+  setupFirstRunWizard() {
+    const chooseButton = document.getElementById('btnFirstRunChooseContracts');
+    const fileInput = document.getElementById('firstRunContractFiles');
+    const status = document.getElementById('firstRunContractStatus');
+    const continueButton = document.getElementById('btnFirstRunContinue');
+    const connectButton = document.getElementById('btnFirstRunConnect');
+    const updateButton = document.getElementById('btnCheckAppUpdates');
+    const adminChooseButton = document.getElementById('btnAdminImportContracts');
+    const adminFileInput = document.getElementById('adminContractFiles');
+
+    if (chooseButton && fileInput) {
+      chooseButton.onclick = () => fileInput.click();
+      fileInput.onchange = () => this.importContractFiles(fileInput, status);
+    }
+    if (adminChooseButton && adminFileInput) {
+      adminChooseButton.onclick = () => adminFileInput.click();
+      adminFileInput.onchange = () => this.importContractFiles(
+        adminFileInput,
+        document.getElementById('adminContractImportStatus')
+      );
+    }
+    if (continueButton) {
+      continueButton.onclick = () => {
+        localStorage.setItem('leprendix_companion_setup_complete', 'true');
+        document.getElementById('firstRunWizard')?.classList.add('hidden');
+      };
+    }
+    if (connectButton) {
+      connectButton.onclick = () => {
+        document.getElementById('firstRunWizard')?.classList.add('hidden');
+        this.openQrScanner();
+      };
+    }
+    if (updateButton) {
+      updateButton.onclick = () => this.checkForUpdatesMonthly(true);
+    }
+  }
+
+  showFirstRunWizard() {
+    if (localStorage.getItem('leprendix_companion_setup_complete') === 'true') return;
+    const status = document.getElementById('firstRunContractStatus');
+    if (status && this.contracts.getActiveContracts().length) {
+      status.textContent = `${this.contracts.getActiveContracts().length} Vertragsdatei(en) sind lokal gespeichert.`;
+    }
+    document.getElementById('firstRunWizard')?.classList.remove('hidden');
+  }
+
+  async importContractFiles(input, statusElement) {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    try {
+      const count = await this.contracts.importFiles(files);
+      if (statusElement) {
+        statusElement.textContent = `${count} Vertrag/Verträge importiert und lokal gespeichert.`;
+      }
+      this.renderContractsInStep5();
+      this.renderAdminContractsList();
+      this.validateCurrentStep();
+    } catch (error) {
+      if (statusElement) statusElement.textContent = error.message;
+      else await this.showAppDialog('Verträge', error.message, { variant: 'error' });
+    } finally {
+      input.value = '';
+    }
+  }
+
+  async getInstalledVersion() {
+    const response = await fetch('app-version.json', { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error('Die installierte App-Version konnte nicht ermittelt werden.');
+    }
+    const data = await response.json();
+    if (typeof data.version !== 'string' || !data.version.trim()) {
+      throw new Error('Die Versionsdatei ist ungültig.');
+    }
+    return data.version.trim().replace(/^v/i, '');
+  }
+
+  compareVersions(left, right) {
+    const leftParts = left.match(/\d+/g);
+    const rightParts = right.match(/\d+/g);
+    if (!leftParts || !rightParts) return 0;
+    const length = Math.max(leftParts.length, rightParts.length);
+    for (let index = 0; index < length; index++) {
+      const leftPart = Number(leftParts[index] || 0);
+      const rightPart = Number(rightParts[index] || 0);
+      if (leftPart !== rightPart) return leftPart > rightPart ? 1 : -1;
+    }
+    return 0;
+  }
+
+  async checkForUpdatesMonthly(force = false) {
+    if (!window.Capacitor || !window.Capacitor.isNativePlatform()) return;
+
+    const status = document.getElementById('appUpdateStatus');
+    const lastCheck = Number(localStorage.getItem('leprendix_companion_last_update_check') || 0);
+    if (!force && Date.now() - lastCheck < 30 * 24 * 60 * 60 * 1000) return;
+    if (!navigator.onLine) {
+      if (status) status.textContent = 'Offline. Die Update-Prüfung wird bei bestehender Internetverbindung wiederholt.';
+      return;
+    }
+
+    if (status) status.textContent = 'Suche nach einer neueren Version ...';
+    try {
+      const installedVersion = await this.getInstalledVersion();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      let releaseResponse;
+      try {
+        releaseResponse = await fetch('https://api.github.com/repos/qztq/LeprendiX/releases/latest', {
+          headers: { Accept: 'application/vnd.github+json' },
+          cache: 'no-store',
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      if (!releaseResponse.ok) {
+        throw new Error(`GitHub-Updateprüfung fehlgeschlagen (HTTP ${releaseResponse.status}).`);
+      }
+      const release = await releaseResponse.json();
+      const latestVersion = String(release.tag_name || '').replace(/^v/i, '');
+      if (!latestVersion) throw new Error('Die neueste Release-Version fehlt.');
+
+      localStorage.setItem('leprendix_companion_last_update_check', String(Date.now()));
+      this.appVersion = installedVersion;
+      if (status) status.textContent = `Installiert: ${installedVersion} · Aktuell: ${latestVersion}`;
+      if (this.compareVersions(latestVersion, installedVersion) <= 0) return;
+      document.getElementById('apkUpdateDownloadLink')?.classList.remove('hidden');
+
+      const pendingCount = this.getUnsyncedRecords().length;
+      const message = pendingCount
+        ? `Version ${latestVersion} ist verfügbar. ${pendingCount} noch nicht synchronisierte Datensätze bleiben auf dem Tablet. Installieren Sie das Update über die Android-Abfrage, ohne die App vorher zu deinstallieren.`
+        : `Version ${latestVersion} ist verfügbar. Installieren Sie das Update über die Android-Abfrage, ohne die App vorher zu deinstallieren.`;
+      const accepted = await this.showAppDialog(
+        'Companion-Update verfügbar',
+        message,
+        {
+          showCancel: true,
+          acceptLabel: 'APK herunterladen',
+          cancelLabel: 'Später',
+          variant: 'info'
+        }
+      );
+      if (!accepted) return;
+
+      this.savePersistedState();
+      const browserPlugin = window.Capacitor?.Plugins?.Browser;
+      if (browserPlugin?.open) {
+        await browserPlugin.open({
+          url: 'https://github.com/qztq/LeprendiX/releases/latest/download/LeprendiX_Mobile.apk'
+        });
+      } else {
+        document.getElementById('apkUpdateDownloadLink')?.click();
+      }
+    } catch (error) {
+      if (status) status.textContent = `Update-Prüfung nicht möglich: ${error.message}`;
+      console.warn('Companion-Update-Prüfung fehlgeschlagen:', error);
+    }
   }
 
   updateConnectionBadges(isConnected, label) {
@@ -917,11 +1132,16 @@ class CompanionApp {
         throw new Error('Host oder Token fehlt.');
       }
       this.savePersistedState();
-      this.checkConnection();
+      const connected = await this.checkConnection();
+      if (connected && this.contracts.getActiveContracts().length) {
+        localStorage.setItem('leprendix_companion_setup_complete', 'true');
+      }
       await this.showAppDialog(
-        'Verbindung erfolgreich',
-        'Der QR-Code wurde erfolgreich gescannt.',
-        { variant: 'success' }
+        connected ? 'Verbindung erfolgreich' : 'Verbindung nicht möglich',
+        connected
+          ? 'Der QR-Code wurde erfolgreich gescannt. Verträge wurden, falls vorhanden, lokal gespeichert.'
+          : 'Der QR-Code wurde gelesen, aber der Praxis-PC ist derzeit nicht erreichbar.',
+        { variant: connected ? 'success' : 'warning' }
       );
     } catch (e) {
       await this.showAppDialog(
@@ -1013,7 +1233,9 @@ class CompanionApp {
       case 5:
         const contractsConsent = this.contracts.areAllRequiredConsented();
         const hasSignature = this.signaturePad && !this.signaturePad.isEmpty();
-        isValid = contractsConsent && hasSignature;
+        isValid = this.contracts.getActiveContracts().length > 0 &&
+                  contractsConsent &&
+                  hasSignature;
         break;
       case 6:
         isValid = true;
@@ -1041,12 +1263,28 @@ class CompanionApp {
 
   // --- Step 5 & 6 Rendering ---
 
+  escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    })[character]);
+  }
+
   renderContractsInStep5() {
     const container = document.getElementById('contractsListContainer');
     if (!container) return;
     container.innerHTML = '';
 
     const activeContracts = this.contracts.getActiveContracts();
+    if (!activeContracts.length) {
+      const emptyState = document.createElement('p');
+      emptyState.className = 'text-muted';
+      emptyState.textContent = 'Noch keine Vertragsdateien geladen. Verbinden Sie das Tablet mit dem Praxis-PC oder importieren Sie JSON-Dateien im Startassistenten.';
+      container.appendChild(emptyState);
+    }
 
     activeContracts.forEach(contractItem => {
       const contract = this.contracts.getContract(contractItem.id);
@@ -1058,15 +1296,17 @@ class CompanionApp {
       card.innerHTML = `
         <div class="contract-header">
           <div>
-            <h3>${contract.title}</h3>
-            <p class="contract-subtitle">${contract.subtitle || ''}</p>
+            <h3>${this.escapeHtml(contract.title)}</h3>
+            <p class="contract-subtitle">${this.escapeHtml(contract.subtitle || '')}</p>
           </div>
           <span class="badge ${contractItem.required ? 'badge-required' : 'badge-optional'}">
-            ${contractItem.badge || (contractItem.required ? 'Pflicht' : 'Optional')}
+            ${this.escapeHtml(contractItem.badge || (contractItem.required ? 'Pflicht' : 'Optional'))}
           </span>
         </div>
         <div class="contract-body-scroll">
-          ${(contract.sections || []).map(s => `<h4>${s.heading}</h4><p>${s.text}</p>`).join('')}
+          ${(contract.sections || []).map(section =>
+            `<h4>${this.escapeHtml(section.heading)}</h4><p>${this.escapeHtml(section.text).replace(/\n/g, '<br>')}</p>`
+          ).join('')}
         </div>
       `;
 
@@ -1080,8 +1320,8 @@ class CompanionApp {
           const isChecked = this.contracts.getCheckboxState(contract.id, cb.id);
 
           row.innerHTML = `
-            <input type="checkbox" class="consent-checkbox" data-contract="${contract.id}" data-id="${cb.id}" ${isChecked ? 'checked' : ''}>
-            <span>${cb.label} ${cb.required ? '<span class="text-danger">*</span>' : ''}</span>
+            <input type="checkbox" class="consent-checkbox" data-contract="${this.escapeHtml(contract.id)}" data-id="${this.escapeHtml(cb.id)}" ${isChecked ? 'checked' : ''}>
+            <span>${this.escapeHtml(cb.label)} ${cb.required ? '<span class="text-danger">*</span>' : ''}</span>
           `;
 
           row.querySelector('input').onchange = (e) => {
@@ -1139,16 +1379,16 @@ class CompanionApp {
       const checkboxSummary = (contract.checkboxes || []).map(cb => {
         const accepted = this.contracts.getCheckboxState(contract.id, cb.id);
         return `<li class="${accepted ? 'consent-accepted' : 'consent-declined'}">
-          ${accepted ? 'Zugestimmt' : 'Nicht ausgewählt'}: ${cb.label}
+          ${accepted ? 'Zugestimmt' : 'Nicht ausgewählt'}: ${this.escapeHtml(cb.label)}
         </li>`;
       }).join('');
       return `
         <div class="contract-preview-section">
-          <h4 class="contract-preview-title">${contract.title}</h4>
+          <h4 class="contract-preview-title">${this.escapeHtml(contract.title)}</h4>
           ${(contract.sections || []).map(s =>
             `<div class="contract-preview-block">
-              <strong>${s.heading}</strong>
-              <p>${s.text.replace(/\n/g, '<br>')}</p>
+              <strong>${this.escapeHtml(s.heading)}</strong>
+              <p>${this.escapeHtml(s.text).replace(/\n/g, '<br>')}</p>
             </div>`
           ).join('')}
           <div class="contract-preview-consents">
@@ -1706,21 +1946,40 @@ class CompanionApp {
     this.contracts.contractsIndex.forEach(c => {
       const row = document.createElement('div');
       row.className = 'admin-contract-row';
-      row.innerHTML = `
-        <div class="admin-contract-info">
-          <strong>${c.title}</strong>
-          <span class="text-muted">(${c.file})</span>
-          ${c.required ? '<span class="badge badge-required">Pflicht</span>' : '<span class="badge badge-optional">Optional</span>'}
-        </div>
-        <label class="switch">
-          <input type="checkbox" ${c.enabled ? 'checked' : ''} ${c.required ? 'disabled' : ''}>
-          <span class="slider round"></span>
-        </label>
-      `;
+      const info = document.createElement('div');
+      info.className = 'admin-contract-info';
+      const title = document.createElement('strong');
+      title.textContent = c.title;
+      const filename = document.createElement('span');
+      filename.className = 'text-muted';
+      filename.textContent = ` (${c.file})`;
+      const badge = document.createElement('span');
+      badge.className = `badge ${c.required ? 'badge-required' : 'badge-optional'}`;
+      badge.textContent = c.required ? 'Pflicht' : 'Optional';
+      info.append(title, filename, badge);
 
-      row.querySelector('input').onchange = (e) => {
-        c.enabled = e.target.checked;
-        this.savePersistedState();
+      const label = document.createElement('label');
+      label.className = 'switch';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = c.enabled;
+      checkbox.disabled = c.required;
+      const slider = document.createElement('span');
+      slider.className = 'slider round';
+      label.append(checkbox, slider);
+      row.append(info, label);
+
+      checkbox.onchange = (e) => {
+        try {
+          this.contracts.setContractEnabled(c.id, e.target.checked);
+        } catch (error) {
+          e.target.checked = c.enabled;
+          this.showAppDialog(
+            'Vertragseinstellung',
+            `Die Auswahl konnte nicht gespeichert werden: ${error.message}`,
+            { variant: 'error' }
+          );
+        }
       };
 
       list.appendChild(row);
