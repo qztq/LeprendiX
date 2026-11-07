@@ -1230,6 +1230,19 @@ class StammdatenAssignmentWindow(tk.Toplevel):
         self.progress_label = ttk.Label(content)
         self.progress_label.pack(anchor="w", pady=(4, 8))
 
+        diagnosis_form = ttk.LabelFrame(content, text="Patientendiagnose", padding=10)
+        diagnosis_form.pack(fill="x", pady=(0, 8))
+        diagnosis_form.columnconfigure(1, weight=1)
+        ttk.Label(diagnosis_form, text="Diagnose / ICD-Code").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=5
+        )
+        self.diagnosis_var = tk.StringVar()
+        ttk.Entry(
+            diagnosis_form,
+            textvariable=self.diagnosis_var,
+            style="Assignment.TEntry",
+        ).grid(row=0, column=1, sticky="ew", pady=5)
+
         form = ttk.LabelFrame(
             content,
             text="Vorhandene Leistung auswählen oder neue erstellen",
@@ -1358,6 +1371,11 @@ class StammdatenAssignmentWindow(tk.Toplevel):
         self.next_button.configure(
             text="Fertig" if self.current_index == len(self.patients) - 1 else "Weiter"
         )
+        self.diagnosis_var.set(
+            patient.get("diagnose")
+            or CONFIG.get("DEFAULT_DIAGNOSE")
+            or "Z71"
+        )
         self._clear_fields()
 
     def _select_service(self, _event=None):
@@ -1382,10 +1400,18 @@ class StammdatenAssignmentWindow(tk.Toplevel):
         name = self.name_var.get().strip()
         amount_text = self.amount_var.get().strip().replace(",", ".")
         description = self.description_text.get("1.0", "end-1c").strip()
+        diagnosis = self.diagnosis_var.get().strip()
         if not name or "," in name or not amount_text or not description:
             messagebox.showwarning(
                 "Stammdaten-Leistung",
                 "Bitte Kurzname (ohne Komma), Standardbetrag und Beschreibung angeben.",
+                parent=self,
+            )
+            return
+        if not diagnosis:
+            messagebox.showwarning(
+                "Patientendiagnose",
+                "Bitte eine Diagnose oder einen ICD-Code eintragen.",
                 parent=self,
             )
             return
@@ -1427,13 +1453,18 @@ class StammdatenAssignmentWindow(tk.Toplevel):
                     (name, description, amount),
                 )
                 cursor = connection.execute(
-                    "UPDATE patienten SET last_selected_kurznamen = ? WHERE id = ?",
-                    (name, patient_id),
+                    """
+                    UPDATE patienten
+                    SET last_selected_kurznamen = ?, diagnose = ?
+                    WHERE id = ?
+                    """,
+                    (name, diagnosis, patient_id),
                 )
                 if cursor.rowcount != 1:
                     raise sqlite3.DatabaseError(
                         f"Patient {patient_id} wurde beim Speichern nicht gefunden."
                     )
+            patient["diagnose"] = diagnosis
         except sqlite3.Error as error:
             logging.exception("Stammdaten-Leistung konnte nicht gespeichert werden.")
             messagebox.showerror(

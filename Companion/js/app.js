@@ -217,7 +217,7 @@ class CompanionApp {
     return `${protocol}//${this.connection.host}${portPart}`;
   }
 
-  async checkConnection(isBackground = false) {
+  async checkConnection(isBackground = false, syncContracts = true) {
     const statusDot = document.getElementById('connStatusDot');
     const statusText = document.getElementById('connStatusText');
     const dashConnDot = document.getElementById('dashConnDot');
@@ -248,9 +248,13 @@ class CompanionApp {
           this.connection.connected = true;
           this.connection.lastCheck = new Date();
           this.updateConnectionBadges(true, `Mit LeprendiX verbunden (${this.connection.host})`);
-          if (Date.now() >= this.contractSyncRetryAt) {
+          if (syncContracts && Date.now() >= this.contractSyncRetryAt) {
             this.contractSyncRetryAt = Date.now() + 60000;
-            await this.syncContractsFromServer();
+            try {
+              await this.syncContractsFromServer();
+            } catch (error) {
+              console.warn('Verträge konnten nicht mit dem Praxis-PC synchronisiert werden:', error);
+            }
           }
           return true;
         }
@@ -265,47 +269,60 @@ class CompanionApp {
   }
 
   async syncContractsFromServer() {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-      let response;
-      try {
-        response = await fetch(`${this.getServerBaseUrl()}/contracts`, {
-          headers: { Authorization: `Bearer ${this.connection.token}` },
-          cache: 'no-store',
-          signal: controller.signal
-        });
-      } finally {
-        clearTimeout(timeoutId);
-      }
-      if (!response.ok) {
-        throw new Error(`Vertragsübertragung fehlgeschlagen (HTTP ${response.status}).`);
-      }
-      const data = await response.json();
-      if (data.status !== 'ok' || !Array.isArray(data.contracts)) {
-        throw new Error(data.message || 'Die Vertragsliste vom Praxis-PC ist ungültig.');
-      }
-      if (data.contracts.length) {
-        const enabledStates = new Map(
-          this.contracts.contractsIndex.map(item => [item.id, item.enabled])
-        );
-        const mergedContracts = new Map(this.contracts.loadedContracts);
-        for (const contract of data.contracts) {
-          mergedContracts.set(contract.id, {
-            ...contract,
-            enabled: enabledStates.has(contract.id)
-              ? enabledStates.get(contract.id)
-              : contract.enabled
-          });
-        }
-        this.contracts.replaceContracts(Array.from(mergedContracts.values()));
-        this.renderContractsInStep5();
-        this.renderAdminContractsList();
-        this.validateCurrentStep();
-      }
-    } catch (error) {
-      console.warn('Verträge konnten nicht mit dem Praxis-PC synchronisiert werden:', error);
+    if (!this.connection.token) {
+      throw new Error('Es ist kein Verbindungstoken gespeichert. Bitte zuerst den Praxis-PC verbinden.');
     }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    let response;
+    try {
+      response = await fetch(`${this.getServerBaseUrl()}/contracts`, {
+        headers: { Authorization: `Bearer ${this.connection.token}` },
+        cache: 'no-store',
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    if (!response.ok) {
+      throw new Error(`Vertragsübertragung fehlgeschlagen (HTTP ${response.status}).`);
+    }
+    const data = await response.json();
+    if (data.status !== 'ok' || !Array.isArray(data.contracts)) {
+      throw new Error(data.message || 'Die Vertragsliste vom Praxis-PC ist ungültig.');
+    }
+
+    const enabledStates = new Map(
+      this.contracts.contractsIndex.map(item => [item.id, item.enabled])
+    );
+    const mergedContracts = new Map(this.contracts.loadedContracts);
+    let updatedCount = 0;
+    for (const contract of data.contracts) {
+      const current = mergedContracts.get(contract.id);
+      const currentContent = current ? { ...current } : null;
+      if (currentContent) delete currentContent.enabled;
+      if (!currentContent || JSON.stringify(currentContent) !== JSON.stringify(contract)) {
+        updatedCount++;
+      }
+      mergedContracts.set(contract.id, {
+        ...contract,
+        enabled: enabledStates.has(contract.id)
+          ? enabledStates.get(contract.id)
+          : contract.enabled
+      });
+    }
+    if (data.contracts.length) {
+      this.contracts.replaceContracts(Array.from(mergedContracts.values()));
+      this.renderContractsInStep5();
+      this.renderAdminContractsList();
+      this.validateCurrentStep();
+    }
+    return {
+      count: data.contracts.length,
+      updatedCount,
+      unchangedCount: data.contracts.length - updatedCount
+    };
   }
 
   setupFirstRunWizard() {
@@ -316,6 +333,7 @@ class CompanionApp {
     const connectButton = document.getElementById('btnFirstRunConnect');
     const updateButton = document.getElementById('btnCheckAppUpdates');
     const adminChooseButton = document.getElementById('btnAdminImportContracts');
+    const refreshContractsButton = document.getElementById('btnAdminRefreshContracts');
     const adminFileInput = document.getElementById('adminContractFiles');
 
     if (chooseButton && fileInput) {
@@ -342,7 +360,10 @@ class CompanionApp {
       };
     }
     if (updateButton) {
-      updateButton.onclick = () => this.checkForUpdatesMonthly(true);
+      updateButton.onclick = () => this.checkForUpdatesMonthly(true, true);
+    }
+    if (refreshContractsButton) {
+      refreshContractsButton.onclick = () => this.refreshContractsFromAdmin(refreshContractsButton);
     }
   }
 
@@ -374,6 +395,44 @@ class CompanionApp {
     }
   }
 
+  async refreshContractsFromAdmin(button) {
+    const status = document.getElementById('adminContractSyncStatus');
+    const hostInput = document.getElementById('adminHostInput');
+    const portInput = document.getElementById('adminPortInput');
+    const tokenInput = document.getElementById('adminTokenInput');
+    if (hostInput) this.connection.host = hostInput.value.trim();
+    if (portInput) this.connection.port = parseInt(portInput.value.trim(), 10) || 5000;
+    if (tokenInput) this.connection.token = tokenInput.value.trim();
+    this.savePersistedState();
+
+    button.disabled = true;
+    button.textContent = 'Aktualisiere ...';
+    if (status) status.textContent = 'Verbindung wird geprüft ...';
+    try {
+      const connected = await this.checkConnection(false, false);
+      if (!connected) {
+        throw new Error('Der Praxis-PC ist nicht erreichbar. Prüfen Sie WLAN, Host und Verbindungstoken.');
+      }
+
+      const result = await this.syncContractsFromServer();
+      if (status) {
+        status.textContent = result.count
+          ? `${result.updatedCount} Vertrag/Verträge aktualisiert; ${result.unchangedCount} unverändert. Lokal: ${this.contracts.loadedContracts.size}.`
+          : 'Der Praxis-PC hat keine Vertragsdateien bereitgestellt. Vorhandene lokale Verträge bleiben erhalten.';
+      }
+    } catch (error) {
+      if (status) status.textContent = `Vertragsaktualisierung fehlgeschlagen: ${error.message}`;
+      await this.showAppDialog(
+        'Verträge aktualisieren',
+        error.message,
+        { variant: 'error' }
+      );
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Verträge aktualisieren';
+    }
+  }
+
   async getInstalledVersion() {
     const response = await fetch('app-version.json', { cache: 'no-store' });
     if (!response.ok) {
@@ -399,14 +458,33 @@ class CompanionApp {
     return 0;
   }
 
-  async checkForUpdatesMonthly(force = false) {
-    if (!window.Capacitor || !window.Capacitor.isNativePlatform()) return;
-
+  async checkForUpdatesMonthly(force = false, interactive = false) {
     const status = document.getElementById('appUpdateStatus');
     const lastCheck = Number(localStorage.getItem('leprendix_companion_last_update_check') || 0);
     if (!force && Date.now() - lastCheck < 30 * 24 * 60 * 60 * 1000) return;
+    if (!window.Capacitor || !window.Capacitor.isNativePlatform()) {
+      if (interactive) {
+        document.getElementById('apkUpdateDownloadLink')?.classList.remove('hidden');
+        if (status) {
+          status.textContent = 'Automatische Versionsprüfung ist nur in der installierten Android-App verfügbar. Die neueste APK kann direkt geladen werden.';
+        }
+        await this.showAppDialog(
+          'Companion aktualisieren',
+          'Öffnen Sie den APK-Download auf GitHub und installieren Sie das Update über die Android-Abfrage. Deinstallieren Sie die vorhandene App nicht.',
+          { variant: 'info' }
+        );
+      }
+      return;
+    }
     if (!navigator.onLine) {
       if (status) status.textContent = 'Offline. Die Update-Prüfung wird bei bestehender Internetverbindung wiederholt.';
+      if (interactive) {
+        await this.showAppDialog(
+          'Update-Prüfung nicht möglich',
+          'Für die Update-Prüfung wird eine Internetverbindung benötigt.',
+          { variant: 'warning' }
+        );
+      }
       return;
     }
 
@@ -435,7 +513,16 @@ class CompanionApp {
       localStorage.setItem('leprendix_companion_last_update_check', String(Date.now()));
       this.appVersion = installedVersion;
       if (status) status.textContent = `Installiert: ${installedVersion} · Aktuell: ${latestVersion}`;
-      if (this.compareVersions(latestVersion, installedVersion) <= 0) return;
+      if (this.compareVersions(latestVersion, installedVersion) <= 0) {
+        if (interactive) {
+          await this.showAppDialog(
+            'Companion ist aktuell',
+            `Installierte Version: ${installedVersion}. Es ist kein Update verfügbar.`,
+            { variant: 'success' }
+          );
+        }
+        return;
+      }
       document.getElementById('apkUpdateDownloadLink')?.classList.remove('hidden');
 
       const pendingCount = this.getUnsyncedRecords().length;
@@ -466,6 +553,13 @@ class CompanionApp {
     } catch (error) {
       if (status) status.textContent = `Update-Prüfung nicht möglich: ${error.message}`;
       console.warn('Companion-Update-Prüfung fehlgeschlagen:', error);
+      if (interactive) {
+        await this.showAppDialog(
+          'Update-Prüfung fehlgeschlagen',
+          error.message,
+          { variant: 'error' }
+        );
+      }
     }
   }
 
