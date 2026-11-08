@@ -1,18 +1,25 @@
+# Local configuration, credentials, and application data
+config.json
+credentials.dat
 patienten.db
-output
-create_credentials.py
-patienten.db
-__pycache__
-~
-last_crash.txt
 /backups
+/resbest/Druckformular.pdf
+
+# Local scripts and runtime files
+create_credentials.py
+last_crash.txt
 *.log
+~
+__pycache__/
+
+# Build and dependency output
+output/
 /node_modules/
 /android/
 /build/
 .gradle/
+
+# Companion app local and generated files
 Companion/signatures/
 Companion/res/*.json
-config.json
-/resbest/Druckformular.pdf
 Companion/README.md
