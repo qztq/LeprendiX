@@ -104,18 +104,13 @@ npx cap add android
 npx cap sync android
 ```
 
-To create a debug APK, the commands below read the app version from
-`version.txt` and increment the version code in the local Android project:
+To create a debug APK, increment the Android version code and prepare the build.
+The app version is read automatically from `version.txt`:
 
 ```powershell
-$versionName = (Get-Content .\version.txt -Raw).Trim()
-$versionCodeMatch = Select-String -Path .\android\app\build.gradle -Pattern '^\s*versionCode\s+(\d+)\s*$'
-if (-not $versionName) { throw "version.txt is empty" }
-if (-not $versionCodeMatch) { throw "Could not read versionCode from android\app\build.gradle" }
-$versionCode = [int]$versionCodeMatch.Matches[0].Groups[1].Value + 1
-npm run android:prepare -- --version-code $versionCode --version-name $versionName
-Set-Location android
-.\gradlew.bat assembleDebug
+$versionCode = [int]((Select-String .\android\app\build.gradle '^\s*versionCode\s+(\d+)\s*$').Matches[0].Groups[1].Value) + 1
+npm run android:prepare -- --version-code $versionCode
+.\android\gradlew.bat -p .\android assembleDebug
 ```
 
 `android:prepare` writes the incremented code back to the local Gradle file, so
