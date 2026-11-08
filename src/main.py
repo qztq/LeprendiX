@@ -1,213 +1,199 @@
+import datetime
+import json
+import logging
+import math
+import os
+import pickle
+import runpy
+import shutil
+import sqlite3
 import subprocess
 import sys
-import os
-import threading
-import runpy
-import pickle
-import tkinter as tk
-import sqlite3
-from tkinter import messagebox, ttk, filedialog
-import requests
-from PIL import Image, ImageTk
-import json
-import datetime
-import webbrowser
-import time
-import math
-import shutil
-import logging
 import tempfile
-import traceback # Für Crash-Handling
+import threading
+import time
+import tkinter as tk
+import webbrowser
+from tkinter import filedialog, messagebox, ttk
+
+from PIL import Image, ImageTk
+
 from src.project_paths import get_app_directory, get_resource_path
 
 BASE_DIR = get_app_directory()
 os.chdir(BASE_DIR)
 
+
 def resource_path(relative_path):
-    """ Hilfsfunktion für interne Ressourcen (wie Logos im _MEIPASS) """
     return get_resource_path(relative_path)
 
 
 from src.config_loader import CONFIG
-from src import gui_generator, patient_status_checker, patient_records
-from src import crash_handler, setup_wizard
+from src import crash_handler, gui_generator, patient_records, setup_wizard
+from src.companion_contracts import get_contract_directory, read_contract_files, save_contract_files
+from src.material_orders import validate_material_order_template
 
-# --- LOGGING SETUP ---
+COLOR_PRIMARY = "#17212b"
+COLOR_SECONDARY = "#22313f"
+COLOR_ACCENT = "#28a879"
+COLOR_TEXT = "#f3f6f8"
+COLOR_MUTED = "#aab7c4"
+COLOR_HIGHLIGHT = "#3498db"
+COLOR_CARD = "#1c2a36"
+LOGO_PATH = resource_path(os.path.join("assets", "logo.png"))
+
+
 def setup_logging():
-    # Use a user-writable directory for logs to avoid PermissionError
-    app_name = "LeprendiX"
     if sys.platform == "win32":
         base_path = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
     else:
         base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
-    
-    log_dir = os.path.join(base_path, app_name, "logs")
+
+    log_dir = os.path.join(base_path, "LeprendiX", "logs")
     try:
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "leprendix.log")
-    except Exception:
+    except OSError:
         log_file = os.path.join(tempfile.gettempdir(), "leprendix.log")
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(module)s: %(message)s",
         handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
     )
-    logging.info(f"=== LeprendiX gestartet (Log: {log_file}) ===")
-
-# --- KONFIGURATION & DESIGN ---
-COLOR_PRIMARY = "#2c3e50"
-COLOR_SECONDARY = "#34495e"
-COLOR_ACCENT = "#27ae60"
-COLOR_TEXT = "#ecf0f1"
-COLOR_HIGHLIGHT = "#3498db"
-LOGO_PATH = resource_path(os.path.join("assets", "logo.png"))
-
-# --- GITHUB CONFIG FOR RELEASE NOTES ---
-GITHUB_USER = "qztq"
-REPO_NAME = "LeprendiX"
-RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_USER}/{REPO_NAME}/releases"
-GITHUB_TOKEN = CONFIG.get("GITHUB_TOKEN", "")
+    logging.info("=== LeprendiX gestartet (Log: %s) ===", log_file)
 
 
-# --- CREDENTIALS LADEN ---
 def load_credentials():
     cred_path = os.path.join(BASE_DIR, "credentials.dat")
     if os.path.exists(cred_path):
         try:
-            with open(cred_path, "rb") as f:
-                return pickle.load(f)
-        except:
+            with open(cred_path, "rb") as credentials_file:
+                return pickle.load(credentials_file)
+        except Exception as error:
+            logging.error("Login-Daten konnten nicht geladen werden: %s", error)
             return None
     return None
 
+
 USER_CREDS = load_credentials()
 
-def get_release_notes():
-    """Fetches and formats the latest release notes from GitHub."""
-    notes_content = "Release-Informationen konnten nicht geladen werden.\n\n" \
-                    "Bitte prüfen Sie Ihre Internetverbindung oder besuchen Sie die Releases-Seite manuell."
-    try:
-        base_headers = {
-            "User-Agent": "LeprendiX-App",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        headers = base_headers.copy()
-        if GITHUB_TOKEN: headers["Authorization"] = f"token {GITHUB_TOKEN}"
-        
-        # Get latest 5 releases
-        response = requests.get(RELEASES_API_URL, headers=headers, timeout=5, params={"per_page": 5})
-        
-        # Fallback: Falls Token ungültig (401), ohne Token erneut versuchen
-        if response.status_code == 401:
-            response = requests.get(RELEASES_API_URL, headers=base_headers, timeout=5, params={"per_page": 5})
-            
-        response.raise_for_status()
-        releases = response.json()
-        
-        if not releases:
-            return "Derzeit sind keine Release-Informationen auf GitHub verfügbar."
-
-        formatted_notes = ""
-        for release in releases:
-            tag_name = release.get('tag_name', 'N/A')
-            name = release.get('name', tag_name) # Fallback to tag_name if name is empty
-            published_at_iso = release.get('published_at')
-            body = release.get('body', 'Keine Beschreibung vorhanden.')
-
-            # Format date
-            if published_at_iso:
-                # GitHub API returns ISO 8601 format (e.g., "2024-01-15T10:00:00Z")
-                dt_utc = datetime.datetime.fromisoformat(published_at_iso.replace('Z', '+00:00'))
-                published_at_str = dt_utc.strftime("%d.%m.%Y")
-            else:
-                published_at_str = "N/A"
-
-            # Build the string for one release
-            formatted_notes += f"Version: {name}\n"
-            formatted_notes += f"Datum: {published_at_str}\n"
-            formatted_notes += "--------------------------------------------------\n"
-            
-            clean_body = body.replace('\r\n', '\n').strip()
-            formatted_notes += clean_body + "\n\n\n"
-            
-        return formatted_notes if formatted_notes else notes_content
-
-    except requests.exceptions.RequestException as e:
-        return f"{notes_content}\n\nFehlerdetails: {e}"
-    except Exception as e:
-        return f"{notes_content}\n\nFehlerdetails: {e}"
 
 class LoginSplash(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.running = True
         self.overrideredirect(True)
-        self.configure(bg='#0a0a0a')
+        self.configure(bg="#0a0a0a")
 
-        w, h = 550, 400 
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        x = (sw // 2) - (w // 2)
-        y = (sh // 2) - (h // 2)
-        self.geometry(f"{w}x{h}+{x}+{y}")
+        width, height = 550, 400
+        screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        self.geometry(f"{width}x{height}+{x}+{y}")
         self.attributes("-topmost", True)
 
-        self.canvas = tk.Canvas(self, width=w, height=h, bg='#0a0a0a', highlightthickness=0)
+        self.canvas = tk.Canvas(
+            self, width=width, height=height, bg="#0a0a0a", highlightthickness=0
+        )
         self.canvas.pack()
+        self.canvas.create_text(
+            width / 2 - 30,
+            height / 2 - 20,
+            text="Leprendi",
+            font=("Segoe UI", 45, "bold"),
+            fill="#f8f9fa",
+        )
+        self.canvas.create_text(
+            width / 2,
+            height - 40,
+            text="Anwendung wird gestartet...",
+            font=("Segoe UI", 12, "italic"),
+            fill="#555555",
+        )
 
-        # UI Elemente from start.py
-        self.canvas.create_text(w/2 - 30, h/2 - 20, text="Leprendi", font=("Segoe UI", 45, "bold"), fill="#f8f9fa")
-        self.wait_text = self.canvas.create_text(w/2, h - 40, text="Anwendung wird gestartet...", font=("Segoe UI", 12, "italic"), fill="#555555")
+        center_x, center_y = width / 2 + 130, height / 2 - 20
+        size = 35
+        self.canvas.create_line(
+            center_x - size,
+            center_y - size,
+            center_x + size,
+            center_y + size,
+            fill="#1a1a1a",
+            width=15,
+            capstyle="round",
+        )
+        self.canvas.create_line(
+            center_x + size,
+            center_y - size,
+            center_x - size,
+            center_y + size,
+            fill="#1a1a1a",
+            width=15,
+            capstyle="round",
+        )
 
-        cx, cy = w/2 + 130, h/2 - 20
-        s = 35  
-
-        self.canvas.create_line(cx-s, cy-s, cx+s, cy+s, fill="#1a1a1a", width=15, capstyle="round")
-        self.canvas.create_line(cx+s, cy-s, cx-s, cy+s, fill="#1a1a1a", width=15, capstyle="round")
-
-        self.points = [(cx-s, cy-s), (cx+s, cy+s), (cx+s, cy-s), (cx-s, cy+s)]
-        self.dot = self.canvas.create_oval(0,0,0,0, fill="#00f2ff", outline="#70f3ff", width=2)
-        
-        self.trail_length = 12 
-        self.trail_dots = [self.canvas.create_oval(0,0,0,0, fill="#004d4d", outline="") for _ in range(self.trail_length)]
+        self.points = [
+            (center_x - size, center_y - size),
+            (center_x + size, center_y + size),
+            (center_x + size, center_y - size),
+            (center_x - size, center_y + size),
+        ]
+        self.dot = self.canvas.create_oval(
+            0, 0, 0, 0, fill="#00f2ff", outline="#70f3ff", width=2
+        )
+        self.trail_length = 12
+        self.trail_dots = [
+            self.canvas.create_oval(0, 0, 0, 0, fill="#004d4d", outline="")
+            for _ in range(self.trail_length)
+        ]
         self.history = []
-        
         self.start_time = time.time()
         self.animate()
 
     def animate(self):
         if not self.running or not self.winfo_exists():
             return
-        
         try:
             elapsed = time.time() - self.start_time
-
             speed = (math.sin(elapsed * 0.7) + 1.1) * 0.5
-            t = (elapsed * speed) % 2.0
-            p1, p2 = (self.points[0], self.points[1]) if t < 1.0 else (self.points[2], self.points[3])
-            pos_t = t if t < 1.0 else t - 1.0
+            position = (elapsed * speed) % 2.0
+            point_a, point_b = (
+                (self.points[0], self.points[1])
+                if position < 1.0
+                else (self.points[2], self.points[3])
+            )
+            fraction = position if position < 1.0 else position - 1.0
+            current_x = point_a[0] + (point_b[0] - point_a[0]) * fraction
+            current_y = point_a[1] + (point_b[1] - point_a[1]) * fraction
 
-            cur_x = p1[0] + (p2[0] - p1[0]) * pos_t
-            cur_y = p1[1] + (p2[1] - p1[1]) * pos_t
+            self.history.insert(0, (current_x, current_y))
+            if len(self.history) > self.trail_length + 1:
+                self.history.pop()
+            for index, dot_id in enumerate(self.trail_dots):
+                if index < len(self.history):
+                    history_x, history_y = self.history[index]
+                    radius = (self.trail_length - index) * 0.6
+                    self.canvas.coords(
+                        dot_id,
+                        history_x - radius,
+                        history_y - radius,
+                        history_x + radius,
+                        history_y + radius,
+                    )
 
-            self.history.insert(0, (cur_x, cur_y))
-            if len(self.history) > self.trail_length + 1: self.history.pop()
-
-            for i, dot_id in enumerate(self.trail_dots):
-                if i < len(self.history):
-                    hx, hy = self.history[i]
-                    r = (self.trail_length - i) * 0.6 
-                    self.canvas.coords(dot_id, hx-r, hy-r, hx+r, hy+r)
-
-            r_main = 5 + math.sin(elapsed * 5) * 1.2
-            self.canvas.coords(self.dot, cur_x-r_main, cur_y-r_main, cur_x+r_main, cur_y+r_main)
-
-            if self.running and self.winfo_exists():
-                self.after(30, self.animate)
-        
+            radius = 5 + math.sin(elapsed * 5) * 1.2
+            self.canvas.coords(
+                self.dot,
+                current_x - radius,
+                current_y - radius,
+                current_x + radius,
+                current_y + radius,
+            )
+            self.after(30, self.animate)
         except (tk.TclError, AttributeError):
             self.running = False
 
@@ -215,772 +201,974 @@ class LoginSplash(tk.Toplevel):
         self.running = False
         self.destroy()
 
-# In main.py
-def launch_application(root):
-    root.withdraw() 
-    splash = LoginSplash(root)
-    
-    def finalize_start():
-        # 1. Splash zerstören
-        splash.stop()
-        
-        # Hauptanwendung (Generator) starten
-        gen_root = tk.Tk()
-        app_gen = gui_generator.HonorarGeneratorApp(gen_root)
-        
-        gen_root.mainloop()
 
-        # Sobald das Hauptfenster geschlossen wird, beenden wir auch den unsichtbaren root
+def launch_application(root):
+    root.withdraw()
+    splash = LoginSplash(root)
+
+    def finalize_start():
+        splash.stop()
+        gen_root = tk.Tk()
+        gui_generator.HonorarGeneratorApp(gen_root)
+        gen_root.mainloop()
         root.destroy()
 
-    # Wir warten 2 Sekunden mit dem Splash und rufen dann finalize_start im Main-Thread auf
     root.after(2000, finalize_start)
     root.mainloop()
 
-class CollapsiblePane(tk.Frame):
-    """Eine aufklappbare Frame-Komponente für Einstellungen."""
-    def __init__(self, parent, title, expanded=False, bg_color=COLOR_PRIMARY):
-        super().__init__(parent, bg=bg_color)
-        self.columnconfigure(0, weight=1)
-        self._variable = tk.BooleanVar(value=expanded)
-        self._title = title
-        self._bg = bg_color
-        
-        self._button = tk.Button(self, text=f"{'▼' if expanded else '▶'} {title}",
-                                 command=self._toggle, relief="flat", 
-                                 bg=COLOR_SECONDARY, fg="white", 
-                                 font=("Segoe UI", 12, "bold"), anchor="w", padx=10, pady=5)
-        self._button.grid(row=0, column=0, sticky="ew", pady=(5,0))
-        
-        self.frame = tk.Frame(self, bg=self._bg)
-        if expanded:
-            self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-            
-    def _toggle(self):
-        if self._variable.get():
-            self.frame.grid_remove()
-            self._variable.set(False)
-            self._button.configure(text=f"▶ {self._title}")
-        else:
-            self.frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-            self._variable.set(True)
-            self._button.configure(text=f"▼ {self._title}")
 
-# --- HAUPTFENSTER ---
+def get_version():
+    try:
+        with open(os.path.join(BASE_DIR, "version.txt"), "r", encoding="utf-8") as version_file:
+            return version_file.read().strip()
+    except OSError:
+        logging.exception("Versionsdatei konnte nicht gelesen werden.")
+        return "Dev-Version"
+
+
 def create_main():
-    setup_logging() # Logging initialisieren
-    
-    # Hooks installieren via crash_handler
+    setup_logging()
     crash_handler.install_exception_handler()
-    
-    if hasattr(threading, 'excepthook'):
-        threading.excepthook = lambda args: crash_handler.global_exception_handler(args.exc_type, args.exc_value, args.exc_traceback)
-    
+    if hasattr(threading, "excepthook"):
+        threading.excepthook = lambda args: crash_handler.global_exception_handler(
+            args.exc_type, args.exc_value, args.exc_traceback
+        )
+
     root = tk.Tk()
-    # Tkinter Callback-Fehler auch abfangen
     root.report_callback_exception = crash_handler.global_exception_handler
-    root.withdraw() # Fenster erst verstecken, bis alles geladen ist
-    
-    # --- SETUP WIZARD CHECK (Startet nur bei neuer Version/Erstinstallation) ---
+    root.withdraw()
     setup_wizard.check_and_run_setup(root)
-    
-    # Reload credentials in case they were created by the setup wizard
+
     global USER_CREDS
     USER_CREDS = load_credentials()
-    
-    root.title("LeprendiX - Control Center")
-    root.geometry("1150x850")
+
+    version = get_version()
+    root.title("LeprendiX | Control Center")
+    root.geometry("1120x820")
+    root.minsize(900, 680)
     root.configure(bg=COLOR_PRIMARY)
 
-    # Styles
     style = ttk.Style()
-    style.theme_use('default')
-    style.configure("TNotebook", background=COLOR_PRIMARY, borderwidth=0)
-    style.configure("TNotebook.Tab", background=COLOR_SECONDARY, foreground=COLOR_TEXT, 
-                    padding=[25, 10], font=("Segoe UI", 10, "bold"))
-    style.map("TNotebook.Tab", background=[("selected", COLOR_PRIMARY)], foreground=[("selected", COLOR_ACCENT)])
+    style.theme_use("clam")
+    style.configure(
+        "TNotebook",
+        background=COLOR_PRIMARY,
+        borderwidth=0,
+        bordercolor=COLOR_PRIMARY,
+        relief="flat",
+        lightcolor=COLOR_PRIMARY,
+        darkcolor=COLOR_PRIMARY,
+        focuscolor=COLOR_PRIMARY,
+        tabmargins=(0, 0, 0, 0),
+    )
+    style.configure(
+        "TNotebook.Tab",
+        background=COLOR_SECONDARY,
+        foreground=COLOR_MUTED,
+        padding=(24, 12),
+        font=("Segoe UI", 10, "bold"),
+        borderwidth=0,
+        bordercolor=COLOR_SECONDARY,
+        relief="flat",
+        focuscolor=COLOR_SECONDARY,
+        focusthickness=0,
+    )
+    style.map(
+        "TNotebook.Tab",
+        background=[("selected", COLOR_CARD), ("!selected", COLOR_SECONDARY)],
+        foreground=[("selected", COLOR_TEXT)],
+        padding=[("selected", (24, 12)), ("!selected", (24, 12))],
+        focuscolor=[("focus", COLOR_SECONDARY)],
+        bordercolor=[("selected", COLOR_CARD), ("!selected", COLOR_SECONDARY)],
+        lightcolor=[("selected", COLOR_CARD), ("!selected", COLOR_SECONDARY)],
+        darkcolor=[("selected", COLOR_CARD), ("!selected", COLOR_SECONDARY)],
+    )
+    style.configure(
+        "LeprendiX.Vertical.TScrollbar",
+        background=COLOR_SECONDARY,
+        troughcolor=COLOR_PRIMARY,
+        bordercolor=COLOR_PRIMARY,
+        arrowcolor=COLOR_TEXT,
+    )
 
-    nb = ttk.Notebook(root)
-    nb.pack(fill="both", expand=True, padx=20, pady=20)
+    header = tk.Frame(root, bg=COLOR_PRIMARY)
+    header.pack(fill="x", padx=34, pady=(22, 14))
+    tk.Label(
+        header,
+        text="LeprendiX",
+        bg=COLOR_PRIMARY,
+        fg=COLOR_TEXT,
+        font=("Segoe UI", 21, "bold"),
+    ).pack(side="left")
+    tk.Label(
+        header,
+        text="CONTROL CENTER",
+        bg=COLOR_PRIMARY,
+        fg=COLOR_MUTED,
+        font=("Segoe UI", 9, "bold"),
+    ).pack(side="left", padx=(14, 0), pady=(8, 0))
+    tk.Label(
+        header,
+        text=f"VERSION  {version}",
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        font=("Segoe UI", 9, "bold"),
+        padx=13,
+        pady=7,
+    ).pack(side="right")
 
-    # --- TAB 1: ÜBERSICHT ---
-    t1 = tk.Frame(nb, bg=COLOR_PRIMARY)
-    nb.add(t1, text="  ÜBERSICHT  ")
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True, padx=34, pady=(0, 28))
 
+    overview = tk.Frame(notebook, bg=COLOR_PRIMARY)
+    settings = tk.Frame(notebook, bg=COLOR_PRIMARY)
+    notebook.add(overview, text="ÜBERSICHT")
+    notebook.add(settings, text="EINSTELLUNGEN")
+
+    overview_content = tk.Frame(overview, bg=COLOR_PRIMARY)
+    overview_content.pack(expand=True, fill="both", padx=24, pady=25)
+
+    brand = tk.Frame(overview_content, bg=COLOR_PRIMARY)
+    brand.pack(pady=(4, 24))
     if os.path.exists(LOGO_PATH):
-        # 1. Bild öffnen
-        img = Image.open(LOGO_PATH)
-        
-        # 2. Proportionale Skalierung berechnen (z.B. maximale Breite 500px)
-        max_width = 500
-        w_percent = (max_width / float(img.size[0]))
-        h_size = int((float(img.size[1]) * float(w_percent)))
-        
-        # 3. Resize mit berechneten Werten (Beibehaltung des Seitenverhältnisses)
-        img = img.resize((max_width, h_size), Image.Resampling.LANCZOS)
-        img_tk = ImageTk.PhotoImage(img)
-        
-        # 4. Label zentrieren
-        # Durch pack(expand=True) wird das Label im verfügbaren Raum zentriert
-        logo_label = tk.Label(t1, image=img_tk, bg=COLOR_PRIMARY)
-        logo_label.image = img_tk  # Referenz behalten (Garbage Collection Schutz)
-        logo_label.pack(pady=40, expand=False) # expand=False, falls es oben kleben soll, True für echte Mitte
+        try:
+            image = Image.open(LOGO_PATH)
+            image.thumbnail((380, 190), Image.Resampling.LANCZOS)
+            logo_image = ImageTk.PhotoImage(image)
+            logo = tk.Label(brand, image=logo_image, bg=COLOR_PRIMARY)
+            logo.image = logo_image
+            logo.pack()
+        except (OSError, tk.TclError):
+            logging.exception("LeprendiX-Logo konnte nicht geladen werden.")
+            tk.Label(
+                brand,
+                text="LeprendiX",
+                bg=COLOR_PRIMARY,
+                fg=COLOR_TEXT,
+                font=("Segoe UI", 34, "bold"),
+            ).pack()
+    else:
+        tk.Label(
+            brand,
+            text="LeprendiX",
+            bg=COLOR_PRIMARY,
+            fg=COLOR_TEXT,
+            font=("Segoe UI", 34, "bold"),
+        ).pack()
 
-    # Login Bereich
-    login_f = tk.Frame(t1, bg=COLOR_SECONDARY, padx=40, pady=30, highlightbackground=COLOR_ACCENT, highlightthickness=1)
-    login_f.pack(pady=10)
+    login_card = tk.Frame(
+        overview_content,
+        bg=COLOR_CARD,
+        padx=38,
+        pady=30,
+        highlightbackground="#344654",
+        highlightthickness=1,
+    )
+    login_card.pack()
+    tk.Label(
+        login_card,
+        text="Willkommen bei LeprendiX!",
+        font=("Segoe UI", 16, "bold"),
+        fg=COLOR_TEXT,
+        bg=COLOR_CARD,
+    ).pack(pady=(0, 5))
+    tk.Label(
+        login_card,
+        text="Melden Sie sich an, um fortzufahren.",
+        font=("Segoe UI", 9),
+        fg=COLOR_MUTED,
+        bg=COLOR_CARD,
+    ).pack(pady=(0, 21))
 
-    tk.Label(login_f, text="Willkommen bei LeprendiX!", font=("Segoe UI", 14, "bold"), fg=COLOR_ACCENT, bg=COLOR_SECONDARY).pack(pady=(0, 20))
-    
-    tk.Label(login_f, text="Benutzername:", fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack(anchor="w")
-    u_ent = tk.Entry(login_f, width=30, bg=COLOR_PRIMARY, fg="white", relief="flat", insertbackground="white")
-    u_ent.pack(pady=(5, 15), ipady=5)
-    
+    input_style = {
+        "bg": "#111a22",
+        "fg": COLOR_TEXT,
+        "insertbackground": COLOR_TEXT,
+        "relief": "flat",
+        "font": ("Segoe UI", 11),
+        "highlightthickness": 1,
+        "highlightbackground": "#344654",
+        "highlightcolor": COLOR_HIGHLIGHT,
+    }
+
+    tk.Label(
+        login_card,
+        text="Benutzername",
+        fg=COLOR_MUTED,
+        bg=COLOR_CARD,
+        font=("Segoe UI", 9, "bold"),
+    ).pack(anchor="w")
+    username_entry = tk.Entry(login_card, width=34, **input_style)
+    username_entry.pack(pady=(6, 14), ipady=9)
     default_user = "bhag"
     if USER_CREDS and USER_CREDS.get("user"):
-        default_user = USER_CREDS.get("user")
-    u_ent.insert(0, default_user)
+        default_user = USER_CREDS["user"]
+    username_entry.insert(0, default_user)
 
-    tk.Label(login_f, text="Passwort:", fg=COLOR_TEXT, bg=COLOR_SECONDARY).pack(anchor="w")
-    p_ent = tk.Entry(login_f, show="*", width=30, bg=COLOR_PRIMARY, fg="white", relief="flat", insertbackground="white")
-    p_ent.pack(pady=(5, 20), ipady=5)
+    tk.Label(
+        login_card,
+        text="Passwort",
+        fg=COLOR_MUTED,
+        bg=COLOR_CARD,
+        font=("Segoe UI", 9, "bold"),
+    ).pack(anchor="w")
+    password_entry = tk.Entry(login_card, show="*", width=34, **input_style)
+    password_entry.pack(pady=(6, 20), ipady=9)
 
     def do_login(event=None):
         if not USER_CREDS:
-            messagebox.showerror("Fehler", "Datei 'credentials.dat' fehlt!")
+            messagebox.showerror("Fehler", "Datei 'credentials.dat' fehlt.", parent=root)
+            return
+        if (
+            username_entry.get() != USER_CREDS.get("user")
+            or password_entry.get() != USER_CREDS.get("password")
+        ):
+            messagebox.showerror("Fehler", "Logindaten inkorrekt.", parent=root)
             return
 
-        # 1. Credentials prüfen
-        if u_ent.get() != USER_CREDS.get("user") or p_ent.get() != USER_CREDS.get("password"):
-            messagebox.showerror("Fehler", "Logindaten inkorrekt.")
-            return
-            
-        # 2. Datenbank prüfen
-        db_path = os.path.join(BASE_DIR, "patienten.db")
-        db_ready = False
-        if os.path.exists(db_path):
+        database_path = os.path.join(BASE_DIR, "patienten.db")
+        database_ready = False
+        if os.path.exists(database_path):
             try:
-                conn = sqlite3.connect(db_path)
-                cur = conn.cursor()
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='patienten'")
-                if cur.fetchone():
-                    db_ready = True
-                conn.close()
-            except:
-                pass
-        
-        if not db_ready:
-            if messagebox.askyesno("Datenbank Setup", "Die Datenbank wurde noch nicht eingerichtet.\nMöchten Sie die Datenbank jetzt erstellen?"):
-                try:
-                    setup_script = resource_path(os.path.join("src", "db_setup.py"))
-                    runpy.run_path(setup_script, run_name="__main__")
-                    messagebox.showinfo("Erfolg", "Datenbank wurde erfolgreich erstellt.")
-                except Exception as e:
-                    messagebox.showerror("Fehler", f"Setup fehlgeschlagen:\n{e}")
-                    return
-            else:
+                with sqlite3.connect(database_path) as connection:
+                    row = connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name='patienten'"
+                    ).fetchone()
+                database_ready = row is not None
+            except sqlite3.Error as error:
+                messagebox.showerror(
+                    "Datenbankfehler",
+                    f"Die Datenbank konnte nicht geprüft werden:\n{error}",
+                    parent=root,
+                )
+                return
+
+        if not database_ready:
+            if not messagebox.askyesno(
+                "Datenbank Setup",
+                "Die Datenbank wurde noch nicht eingerichtet.\n"
+                "Möchten Sie die Datenbank jetzt erstellen?",
+                parent=root,
+            ):
+                return
+            try:
+                setup_script = resource_path(os.path.join("src", "db_setup.py"))
+                runpy.run_path(setup_script, run_name="__main__")
+                messagebox.showinfo(
+                    "Erfolg", "Datenbank wurde erfolgreich erstellt.", parent=root
+                )
+            except Exception as error:
+                logging.exception("Datenbank-Setup fehlgeschlagen.")
+                messagebox.showerror(
+                    "Fehler", f"Setup fehlgeschlagen:\n{error}", parent=root
+                )
                 return
 
         launch_application(root)
 
     def open_patient_records_from_launcher():
         if not USER_CREDS:
-            messagebox.showerror("Fehler", "Datei 'credentials.dat' fehlt.", parent=root)
-            return
-        if u_ent.get() != USER_CREDS.get("user") or p_ent.get() != USER_CREDS.get("password"):
             messagebox.showerror(
-                "Fehler",
+                "Fehler", "Datei 'credentials.dat' fehlt.", parent=root
+            )
+            return
+        if (
+            username_entry.get() != USER_CREDS.get("user")
+            or password_entry.get() != USER_CREDS.get("password")
+        ):
+            messagebox.showerror(
+                "Anmeldung erforderlich",
                 "Bitte zuerst gültige Logindaten eingeben.",
                 parent=root,
             )
             return
         patient_records.open_patient_records(root)
 
-    tk.Button(login_f, text="ANMELDEN & STARTEN", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 11, "bold"),
-              relief="flat", cursor="hand2", padx=20, pady=10, command=do_login).pack(fill="x")
     tk.Button(
-        login_f,
-        text="PATIENTENAKTEN ÖFFNEN",
-        bg=COLOR_PRIMARY,
-        fg="#00f2ff",
+        login_card,
+        text="ANMELDEN & STARTEN",
+        bg=COLOR_ACCENT,
+        fg="white",
+        activebackground="#23956b",
+        activeforeground="white",
         font=("Segoe UI", 10, "bold"),
         relief="flat",
         cursor="hand2",
         padx=20,
-        pady=9,
+        pady=12,
+        command=do_login,
+    ).pack(fill="x")
+    tk.Button(
+        login_card,
+        text="MATERIALBESTELLUNGEN / PATIENTENAKTEN",
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        activebackground="#2d4050",
+        activeforeground="white",
+        font=("Segoe UI", 9, "bold"),
+        relief="flat",
+        cursor="hand2",
+        padx=16,
+        pady=11,
         command=open_patient_records_from_launcher,
-    ).pack(fill="x", pady=(8, 0))
-    root.bind('<Return>', do_login)
+    ).pack(fill="x", pady=(9, 0))
+    root.bind("<Return>", do_login)
 
-
-
-
-    # --- TAB 2: DATENBANK & EINSTELLUNGEN ---
-    t2 = tk.Frame(nb, bg=COLOR_PRIMARY)
-    nb.add(t2, text="   EINSTELLUNGEN   ")
-
-    # Scroll-Container Setup
-    canvas = tk.Canvas(t2, bg=COLOR_PRIMARY, highlightthickness=0)
-    scrollbar = ttk.Scrollbar(t2, orient="vertical", command=canvas.yview)
-    db_container = tk.Frame(canvas, bg=COLOR_PRIMARY)
-
-    db_container.bind(
-        "<Configure>",
-        lambda e: canvas.configure(
-            scrollregion=canvas.bbox("all")
-        )
+    settings_canvas = tk.Canvas(
+        settings, bg=COLOR_PRIMARY, highlightthickness=0, borderwidth=0
     )
+    settings_scrollbar = ttk.Scrollbar(
+        settings,
+        orient="vertical",
+        command=settings_canvas.yview,
+        style="LeprendiX.Vertical.TScrollbar",
+    )
+    settings_content = tk.Frame(settings_canvas, bg=COLOR_PRIMARY)
+    settings_window = settings_canvas.create_window(
+        (0, 0), window=settings_content, anchor="nw"
+    )
+    settings_content.bind(
+        "<Configure>",
+        lambda _event: settings_canvas.configure(
+            scrollregion=settings_canvas.bbox("all")
+        ),
+    )
+    settings_canvas.bind(
+        "<Configure>",
+        lambda event: settings_canvas.itemconfigure(
+            settings_window, width=event.width
+        ),
+    )
+    settings_canvas.configure(yscrollcommand=settings_scrollbar.set)
+    settings_canvas.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=14)
+    settings_scrollbar.pack(side="right", fill="y", padx=(0, 14), pady=14)
 
-    canvas_window = canvas.create_window((0, 0), window=db_container, anchor="nw")
+    def scroll_settings(event):
+        settings_canvas.yview_scroll(int(-event.delta / 120), "units")
 
-    def _configure_canvas(event):
-        canvas.itemconfig(canvas_window, width=event.width)
-    
-    canvas.bind("<Configure>", _configure_canvas)
-    canvas.configure(yscrollcommand=scrollbar.set)
+    settings_canvas.bind("<Enter>", lambda _event: settings_canvas.bind_all("<MouseWheel>", scroll_settings))
+    settings_canvas.bind("<Leave>", lambda _event: settings_canvas.unbind_all("<MouseWheel>"))
 
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
+    def add_section(title, description):
+        card = tk.Frame(
+            settings_content,
+            bg=COLOR_CARD,
+            padx=22,
+            pady=18,
+            highlightbackground="#2d3e4c",
+            highlightthickness=1,
+        )
+        card.pack(fill="x", pady=(0, 12))
+        tk.Label(
+            card,
+            text=title,
+            bg=COLOR_CARD,
+            fg=COLOR_TEXT,
+            font=("Segoe UI", 13, "bold"),
+        ).pack(anchor="w")
+        tk.Label(
+            card,
+            text=description,
+            bg=COLOR_CARD,
+            fg=COLOR_MUTED,
+            font=("Segoe UI", 9),
+            justify="left",
+            wraplength=800,
+        ).pack(anchor="w", pady=(3, 14))
+        body = tk.Frame(card, bg=COLOR_CARD)
+        body.pack(fill="x")
+        return body
 
-    def _on_mousewheel(event):
-        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-    
-    def _bind_mousewheel(event):
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-    
-    def _unbind_mousewheel(event):
-        canvas.unbind_all("<MouseWheel>")
-
-    # Bindings für Scrolling wenn Maus über dem Bereich ist
-    db_container.bind("<Enter>", _bind_mousewheel)
-    db_container.bind("<Leave>", _unbind_mousewheel)
-
-    # --- KATEGORIE 1: DATENBANK & PFADE ---
-    cat1 = CollapsiblePane(db_container, "Datenbank & Pfade", expanded=True)
-    cat1.pack(fill="x", pady=5, padx=5)
-    
-    # Datenbank Init
-    tk.Label(cat1.frame, text="Datenbank-Initialisierung", font=("Segoe UI", 10, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=(10, 5), anchor="w")
-
-    db_p_ent = tk.Entry(cat1.frame, show="*", width=30, bg=COLOR_SECONDARY, 
-                        fg="white", font=("Arial", 12), justify="center", relief="flat")
-    db_p_ent.pack(pady=5, ipady=5)
-
-    def do_setup():
-        if USER_CREDS and db_p_ent.get() == USER_CREDS.get("password"):
-            try:
-                setup_script = resource_path(os.path.join("src", "db_setup.py"))
-                runpy.run_path(setup_script, run_name="__main__")
-                messagebox.showinfo("Erfolg", "Datenbank bereit.")
-            except Exception as e: 
-                messagebox.showerror("Fehler", f"Setup fehlgeschlagen:\n{e}")
-        else: 
-            messagebox.showerror("Fehler", "Passwort falsch.")
-            
-    tk.Button(cat1.frame, text="Datenbank Setup ausführen", bg="#e67e22", fg="white", 
-            font=("Segoe UI", 10, "bold"), relief="flat", padx=20, pady=8, 
-            command=do_setup).pack(pady=10)
-
-    # Pfad Konfiguration
-    tk.Label(cat1.frame, text="Speicherorte", font=("Segoe UI", 10, "bold"), fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(pady=(15, 5), anchor="w")
-
-    # Frames für die Pfadanzeige
-    def create_path_row(parent, label_text, config_key):
-        row = tk.Frame(parent, bg=COLOR_PRIMARY)
+    def add_config_entry(parent, label, key, variables, show=None):
+        row = tk.Frame(parent, bg=COLOR_CARD)
         row.pack(fill="x", pady=5)
-        
-        tk.Label(row, text=label_text, fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"), width=15, anchor="w").pack(side="left")
-        
-        # Label zur Anzeige des aktuellen Pfads
-        path_var = tk.StringVar(value=CONFIG.get(config_key, "Nicht gesetzt"))
-        lbl = tk.Label(row, textvariable=path_var, fg="#bdc3c7", bg=COLOR_SECONDARY, font=("Consolas", 9), anchor="w", padx=10)
-        lbl.pack(side="left", fill="x", expand=True, padx=10, ipady=3)
-        
-        def change_path():
-            new_path = filedialog.askdirectory(initialdir=path_var.get())
-            if new_path:
-                new_path = new_path.replace("/", "\\") # Windows-Format
-                # 1. Variable im Programm aktualisieren
-                CONFIG[config_key] = new_path
-                path_var.set(new_path)
-                # 2. In JSON speichern
-                try:
-                    with open("config.json", "w", encoding="utf-8") as f:
-                        json.dump(CONFIG, f, indent=4)
-                    messagebox.showinfo("Gespeichert", f"{label_text} wurde aktualisiert.")
-                except Exception as e:
-                    messagebox.showerror("Fehler", f"Speichern fehlgeschlagen: {e}")
+        tk.Label(
+            row,
+            text=label,
+            bg=COLOR_CARD,
+            fg=COLOR_TEXT,
+            font=("Segoe UI", 9, "bold"),
+            width=31,
+            anchor="w",
+        ).pack(side="left")
+        variable = tk.StringVar(value=str(CONFIG.get(key, "")))
+        variables[key] = variable
+        tk.Entry(
+            row,
+            textvariable=variable,
+            bg="#111a22",
+            fg=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
+            relief="flat",
+            show=show,
+        ).pack(side="left", fill="x", expand=True, ipady=7, padx=(8, 0))
 
-        tk.Button(row, text="Ändern", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 8), 
-                relief="flat", command=change_path, padx=10).pack(side="right")
+    settings_vars = {}
 
-    # Erzeuge die Zeilen für die beiden Hauptpfade
-    create_path_row(cat1.frame, "Patienten-Ordner:", "PATIENT_BASE_DIR")
-    create_path_row(cat1.frame, "Archiv-Ordner:", "ARCHIVE_DIR")
+    paths_section = add_section(
+        "Datenbank & Speicherorte",
+        "Datenbank einrichten und festlegen, wo aktive Patienten und Archive gespeichert werden.",
+    )
+    tk.Label(
+        paths_section,
+        text="Datenbank-Setup ist durch Ihr Admin-Passwort geschützt.",
+        bg=COLOR_CARD,
+        fg=COLOR_MUTED,
+        font=("Segoe UI", 9),
+    ).pack(anchor="w")
+    setup_row = tk.Frame(paths_section, bg=COLOR_CARD)
+    setup_row.pack(fill="x", pady=(8, 16))
+    db_password = tk.Entry(
+        setup_row,
+        show="*",
+        width=28,
+        bg="#111a22",
+        fg=COLOR_TEXT,
+        insertbackground=COLOR_TEXT,
+        relief="flat",
+    )
+    db_password.pack(side="left", ipady=7, padx=(0, 10))
 
-    # --- KATEGORIE 2: INTEGRATIONEN (API) ---
-    cat2 = CollapsiblePane(db_container, "Integrationen (API)", expanded=False)
-    cat2.pack(fill="x", pady=5, padx=5)
-            
-    def create_config_entry(parent, label_text, config_key, show_char=None):
-        row = tk.Frame(parent, bg=COLOR_PRIMARY)
-        row.pack(fill="x", pady=5)
-        tk.Label(row, text=label_text, fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"), width=25, anchor="w").pack(side="left")
-        
-        var = tk.StringVar(value=CONFIG.get(config_key, ""))
-        entry = tk.Entry(row, textvariable=var, bg=COLOR_SECONDARY, fg="white", relief="flat", show=show_char)
-        entry.pack(side="left", fill="x", expand=True, padx=10, ipady=3)
-        
-        def save_val():
-            CONFIG[config_key] = var.get().strip()
-            try:
-                with open("config.json", "w", encoding="utf-8") as f:
-                    json.dump(CONFIG, f, indent=4)
-                messagebox.showinfo("Gespeichert", f"{label_text} gespeichert.")
-            except Exception as e:
-                messagebox.showerror("Fehler", f"Speichern fehlgeschlagen: {e}")
-                
-        tk.Button(row, text="Speichern", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 8), 
-                relief="flat", command=save_val, padx=10).pack(side="right")
-
-    create_config_entry(cat2.frame, "Teamup API Key:", "TEAMUP_API_KEY", show_char="*")
-    create_config_entry(cat2.frame, "Teamup Calendar ID:", "TEAMUP_CALENDAR_ID")
-
-    # --- KATEGORIE 3: STANDARDWERTE ---
-    cat3 = CollapsiblePane(db_container, "Standardwerte & Editor", expanded=False)
-    cat3.pack(fill="x", pady=5, padx=5)
-
-    create_config_entry(cat3.frame, "Standard Diagnose:", "DEFAULT_DIAGNOSE")
-    create_config_entry(cat3.frame, "Standard Anrede:", "DEFAULT_ANREDE")
-    create_config_entry(cat3.frame, "Schnellwahl Beträge (Komma-getrennt):", "QUICK_AMOUNTS")
-    create_config_entry(cat3.frame, "Hotkey Hauptaktion (Enter):", "HOTKEY_ENTER")
-    create_config_entry(cat3.frame, "Hotkey Tab-Wechsel (z.B. <F12>):", "HOTKEY_SWITCH_TAB")
-
-    # --- Auto-Date Selector Settings ---
-    date_frame = tk.Frame(cat3.frame, bg=COLOR_PRIMARY)
-    date_frame.pack(fill="x", pady=5)
-    
-    tk.Label(date_frame, text="Datums-Modus (Teamup/Suche):", fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 10, "bold"), width=25, anchor="w").pack(side="left")
-    
-    date_mode_var = tk.StringVar(value=CONFIG.get("AUTO_DATE_SELECTOR", "Auto"))
-    date_mode_combo = ttk.Combobox(date_frame, textvariable=date_mode_var, values=["Auto", "Manual"], state="readonly", width=10)
-    date_mode_combo.pack(side="left", padx=10)
-    
-    # Manual Dates Row
-    manual_date_frame = tk.Frame(cat3.frame, bg=COLOR_PRIMARY)
-    manual_date_frame.pack(fill="x", pady=5)
-    
-    tk.Label(manual_date_frame, text="Manuell (YYYY-MM-DD):", fg=COLOR_TEXT, bg=COLOR_PRIMARY, width=25, anchor="w").pack(side="left")
-    manual_start_var = tk.StringVar(value=CONFIG.get("MANUAL_DATE_START", ""))
-    tk.Entry(manual_date_frame, textvariable=manual_start_var, width=12).pack(side="left", padx=5)
-    
-    tk.Label(manual_date_frame, text="bis", fg=COLOR_TEXT, bg=COLOR_PRIMARY).pack(side="left")
-    manual_end_var = tk.StringVar(value=CONFIG.get("MANUAL_DATE_END", ""))
-    tk.Entry(manual_date_frame, textvariable=manual_end_var, width=12).pack(side="left", padx=5)
-    
-    def save_date_settings():
-        CONFIG["AUTO_DATE_SELECTOR"] = date_mode_var.get()
-        CONFIG["MANUAL_DATE_START"] = manual_start_var.get()
-        CONFIG["MANUAL_DATE_END"] = manual_end_var.get()
-        try:
-            with open("config.json", "w", encoding="utf-8") as f:
-                json.dump(CONFIG, f, indent=4)
-            messagebox.showinfo("Gespeichert", "Datumseinstellungen gespeichert.")
-        except Exception as e:
-            messagebox.showerror("Fehler", f"Speichern fehlgeschlagen: {e}")
-
-    tk.Button(manual_date_frame, text="Speichern", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 8), 
-            relief="flat", command=save_date_settings, padx=10).pack(side="right", padx=10)
-
-    # --- KATEGORIE: BLACKLIST MANAGER ---
-    cat_bl = CollapsiblePane(db_container, "Blacklist Manager", expanded=False)
-    cat_bl.pack(fill="x", pady=5, padx=5)
-
-    bl_frame = tk.Frame(cat_bl.frame, bg=COLOR_PRIMARY)
-    bl_frame.pack(fill="x", pady=5, padx=10)
-
-    tk.Label(bl_frame, text="Begriffe, die bei der 'Neuen Patienten'-Suche ignoriert werden:", 
-             fg=COLOR_TEXT, bg=COLOR_PRIMARY, font=("Segoe UI", 9)).pack(anchor="w")
-
-    bl_listbox = tk.Listbox(bl_frame, height=6, bg=COLOR_SECONDARY, fg="white", relief="flat")
-    bl_listbox.pack(side="left", fill="x", expand=True, pady=5)
-    
-    bl_scroll = tk.Scrollbar(bl_frame, command=bl_listbox.yview)
-    bl_scroll.pack(side="right", fill="y", pady=5)
-    bl_listbox.config(yscrollcommand=bl_scroll.set)
-
-    def refresh_blacklist():
-        bl_listbox.delete(0, tk.END)
-        db_path = os.path.join(BASE_DIR, "patienten.db")
-        if os.path.exists(db_path):
-            try:
-                conn = sqlite3.connect(db_path)
-                cursor = conn.cursor()
-                cursor.execute("CREATE TABLE IF NOT EXISTS blacklist (name TEXT PRIMARY KEY)")
-                cursor.execute("SELECT name FROM blacklist ORDER BY name")
-                for row in cursor.fetchall():
-                    bl_listbox.insert(tk.END, row[0])
-                conn.close()
-            except Exception as e:
-                messagebox.showerror("Fehler", f"Fehler beim Laden der Blacklist: {e}")
-
-    def remove_blacklist_item():
-        selection = bl_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("Auswahl", "Bitte wählen Sie einen Eintrag zum Löschen.")
+    def do_database_setup():
+        if not USER_CREDS or db_password.get() != USER_CREDS.get("password"):
+            messagebox.showerror("Fehler", "Passwort falsch.", parent=root)
             return
-        
-        item = bl_listbox.get(selection[0])
-        if messagebox.askyesno("Löschen", f"Soll '{item}' wirklich aus der Blacklist entfernt werden?"):
-            db_path = os.path.join(BASE_DIR, "patienten.db")
-            try:
-                conn = sqlite3.connect(db_path)
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM blacklist WHERE name = ?", (item,))
-                conn.commit()
-                conn.close()
-                refresh_blacklist()
-            except Exception as e:
-                messagebox.showerror("Fehler", f"Fehler beim Löschen: {e}")
+        try:
+            setup_script = resource_path(os.path.join("src", "db_setup.py"))
+            runpy.run_path(setup_script, run_name="__main__")
+            messagebox.showinfo("Erfolg", "Datenbank bereit.", parent=root)
+        except Exception as error:
+            logging.exception("Datenbank-Setup fehlgeschlagen.")
+            messagebox.showerror(
+                "Fehler", f"Setup fehlgeschlagen:\n{error}", parent=root
+            )
 
-    bl_btn_frame = tk.Frame(cat_bl.frame, bg=COLOR_PRIMARY)
-    bl_btn_frame.pack(fill="x", padx=10, pady=5)
-    
-    tk.Button(bl_btn_frame, text="Ausgewählten Eintrag Löschen", bg="#c0392b", fg="white", font=("Segoe UI", 9, "bold"), 
-              relief="flat", command=remove_blacklist_item).pack(side="right", padx=5)
-    
-    tk.Button(bl_btn_frame, text="Aktualisieren", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 9), 
-              relief="flat", command=refresh_blacklist).pack(side="right", padx=5)
+    tk.Button(
+        setup_row,
+        text="Datenbank-Setup starten",
+        command=do_database_setup,
+        bg=COLOR_HIGHLIGHT,
+        fg="white",
+        activebackground="#287fc0",
+        relief="flat",
+        font=("Segoe UI", 9, "bold"),
+        padx=15,
+        pady=8,
+    ).pack(side="left")
 
-    refresh_blacklist()
+    def add_path_picker(label, key):
+        row = tk.Frame(paths_section, bg=COLOR_CARD)
+        row.pack(fill="x", pady=5)
+        tk.Label(
+            row,
+            text=label,
+            bg=COLOR_CARD,
+            fg=COLOR_TEXT,
+            font=("Segoe UI", 9, "bold"),
+            width=31,
+            anchor="w",
+        ).pack(side="left")
+        variable = tk.StringVar(value=str(CONFIG.get(key, "")))
+        settings_vars[key] = variable
+        tk.Entry(
+            row,
+            textvariable=variable,
+            bg="#111a22",
+            fg=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
+            relief="flat",
+        ).pack(side="left", fill="x", expand=True, ipady=7, padx=(8, 8))
 
-    # --- KATEGORIE 4: WARTUNG & BACKUPS ---
-    cat4 = CollapsiblePane(db_container, "Wartung & Backups", expanded=False)
-    cat4.pack(fill="x", pady=5, padx=5)
-            
-    # Reminder
-    tk.Label(cat4.frame, text="⚠️ WICHTIG: Bitte erstellen Sie regelmäßig Backups!",
-             font=("Segoe UI", 10, "bold"), fg="#e74c3c", bg=COLOR_PRIMARY).pack(pady=(0, 10), anchor="w")
+        def choose_path():
+            selected = filedialog.askdirectory(
+                parent=root, initialdir=variable.get() or BASE_DIR
+            )
+            if selected:
+                variable.set(selected)
 
-    # Backup Liste
-    backup_list_frame = tk.LabelFrame(cat4.frame, text="Verfügbare Backups", bg=COLOR_PRIMARY, fg=COLOR_TEXT)
-    backup_list_frame.pack(fill="x", pady=5, padx=10)
-    
-    backup_listbox = tk.Listbox(backup_list_frame, height=5, bg=COLOR_SECONDARY, fg="white", relief="flat")
-    backup_listbox.pack(side="left", fill="x", expand=True, padx=5, pady=5)
-    
-    backup_scroll = tk.Scrollbar(backup_list_frame, command=backup_listbox.yview)
-    backup_scroll.pack(side="right", fill="y", pady=5)
-    backup_listbox.config(yscrollcommand=backup_scroll.set)
+        tk.Button(
+            row,
+            text="Durchsuchen",
+            command=choose_path,
+            bg=COLOR_SECONDARY,
+            fg=COLOR_TEXT,
+            relief="flat",
+            padx=12,
+            pady=7,
+        ).pack(side="right")
+
+    add_path_picker("Patienten-Ordner", "PATIENT_BASE_DIR")
+    add_path_picker("Archiv-Ordner", "ARCHIVE_DIR")
+
+    integrations = add_section(
+        "Integrationen",
+        "Zugangsdaten für den Teamup-Kalender.",
+    )
+    add_config_entry(integrations, "Teamup API Key", "TEAMUP_API_KEY", settings_vars, "*")
+    add_config_entry(integrations, "Teamup Calendar ID", "TEAMUP_CALENDAR_ID", settings_vars)
+
+    defaults = add_section(
+        "Standardwerte & Tastenkürzel",
+        "Voreinstellungen für neue Datensätze, Beträge, Aktionen und den Teamup-Zeitraum.",
+    )
+    add_config_entry(defaults, "Standard Diagnose", "DEFAULT_DIAGNOSE", settings_vars)
+    add_config_entry(defaults, "Standard Anrede", "DEFAULT_ANREDE", settings_vars)
+    add_config_entry(
+        defaults, "Schnellwahl-Beträge (Komma-getrennt)", "QUICK_AMOUNTS", settings_vars
+    )
+    add_config_entry(defaults, "Fixe Adresse für KM-Berechnung", "FIXED_ADDRESS", settings_vars)
+    add_config_entry(defaults, "Hotkey Hauptaktion", "HOTKEY_ENTER", settings_vars)
+    add_config_entry(defaults, "Hotkey Tab-Wechsel", "HOTKEY_SWITCH_TAB", settings_vars)
+
+    date_row = tk.Frame(defaults, bg=COLOR_CARD)
+    date_row.pack(fill="x", pady=5)
+    tk.Label(
+        date_row,
+        text="Datumsmodus für Teamup",
+        bg=COLOR_CARD,
+        fg=COLOR_TEXT,
+        font=("Segoe UI", 9, "bold"),
+        width=31,
+        anchor="w",
+    ).pack(side="left")
+    date_mode = tk.StringVar(value=CONFIG.get("AUTO_DATE_SELECTOR", "Auto"))
+    settings_vars["AUTO_DATE_SELECTOR"] = date_mode
+    ttk.Combobox(
+        date_row,
+        textvariable=date_mode,
+        values=("Auto", "Manual"),
+        state="readonly",
+        width=14,
+    ).pack(side="left", padx=(8, 0), ipady=3)
+    manual_dates = tk.Frame(defaults, bg=COLOR_CARD)
+    manual_dates.pack(fill="x", pady=5)
+    tk.Label(
+        manual_dates,
+        text="Manueller Zeitraum (YYYY-MM-DD)",
+        bg=COLOR_CARD,
+        fg=COLOR_TEXT,
+        font=("Segoe UI", 9, "bold"),
+        width=31,
+        anchor="w",
+    ).pack(side="left")
+    manual_start = tk.StringVar(value=CONFIG.get("MANUAL_DATE_START", ""))
+    manual_end = tk.StringVar(value=CONFIG.get("MANUAL_DATE_END", ""))
+    settings_vars["MANUAL_DATE_START"] = manual_start
+    settings_vars["MANUAL_DATE_END"] = manual_end
+    tk.Entry(
+        manual_dates,
+        textvariable=manual_start,
+        width=15,
+        bg="#111a22",
+        fg=COLOR_TEXT,
+        insertbackground=COLOR_TEXT,
+        relief="flat",
+    ).pack(side="left", padx=(8, 5), ipady=7)
+    tk.Label(manual_dates, text="bis", bg=COLOR_CARD, fg=COLOR_MUTED).pack(side="left")
+    tk.Entry(
+        manual_dates,
+        textvariable=manual_end,
+        width=15,
+        bg="#111a22",
+        fg=COLOR_TEXT,
+        insertbackground=COLOR_TEXT,
+        relief="flat",
+    ).pack(side="left", padx=5, ipady=7)
+
+    documents = add_section(
+        "Dokumente & Companion",
+        "Vertragsdateien für die Companion-App und das Druckformular für Materialbestellungen verwalten.",
+    )
+    contract_dir = get_contract_directory(CONFIG.get("COMPANION_CONTRACTS_DIR"))
+    contract_files = []
+    contract_status = tk.StringVar(
+        value=f"Speicherort: {contract_dir}\nNoch keine neuen Dateien ausgewählt."
+    )
+    tk.Label(
+        documents,
+        text="Verträge (.json)",
+        bg=COLOR_CARD,
+        fg=COLOR_TEXT,
+        font=("Segoe UI", 10, "bold"),
+    ).pack(anchor="w")
+    tk.Label(
+        documents,
+        textvariable=contract_status,
+        bg=COLOR_CARD,
+        fg=COLOR_MUTED,
+        font=("Segoe UI", 9),
+        justify="left",
+        anchor="w",
+        wraplength=800,
+    ).pack(fill="x", pady=(4, 8))
+
+    def choose_contract_files():
+        selected = filedialog.askopenfilenames(
+            parent=root,
+            title="Vertrags-JSON-Dateien auswählen",
+            filetypes=(("JSON-Dateien", "*.json"),),
+        )
+        if not selected:
+            return
+        try:
+            read_contract_files(selected)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Verträge", str(error), parent=root)
+            return
+        contract_files[:] = list(selected)
+        filenames = "\n".join(os.path.basename(path) for path in contract_files)
+        contract_status.set(f"Ausgewählt:\n{filenames}")
+
+    tk.Button(
+        documents,
+        text="JSON-Verträge auswählen",
+        command=choose_contract_files,
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        relief="flat",
+        padx=13,
+        pady=8,
+    ).pack(anchor="w")
+
+    tk.Frame(documents, bg="#344654", height=1).pack(fill="x", pady=16)
+    tk.Label(
+        documents,
+        text="Druckformular für Materialbestellungen (PDF)",
+        bg=COLOR_CARD,
+        fg=COLOR_TEXT,
+        font=("Segoe UI", 10, "bold"),
+    ).pack(anchor="w")
+    template_var = tk.StringVar(value=CONFIG.get("MATERIAL_ORDER_TEMPLATE", ""))
+    settings_vars["MATERIAL_ORDER_TEMPLATE"] = template_var
+    template_row = tk.Frame(documents, bg=COLOR_CARD)
+    template_row.pack(fill="x", pady=(7, 0))
+    tk.Entry(
+        template_row,
+        textvariable=template_var,
+        bg="#111a22",
+        fg=COLOR_TEXT,
+        insertbackground=COLOR_TEXT,
+        relief="flat",
+    ).pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 8))
+
+    def choose_template():
+        selected = filedialog.askopenfilename(
+            parent=root,
+            title="Druckformular-PDF auswählen",
+            filetypes=(("PDF-Dateien", "*.pdf"),),
+        )
+        if not selected:
+            return
+        try:
+            template_var.set(validate_material_order_template(selected))
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Druckformular", str(error), parent=root)
+
+    tk.Button(
+        template_row,
+        text="PDF auswählen",
+        command=choose_template,
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        relief="flat",
+        padx=13,
+        pady=7,
+    ).pack(side="right")
+
+    maintenance = add_section(
+        "Wartung & Backups",
+        "Erstellen Sie regelmäßig Datenbank-Backups. Ein vorhandenes Backup kann hier wiederhergestellt werden.",
+    )
+    backup_list = tk.Listbox(
+        maintenance,
+        height=5,
+        bg="#111a22",
+        fg=COLOR_TEXT,
+        selectbackground=COLOR_HIGHLIGHT,
+        relief="flat",
+        highlightthickness=0,
+        font=("Segoe UI", 9),
+    )
+    backup_list.pack(fill="x", pady=(0, 10))
 
     def refresh_backups():
-        backup_listbox.delete(0, tk.END)
+        backup_list.delete(0, tk.END)
         backup_dir = os.path.join(BASE_DIR, "backups")
-        if os.path.exists(backup_dir):
-            try:
-                files = sorted([f for f in os.listdir(backup_dir) if f.endswith(".db")], reverse=True)
-                for f in files:
-                    backup_listbox.insert(tk.END, f)
-            except Exception as e:
-                print(f"Fehler beim Listen der Backups: {e}")
+        try:
+            filenames = sorted(
+                (filename for filename in os.listdir(backup_dir) if filename.endswith(".db")),
+                reverse=True,
+            )
+        except FileNotFoundError:
+            filenames = []
+        except OSError as error:
+            messagebox.showerror(
+                "Backups", f"Backups konnten nicht geladen werden:\n{error}", parent=root
+            )
+            return
+        for filename in filenames:
+            backup_list.insert(tk.END, filename)
 
     def create_backup():
-        db_path = os.path.join(BASE_DIR, "patienten.db")
-        if not os.path.exists(db_path):
-            messagebox.showerror("Fehler", "Datenbank nicht gefunden.")
+        database_path = os.path.join(BASE_DIR, "patienten.db")
+        if not os.path.exists(database_path):
+            messagebox.showerror("Fehler", "Datenbank nicht gefunden.", parent=root)
             return
-        
         backup_dir = os.path.join(BASE_DIR, "backups")
-        os.makedirs(backup_dir, exist_ok=True)
-        
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = os.path.join(backup_dir, f"patienten_backup_{timestamp}.db")
-        
         try:
-            shutil.copy2(db_path, backup_path)
-            messagebox.showinfo("Backup", f"Backup erfolgreich erstellt:\n{backup_path}")
+            os.makedirs(backup_dir, exist_ok=True)
+            shutil.copy2(database_path, backup_path)
+            messagebox.showinfo(
+                "Backup", f"Backup erfolgreich erstellt:\n{backup_path}", parent=root
+            )
             refresh_backups()
-        except Exception as e:
-            messagebox.showerror("Fehler", f"Backup fehlgeschlagen: {e}")
+        except OSError as error:
+            messagebox.showerror(
+                "Fehler", f"Backup fehlgeschlagen:\n{error}", parent=root
+            )
 
     def restore_backup():
-        selection = backup_listbox.curselection()
+        selection = backup_list.curselection()
         if not selection:
-            messagebox.showwarning("Auswahl", "Bitte wählen Sie ein Backup aus der Liste.")
+            messagebox.showwarning(
+                "Auswahl", "Bitte wählen Sie ein Backup aus der Liste.", parent=root
+            )
             return
-        
-        filename = backup_listbox.get(selection[0])
+        filename = backup_list.get(selection[0])
+        if not messagebox.askyesno(
+            "Wiederherstellen",
+            f"Die Datenbank wirklich auf '{filename}' zurücksetzen?\n\n"
+            "Alle Änderungen seit diesem Backup gehen verloren.",
+            parent=root,
+        ):
+            return
         backup_path = os.path.join(BASE_DIR, "backups", filename)
-        db_path = os.path.join(BASE_DIR, "patienten.db")
-        
-        if messagebox.askyesno("Wiederherstellen", f"ACHTUNG: Möchten Sie die Datenbank wirklich auf den Stand von '{filename}' zurücksetzen?\n\nAlle Änderungen seit diesem Backup gehen verloren!"):
+        database_path = os.path.join(BASE_DIR, "patienten.db")
+        try:
+            shutil.copy2(backup_path, database_path)
+            messagebox.showinfo(
+                "Erfolg", "Datenbank wurde erfolgreich wiederhergestellt.", parent=root
+            )
+        except OSError as error:
+            messagebox.showerror(
+                "Fehler", f"Wiederherstellung fehlgeschlagen:\n{error}", parent=root
+            )
+
+    backup_buttons = tk.Frame(maintenance, bg=COLOR_CARD)
+    backup_buttons.pack(fill="x")
+    tk.Button(
+        backup_buttons,
+        text="Backup erstellen",
+        command=create_backup,
+        bg=COLOR_ACCENT,
+        fg="white",
+        relief="flat",
+        padx=14,
+        pady=8,
+    ).pack(side="left", padx=(0, 8))
+    tk.Button(
+        backup_buttons,
+        text="Ausgewähltes wiederherstellen",
+        command=restore_backup,
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        relief="flat",
+        padx=14,
+        pady=8,
+    ).pack(side="left")
+    refresh_backups()
+
+    support = add_section(
+        "Support & Updates",
+        f"LeprendiX Version {version}. Dokumentation und aktuelle Informationen finden Sie online.",
+    )
+
+    def open_url(url):
+        try:
+            webbrowser.open(url)
+        except Exception as error:
+            messagebox.showerror("Browser", f"Link konnte nicht geöffnet werden:\n{error}", parent=root)
+
+    support_buttons = tk.Frame(support, bg=COLOR_CARD)
+    support_buttons.pack(anchor="w")
+    tk.Button(
+        support_buttons,
+        text="Online-Dokumentation",
+        command=lambda: open_url("https://github.com/qztq/LeprendiX"),
+        bg=COLOR_HIGHLIGHT,
+        fg="white",
+        relief="flat",
+        padx=14,
+        pady=8,
+    ).pack(side="left", padx=(0, 8))
+    tk.Button(
+        support_buttons,
+        text="Support / Fehler melden",
+        command=lambda: open_url("https://github.com/qztq/LeprendiX/issues"),
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        relief="flat",
+        padx=14,
+        pady=8,
+    ).pack(side="left", padx=(0, 8))
+    tk.Button(
+        support_buttons,
+        text="Auf Updates prüfen",
+        command=lambda: open_url("https://github.com/qztq/LeprendiX/releases"),
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        relief="flat",
+        padx=14,
+        pady=8,
+    ).pack(side="left")
+
+    save_row = tk.Frame(settings_content, bg=COLOR_PRIMARY)
+    save_row.pack(fill="x", pady=(1, 16))
+
+    def save_settings():
+        updated_config = dict(CONFIG)
+        for key, variable in settings_vars.items():
+            updated_config[key] = variable.get().strip()
+        template_path = updated_config.get("MATERIAL_ORDER_TEMPLATE", "")
+        if template_path:
             try:
-                shutil.copy2(backup_path, db_path)
-                messagebox.showinfo("Erfolg", "Datenbank wurde erfolgreich wiederhergestellt.")
-            except Exception as e:
-                messagebox.showerror("Fehler", f"Wiederherstellung fehlgeschlagen: {e}")
+                updated_config["MATERIAL_ORDER_TEMPLATE"] = (
+                    validate_material_order_template(template_path)
+                )
+            except (OSError, ValueError) as error:
+                messagebox.showerror("Druckformular", str(error), parent=root)
+                return
+        else:
+            updated_config.pop("MATERIAL_ORDER_TEMPLATE", None)
+
+        try:
+            if contract_files:
+                destination = get_contract_directory(
+                    updated_config.get("COMPANION_CONTRACTS_DIR")
+                )
+                save_contract_files(contract_files, destination)
+                updated_config["COMPANION_CONTRACTS_DIR"] = str(destination)
+
+            config_path = os.path.join(BASE_DIR, "config.json")
+            with open(config_path, "w", encoding="utf-8") as config_file:
+                json.dump(updated_config, config_file, ensure_ascii=False, indent=4)
+            CONFIG.clear()
+            CONFIG.update(updated_config)
+            contract_files.clear()
+            contract_status.set(
+                f"Speicherort: {get_contract_directory(CONFIG.get('COMPANION_CONTRACTS_DIR'))}"
+                "\nEinstellungen gespeichert."
+            )
+            messagebox.showinfo(
+                "Gespeichert", "Einstellungen wurden gespeichert.", parent=root
+            )
+        except (OSError, ValueError) as error:
+            logging.exception("Einstellungen konnten nicht gespeichert werden.")
+            messagebox.showerror(
+                "Speichern fehlgeschlagen",
+                f"Einstellungen konnten nicht gespeichert werden:\n{error}",
+                parent=root,
+            )
+
+    tk.Button(
+        save_row,
+        text="ÄNDERUNGEN SPEICHERN",
+        command=save_settings,
+        bg=COLOR_ACCENT,
+        fg="white",
+        activebackground="#23956b",
+        relief="flat",
+        font=("Segoe UI", 10, "bold"),
+        padx=20,
+        pady=11,
+    ).pack(side="right")
 
     def open_app_dir():
         try:
-            os.startfile(BASE_DIR) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', BASE_DIR])
-        except Exception as e:
-            messagebox.showerror("Fehler", f"Konnte Ordner nicht öffnen: {e}")
+            if sys.platform == "win32":
+                os.startfile(BASE_DIR)
+            else:
+                subprocess.Popen(["xdg-open", BASE_DIR])
+        except (OSError, AttributeError) as error:
+            messagebox.showerror(
+                "Ordner", f"Programmordner konnte nicht geöffnet werden:\n{error}", parent=root
+            )
 
     def open_log_dir():
-        app_name = "LeprendiX"
         if sys.platform == "win32":
-            base_path = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA") or os.path.expanduser("~")
+            base_path = (
+                os.getenv("LOCALAPPDATA")
+                or os.getenv("APPDATA")
+                or os.path.expanduser("~")
+            )
         else:
             base_path = os.path.join(os.path.expanduser("~"), ".local", "share")
-        
-        log_dir = os.path.join(base_path, app_name, "logs")
-        
-        if os.path.exists(log_dir):
-            try:
-                os.startfile(log_dir) if sys.platform == 'win32' else subprocess.Popen(['xdg-open', log_dir])
-            except Exception as e:
-                messagebox.showerror("Fehler", f"Konnte Log-Ordner nicht öffnen: {e}")
-        else:
-            messagebox.showinfo("Info", f"Log-Ordner existiert noch nicht:\n{log_dir}")
+        log_dir = os.path.join(base_path, "LeprendiX", "logs")
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            if sys.platform == "win32":
+                os.startfile(log_dir)
+            else:
+                subprocess.Popen(["xdg-open", log_dir])
+        except (OSError, AttributeError) as error:
+            messagebox.showerror(
+                "Logs", f"Log-Ordner konnte nicht geöffnet werden:\n{error}", parent=root
+            )
 
-    btn_frame = tk.Frame(cat4.frame, bg=COLOR_PRIMARY)
-    btn_frame.pack(pady=5)
-    tk.Button(btn_frame, text="Backup erstellen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=create_backup, padx=15, pady=5).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Backup wiederherstellen", bg="#e67e22", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=restore_backup, padx=15, pady=5).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Ordner öffnen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_app_dir, padx=15, pady=5).pack(side="left", padx=5)
-    tk.Button(btn_frame, text="Logs öffnen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_log_dir, padx=15, pady=5).pack(side="left", padx=5)
+    tools_row = tk.Frame(support, bg=COLOR_CARD)
+    tools_row.pack(anchor="w", pady=(10, 0))
+    tk.Button(
+        tools_row,
+        text="Programmordner öffnen",
+        command=open_app_dir,
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        relief="flat",
+        padx=14,
+        pady=8,
+    ).pack(side="left", padx=(0, 8))
+    tk.Button(
+        tools_row,
+        text="Log-Ordner öffnen",
+        command=open_log_dir,
+        bg=COLOR_SECONDARY,
+        fg=COLOR_TEXT,
+        relief="flat",
+        padx=14,
+        pady=8,
+    ).pack(side="left")
 
-    refresh_backups()
-
-    # --- KATEGORIE 5: INFO & SUPPORT ---
-    cat5 = CollapsiblePane(db_container, "Informationen & Support", expanded=False)
-    cat5.pack(fill="x", pady=5, padx=5)
-    
-    try:
-        with open("version.txt", "r") as f:
-            ver = f.read().strip()
-    except:
-        ver = "Unbekannt (Dev)"
-        
-    tk.Label(cat5.frame, text=f"Version: {ver}", fg="#bdc3c7", bg=COLOR_PRIMARY, font=("Segoe UI", 10)).pack(pady=5)
-    
-    def open_support():
-        webbrowser.open("https://github.com/qztq/LeprendiX/issues")
-
-    def open_releases():
-        webbrowser.open("https://github.com/qztq/LeprendiX/releases")
-        
-    def trigger_crash():
-        # Simuliert einen Absturz, um den Handler zu testen
-        raise RuntimeError("Dies ist ein manuell ausgelöster Test-Absturz!")
-        
-    support_frame = tk.Frame(cat5.frame, bg=COLOR_PRIMARY)
-    support_frame.pack(pady=10)
-    tk.Button(support_frame, text="Support / Fehler melden", bg=COLOR_ACCENT, fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=open_support, padx=20, pady=5).pack(side="left", padx=5)
-    tk.Button(support_frame, text="Auf Updates prüfen", bg=COLOR_SECONDARY, fg="white", font=("Segoe UI", 10), relief="flat", command=open_releases, padx=20, pady=5).pack(side="left", padx=5)
-    tk.Button(support_frame, text="Crash Test 💥", bg="#c0392b", fg="white", font=("Segoe UI", 10, "bold"), relief="flat", command=trigger_crash, padx=20, pady=5).pack(side="left", padx=5)
-
-    # --- TAB 3: DOKUMENTATION ---
-    t3 = tk.Frame(nb, bg=COLOR_PRIMARY)
-    nb.add(t3, text="  DOKUMENTATION  ")
-
-    # --- Sidebar für Navigation & Suche ---
-    sidebar = tk.Frame(t3, bg=COLOR_SECONDARY, width=300)
-    sidebar.pack(side="left", fill="y", padx=(10, 0), pady=10)
-    sidebar.pack_propagate(False)
-
-    # Sucheingabe
-    tk.Label(sidebar, text="Suche:", bg=COLOR_SECONDARY, fg=COLOR_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 5))
-    search_var = tk.StringVar()
-    search_entry = tk.Entry(sidebar, textvariable=search_var, bg=COLOR_PRIMARY, fg="white", insertbackground="white", relief="flat")
-    search_entry.pack(fill="x", padx=10, pady=(0, 10))
-
-    # Liste der Kapitel
-    tk.Label(sidebar, text="Inhalt:", bg=COLOR_SECONDARY, fg=COLOR_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(5, 5))
-    
-    # Listbox mit Scrollbar
-    list_frame = tk.Frame(sidebar, bg=COLOR_SECONDARY)
-    list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-    
-    nav_scroll = tk.Scrollbar(list_frame)
-    nav_scroll.pack(side="right", fill="y")
-    
-    nav_list = tk.Listbox(list_frame, bg=COLOR_PRIMARY, fg=COLOR_TEXT, selectbackground=COLOR_ACCENT, 
-                          selectforeground="white", relief="flat", yscrollcommand=nav_scroll.set, font=("Segoe UI", 10))
-    nav_list.pack(side="left", fill="both", expand=True)
-    nav_scroll.config(command=nav_list.yview)
-
-    # --- Content Bereich ---
-    content_f = tk.Frame(t3, bg=COLOR_PRIMARY)
-    content_f.pack(side="right", fill="both", expand=True, padx=10, pady=10)
-
-    scroll = tk.Scrollbar(content_f)
-    scroll.pack(side="right", fill="y")
-
-    doc_t = tk.Text(content_f, wrap="word", padx=30, pady=30, font=("Segoe UI", 11), 
-                    bg=COLOR_SECONDARY, fg=COLOR_TEXT, relief="flat", yscrollcommand=scroll.set)
-    doc_t.pack(fill="both", expand=True)
-    scroll.config(command=doc_t.yview)
-
-    # --- Dokumentations-Inhalt ---
-    sections = [
-        ("1. Einleitung", "SEC_1", 
-         "Willkommen bei LeprendiX – Ihrer Lösung für Patientenverwaltung und Honorarnotenerstellung.\n"
-         "Diese Software wurde entwickelt, um den administrativen Aufwand zu minimieren, indem sie Patientenstammdaten, "
-         "Leistungserfassung (inkl. Teamup-Kalender-Import) und Rechnungslegung in einer Oberfläche vereint.\n\n"),
-        
-        ("2. Installation & Setup", "SEC_2", 
-         "Nach der Installation muss die Anwendung einmalig eingerichtet werden:\n"
-         "1. Starten Sie das Programm und melden Sie sich im 'Control Center' an.\n"
-         "2. Wechseln Sie in den Tab 'EINSTELLUNGEN'.\n"
-         "3. Führen Sie das 'Datenbank Setup' aus (Passwort erforderlich).\n"
-         "4. Konfigurieren Sie die Pfade für 'Patienten-Ordner' (Speicherort der Honorarnoten) und 'Archiv-Ordner'.\n\n"),
-        
-        ("3. Patientenverwaltung", "SEC_3", 
-         "Im Tab 'Patienten Verwalten' pflegen Sie Ihre Datenbank:\n"
-         "- Neuer Patient: Füllen Sie alle Felder aus und klicken Sie auf 'Patient Hinzufügen'.\n"
-         "- Bearbeiten: Suchen Sie einen Patienten, laden Sie ihn, ändern Sie Daten und klicken Sie auf 'Patient Aktualisieren'.\n"
-         "- Löschen: Ein geladener Patient kann inkl. aller Leistungen unwiderruflich gelöscht werden.\n"
-         "Hinweis: Das System prüft auf Duplikate basierend auf Vorname, Nachname und PLZ.\n\n"),
-        
-        ("4. Leistungen & Teamup-Import", "SEC_4", 
-         "Leistungen werden im Tab 'Leistungen Hinzufügen/Prüfen' erfasst:\n"
-         "- Manuell: Datum, Uhrzeit und Betrag eingeben.\n"
-         "- Stammdaten: Nutzen Sie die Schnellwahl-Buttons für häufige Leistungen (konfigurierbar in Tab 4).\n"
-         "- Teamup-Import: Klicken Sie auf 'Teamup-Termine Importieren'. Das System sucht nach Terminen basierend auf dem Patientennamen.\n"
-         "  Wichtig: Wählen Sie vorher die gewünschten Leistungsarten (Buttons) aus, die den importierten Terminen zugewiesen werden sollen.\n"
-         "  Kilometergeld wird automatisch basierend auf den Patientendaten addiert.\n\n"),
-        
-        ("5. Honorarnote Generieren", "SEC_5", 
-         "Der Prozess der Rechnungslegung:\n"
-         "1. Suchen und wählen Sie den Patienten im Tab 'Honorarnote Generieren'.\n"
-         "2. Prüfen Sie die angezeigten Daten.\n"
-         "3. Wählen Sie das Rechnungsdatum (Monat/Jahr).\n"
-         "4. BHAG-Nummer: Die fortlaufende Nummer wird automatisch generiert, kann aber manuell korrigiert werden.\n"
-         "5. Klicken Sie auf 'Speichern & Öffnen' (Word) oder 'Speichern & Drucken'.\n"
-         "Nach erfolgreichem Druck wird der Status des Patienten im System auf 'Abgerechnet' (Grün) gesetzt.\n\n"),
-        
-        ("6. Status-Checker & Archivierung", "SEC_6", 
-         "Der 'Status-Checker' (aufrufbar über Tab 1) bietet eine Übersicht:\n"
-         "- Rot: Offene Leistungen / Noch nicht abgerechnet.\n"
-         "- Grün: Honorarnote wurde erstellt.\n"
-         "Funktionen:\n"
-         "- Archivieren: Verschiebt den Ordner des Patienten in das Archiv-Verzeichnis und entfernt ihn aus der aktiven Datenbank.\n"
-         "- Reset: Setzt alle Statusanzeigen zurück auf Rot (z.B. für einen neuen Abrechnungszeitraum).\n\n"),
-        
-        ("7. Stammdatenverwaltung", "SEC_7", 
-         "Im Tab 'Stammdaten Leistungen' definieren Sie Ihre Standard-Leistungen.\n"
-         "Diese erscheinen als Buttons im Leistungs-Tab. Ein Kurzname, eine Beschreibung (für die Rechnung) und ein Standardbetrag sind erforderlich.\n\n"),
-        
-        ("8. Technische Hinweise", "SEC_8", 
-         "Konfigurationsdateien:\n"
-         "- config.json: Speichert Pfade.\n"
-         "- credentials.dat: Verschlüsselte Login-Daten.\n"
-         "- patienten.db: SQLite Datenbank.\n"
-         "Updates: Beim Start prüft der Launcher automatisch auf neue Versionen via GitHub.\n\n"),
-        
-        ("9. Release Notes", "SEC_9", 
-         "Lade Release Notes von GitHub...\n")
-    ]
-
-    title_to_tag = {}
-
-    for title, tag, content in sections:
-        doc_t.insert(tk.END, title + "\n", ("heading", tag))
-        doc_t.insert(tk.END, content, ("content",))
-        title_to_tag[title] = tag
-        nav_list.insert(tk.END, title)
-
-    doc_t.tag_configure("heading", font=("Segoe UI", 14, "bold"), foreground=COLOR_ACCENT, spacing3=10)
-    doc_t.tag_configure("content", spacing1=5, spacing3=15)
-    doc_t.config(state="disabled")
-
-    def on_nav_select(event):
-        selection = nav_list.curselection()
-        if selection:
-            title = nav_list.get(selection[0])
-            tag = title_to_tag.get(title)
-            if tag:
-                doc_t.see(f"{tag}.first")
-
-    nav_list.bind('<<ListboxSelect>>', on_nav_select)
-
-    def filter_list(*args):
-        search_term = search_var.get().lower()
-        nav_list.delete(0, tk.END)
-        for title, _, _ in sections:
-            if search_term in title.lower():
-                nav_list.insert(tk.END, title)
-
-    search_var.trace_add("write", filter_list)
-
-    # --- Release Notes Lade-Logik ---
-    def fetch_and_display_releases_threaded():
-        def fetch():
-            content = get_release_notes()
-            # Schedule the UI update in the main thread
-            if doc_t.winfo_exists():
-                doc_t.after(0, update_ui, content)
-
-        def update_ui(content):
-            try:
-                doc_t.config(state="normal")
-                
-                # Tag für die Überschrift der Release Notes
-                heading_tag = "SEC_9"
-                
-                # Finde den Start der Überschrift
-                heading_start_index = doc_t.tag_ranges(heading_tag)[0]
-                # Der Inhalt beginnt auf der nächsten Zeile
-                content_start_index = doc_t.index(f"{heading_start_index} + 1 lines linestart")
-                
-                # Finde das Ende des Inhaltsbereichs für diesen Abschnitt
-                next_heading_pos = doc_t.tag_nextrange("heading", content_start_index)
-                
-                if next_heading_pos:
-                    content_end_index = next_heading_pos[0]
-                else:
-                    content_end_index = tk.END
-
-                # Lösche den Platzhalter-Inhalt
-                doc_t.delete(content_start_index, content_end_index)
-                
-                # Füge den neuen Inhalt ein
-                doc_t.insert(content_start_index, content, ("content",))
-                
-            except (IndexError, tk.TclError):
-                print("Konnte Release Notes Sektion nicht aktualisieren (Fenster geschlossen?).")
-            finally:
-                if doc_t.winfo_exists():
-                    doc_t.config(state="disabled")
-
-        threading.Thread(target=fetch, daemon=True).start()
-
-    # Starte das Laden der Release Notes im Hintergrund
-    fetch_and_display_releases_threaded()
-
-    # --- AUTO-BACKUP ON EXIT ---
     def on_closing():
-        # Automatisches Backup beim Schließen
-        if messagebox.askyesno("Backup", "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?"):
-            db_path = os.path.join(BASE_DIR, "patienten.db")
-            if os.path.exists(db_path):
+        if messagebox.askyesno(
+            "Backup",
+            "Möchten Sie vor dem Beenden ein automatisches Backup erstellen?",
+            parent=root,
+        ):
+            database_path = os.path.join(BASE_DIR, "patienten.db")
+            if os.path.exists(database_path):
                 try:
                     backup_dir = os.path.join(BASE_DIR, "backups")
                     os.makedirs(backup_dir, exist_ok=True)
-                    # Wir behalten nur die letzten 5 Auto-Backups, um Platz zu sparen? 
-                    # Hier erstmal einfaches Backup mit Timestamp
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    backup_path = os.path.join(backup_dir, f"autobackup_{timestamp}.db")
-                    shutil.copy2(db_path, backup_path)
-                    print(f"[AutoBackup] Backup erstellt: {backup_path}")
-                except Exception as e:
-                    print(f"[AutoBackup] Fehler: {e}")
+                    backup_path = os.path.join(
+                        backup_dir, f"autobackup_{timestamp}.db"
+                    )
+                    shutil.copy2(database_path, backup_path)
+                    logging.info("Automatisches Backup erstellt: %s", backup_path)
+                except OSError as error:
+                    logging.exception("Automatisches Backup fehlgeschlagen.")
+                    messagebox.showerror(
+                        "Backup fehlgeschlagen", str(error), parent=root
+                    )
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
-    root.deiconify() # Fenster jetzt anzeigen (fertig geladen)
+    root.deiconify()
     root.mainloop()
+
 
 if __name__ == "__main__":
     if "--crash-handler" in sys.argv:
