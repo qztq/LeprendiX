@@ -104,20 +104,21 @@ npx cap add android
 npx cap sync android
 ```
 
-To create a debug APK, increment the Android version code and prepare the build.
-The app version is read automatically from `version.txt`:
+To create a debug APK, set the app version and Android version code manually,
+then prepare and build:
 
 ```powershell
-$versionCode = [int]((Select-String .\android\app\build.gradle '^\s*versionCode\s+(\d+)\s*$').Matches[0].Groups[1].Value) + 1
-npm run android:prepare -- --version-code $versionCode
+$versionName = "2.1.2"
+$versionCode = 5
+npm run android:prepare -- --version-code $versionCode --version-name $versionName
 .\android\gradlew.bat -p .\android assembleDebug
 ```
 
-`android:prepare` writes the incremented code back to the local Gradle file, so
-the next build will increment it again. The Android project is not checked in;
-when creating a fresh Android project, first set its `versionCode` to the latest
-code used for a distributed APK. Android requires each update's code to be
-higher than the previous one.
+Replace `2.1.2` with the app version and set `versionCode` to a number higher
+than the previous distributed APK; Android requires each update's code to
+increase. `android:prepare` writes these values to the local Gradle file. The
+Android project is not checked in, so when creating a fresh project, start with
+the latest distributed `versionCode`.
 
 The debug APK is written to
 `android/app/build/outputs/apk/debug/app-debug.apk`. For release signing,
