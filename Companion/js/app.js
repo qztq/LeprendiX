@@ -87,6 +87,7 @@ class CompanionApp {
     this.showFirstRunWizard();
     window.setTimeout(() => this.checkForUpdatesMonthly(), 2000);
     window.addEventListener('online', () => this.checkForUpdatesMonthly());
+    this.startWidgetActionPolling();
 
     // Startansicht: Standardmäßig das Dashboard anzeigen (Punkt 1)
     this.switchView('dashboard');
@@ -604,6 +605,21 @@ class CompanionApp {
     } else if (mode === 'admin') {
       this.populateAdminData();
     }
+  }
+
+  startWidgetActionPolling() {
+    window.setInterval(() => {
+      const widgetBridge = window.LeprendiXWidget;
+      if (widgetBridge && widgetBridge.consumeCreatePatientRequest()) {
+        this.startNewPatient();
+      }
+    }, 500);
+  }
+
+  startNewPatient() {
+    this.resetForm();
+    this.switchView('patient');
+    this.renderStep(1);
   }
 
   getUnsyncedRecords() {
@@ -1669,13 +1685,7 @@ class CompanionApp {
   setupEventListeners() {
     // Dashboard Aktionen (Punkt 1)
     const btnNewPat = document.getElementById('btnDashNewPatient');
-    if (btnNewPat) {
-      btnNewPat.onclick = () => {
-        this.resetForm();
-        this.switchView('patient');
-        this.renderStep(1);
-      };
-    }
+    if (btnNewPat) btnNewPat.onclick = () => this.startNewPatient();
 
     const btnScanQr = document.getElementById('btnDashScanQr');
     if (btnScanQr) btnScanQr.onclick = () => this.openQrScanner();
