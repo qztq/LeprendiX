@@ -108,8 +108,8 @@ To create a debug APK, set the app version and Android version code manually,
 then prepare and build:
 
 ```powershell
-$versionName = "2.1.2"
-$versionCode = 5
+$versionName = "2.1.3"
+$versionCode = 6
 npm run android:prepare -- --version-code $versionCode --version-name $versionName
 .\android\gradlew.bat -p .\android assembleDebug
 ```
