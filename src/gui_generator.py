@@ -1780,10 +1780,21 @@ class HonorarGeneratorApp:
 
         win = tk.Toplevel(self.root)
         win.title("Stammdaten-Leistung für importierte Patienten")
-        win.geometry("760x650")
+        screen_width = win.winfo_screenwidth()
+        screen_height = win.winfo_screenheight()
+        window_width = min(900, max(600, screen_width - 80))
+        window_height = min(760, max(400, screen_height - 80))
+        window_x = max(0, (screen_width - window_width) // 2)
+        window_y = max(0, (screen_height - window_height) // 2)
+        win.geometry(
+            f"{window_width}x{window_height}+{window_x}+{window_y}"
+        )
         win.transient(self.root)
         win.grab_set()
         current_idx = [0]
+
+        button_bar = ttk.Frame(win, padding=12)
+        button_bar.pack(side=tk.BOTTOM, fill='x')
 
         header_frame = ttk.Frame(win, padding=15)
         header_frame.pack(fill='x')
@@ -2003,8 +2014,6 @@ class HonorarGeneratorApp:
 
         service_list.bind('<<ListboxSelect>>', select_service)
 
-        button_bar = ttk.Frame(win, padding=12)
-        button_bar.pack(fill='x')
         ttk.Button(
             button_bar,
             text="Abbrechen (Sync nicht bestätigen)",

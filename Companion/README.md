@@ -79,3 +79,12 @@ Die APK darf ausschließlich von folgender Release-Adresse heruntergeladen werde
   der Installation. Die App muss als Update über die vorhandene App installiert
   werden; nicht vorher deinstallieren. Android erhält die App-Daten beim Update,
   sofern Paket-ID und Signaturschlüssel gleich bleiben.
+
+## Widget „Patienten erstellen“
+
+Nach der Installation der Android-APK können Sie das Widget auf dem Samsung-
+Startbildschirm hinzufügen: Startbildschirm gedrückt halten, **Widgets** öffnen,
+**LeprendiX Companion** auswählen und das große Widget **Patienten erstellen**
+auf den Startbildschirm ziehen. Ein Tippen darauf öffnet direkt den
+Patienten-Assistenten. Das Widget ist Teil der Android-App und ist nicht in der
+installierbaren Web-/PWA-Version verfügbar.
